@@ -1,0 +1,281 @@
+>//@version=6
+#^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>strategy("Namespace coverage", overlay=false)
+#^^^^^^^^ source.pine entity.name.function.pine
+#        ^ source.pine
+#         ^ source.pine string.quoted.double.pine
+#          ^^^^^^^^^^^^^^^^^^ source.pine string.quoted.double.pine
+#                            ^ source.pine string.quoted.double.pine
+#                             ^^ source.pine
+#                               ^^^^^^^ source.pine variable.other.pine
+#                                      ^ source.pine keyword.operator.assignment.pine
+#                                       ^^^^^ source.pine constant.language.boolean.pine
+#                                            ^^ source.pine
+>
+>// Namespaces that were missing from the original tmbundle grammar
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>s = request.security(syminfo.tickerid, "D", close, barmerge.gaps_off)
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                     ^^ source.pine
+#                                       ^ source.pine string.quoted.double.pine
+#                                        ^ source.pine string.quoted.double.pine
+#                                         ^ source.pine string.quoted.double.pine
+#                                          ^^ source.pine
+#                                            ^^^^^ source.pine constant.language.pine
+#                                                 ^^ source.pine
+#                                                   ^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                                                    ^^ source.pine
+>strategy.entry("L", strategy.long)
+#^^^^^^^^^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^ source.pine string.quoted.double.pine
+#                ^ source.pine string.quoted.double.pine
+#                 ^ source.pine string.quoted.double.pine
+#                  ^^ source.pine
+#                    ^^^^^^^^^^^^^ source.pine entity.name.function
+#                                 ^^ source.pine
+>strategy.exit("X", "L", profit=100)
+#^^^^^^^^^^^^^ source.pine entity.name.function
+#             ^ source.pine
+#              ^ source.pine string.quoted.double.pine
+#               ^ source.pine string.quoted.double.pine
+#                ^ source.pine string.quoted.double.pine
+#                 ^^ source.pine
+#                   ^ source.pine string.quoted.double.pine
+#                    ^ source.pine string.quoted.double.pine
+#                     ^ source.pine string.quoted.double.pine
+#                      ^^ source.pine
+#                        ^^^^^^ source.pine variable.other.pine
+#                              ^ source.pine keyword.operator.assignment.pine
+#                               ^^^ source.pine constant.numeric.integer.pine
+#                                  ^^ source.pine
+>i = input.int(14, "Length")
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^ source.pine entity.name.function
+#             ^ source.pine
+#              ^^ source.pine constant.numeric.integer.pine
+#                ^^ source.pine
+#                  ^ source.pine string.quoted.double.pine
+#                   ^^^^^^ source.pine string.quoted.double.pine
+#                         ^ source.pine string.quoted.double.pine
+#                          ^^ source.pine
+>f = input.float(1.5)
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^ source.pine entity.name.function
+#               ^ source.pine
+#                ^^^ source.pine constant.numeric.float.pine
+#                   ^^ source.pine
+>log.info("value: {0}", s)
+#^^^^^^^^ source.pine entity.name.function
+#        ^ source.pine
+#         ^ source.pine string.quoted.double.pine
+#          ^^^^^^^^^^ source.pine string.quoted.double.pine
+#                    ^ source.pine string.quoted.double.pine
+#                     ^^ source.pine
+#                       ^ source.pine variable.other.pine
+#                        ^^ source.pine
+>runtime.error("boom")
+#^^^^^^^^^^^^^ source.pine entity.name.function
+#             ^ source.pine
+#              ^ source.pine string.quoted.double.pine
+#               ^^^^ source.pine string.quoted.double.pine
+#                   ^ source.pine string.quoted.double.pine
+#                    ^^ source.pine
+>if timeframe.change("D") and not splits.denominator
+#^^ source.pine keyword.control.conditional.pine
+#  ^ source.pine
+#   ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                   ^ source.pine
+#                    ^ source.pine string.quoted.double.pine
+#                     ^ source.pine string.quoted.double.pine
+#                      ^ source.pine string.quoted.double.pine
+#                       ^^ source.pine
+#                         ^^^ source.pine keyword.control.pine
+#                            ^ source.pine
+#                             ^^^ source.pine keyword.control.pine
+#                                ^ source.pine
+#                                 ^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>    label.new(bar_index, high, text.format_bold)
+#^^^^ source.pine
+#    ^^^^^^^^^ source.pine entity.name.function
+#             ^ source.pine
+#              ^^^^^^^^^ source.pine constant.language.pine
+#                       ^^ source.pine
+#                         ^^^^ source.pine constant.language.pine
+#                             ^^ source.pine
+#                               ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                               ^^ source.pine
+>p = polyline.new(na)
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^^ source.pine entity.name.function
+#                ^ source.pine
+#                 ^^ source.pine constant.language.null.pine
+#                   ^^ source.pine
+>e = earnings.future_eps
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>x = extend.both
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^ source.pine entity.name.function
+>ff = font.family_monospace
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>pos = position.top_center
+#^^^ source.pine variable.other.pine
+#   ^ source.pine
+#    ^ source.pine keyword.operator.assignment.pine
+#     ^ source.pine
+#      ^^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>tick = ticker.new("BYBIT", "BTCUSDT")
+#^^^^ source.pine variable.other.pine
+#    ^ source.pine
+#     ^ source.pine keyword.operator.assignment.pine
+#      ^ source.pine
+#       ^^^^^^^^^^ source.pine entity.name.function
+#                 ^ source.pine
+#                  ^ source.pine string.quoted.double.pine
+#                   ^^^^^ source.pine string.quoted.double.pine
+#                        ^ source.pine string.quoted.double.pine
+#                         ^^ source.pine
+#                           ^ source.pine string.quoted.double.pine
+#                            ^^^^^^^ source.pine string.quoted.double.pine
+#                                   ^ source.pine string.quoted.double.pine
+#                                    ^^ source.pine
+>
+>// Pyne-specific virtual libraries
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>fp = footprint.rows
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^^^^ source.pine entity.name.function
+>vr = volume_row.price
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>
+>// Builtin variables incl. additions
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>v = bid + ask + hlcc4 + time_tradingday
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^ source.pine constant.language.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.arithmetic.pine
+#         ^ source.pine
+#          ^^^ source.pine constant.language.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.arithmetic.pine
+#               ^ source.pine
+#                ^^^^^ source.pine constant.language.pine
+#                     ^ source.pine
+#                      ^ source.pine keyword.operator.arithmetic.pine
+#                       ^ source.pine
+#                        ^^^^^^^^^^^^^^^ source.pine constant.language.pine
+>n = last_bar_index - bar_index
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^^^^ source.pine constant.language.pine
+#                  ^ source.pine
+#                   ^ source.pine keyword.operator.arithmetic.pine
+#                    ^ source.pine
+#                     ^^^^^^^^^ source.pine constant.language.pine
+>d = dayofmonth + hour + minute + second + weekofyear + year
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^^^^^^ source.pine constant.language.pine
+#              ^ source.pine
+#               ^ source.pine keyword.operator.arithmetic.pine
+#                ^ source.pine
+#                 ^^^^ source.pine constant.language.pine
+#                     ^ source.pine
+#                      ^ source.pine keyword.operator.arithmetic.pine
+#                       ^ source.pine
+#                        ^^^^^^ source.pine constant.language.pine
+#                              ^ source.pine
+#                               ^ source.pine keyword.operator.arithmetic.pine
+#                                ^ source.pine
+#                                 ^^^^^^ source.pine constant.language.pine
+#                                       ^ source.pine
+#                                        ^ source.pine keyword.operator.arithmetic.pine
+#                                         ^ source.pine
+#                                          ^^^^^^^^^^ source.pine constant.language.pine
+#                                                    ^ source.pine
+#                                                     ^ source.pine keyword.operator.arithmetic.pine
+#                                                      ^ source.pine
+#                                                       ^^^^ source.pine constant.language.pine
+>
+>// dayofweek: variable, namespace member and function forms
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>w1 = dayofweek
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^ source.pine constant.language.pine
+>w2 = dayofweek.monday
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>w3 = dayofweek(time)
+#^^ source.pine variable.other.pine
+#  ^ source.pine
+#   ^ source.pine keyword.operator.assignment.pine
+#    ^ source.pine
+#     ^^^^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^^^^ source.pine constant.language.pine
+#                   ^^ source.pine
+>
+>// arrow must not be split into assignment + comparison
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>add(a, b) => a + b
+#^^^ source.pine entity.name.function.pine
+#   ^ source.pine
+#    ^ source.pine variable.other.pine
+#     ^^ source.pine
+#       ^ source.pine variable.other.pine
+#        ^^ source.pine
+#          ^^ source.pine keyword.operator.arrow.pine
+#            ^ source.pine
+#             ^ source.pine variable.other.pine
+#              ^ source.pine
+#               ^ source.pine keyword.operator.arithmetic.pine
+#                ^ source.pine
+#                 ^ source.pine variable.other.pine
+>

@@ -1,0 +1,169 @@
+//@version=6
+indicator("Pine Script Syntax Test", overlay=true)
+
+// This is a single line comment
+/* This is a
+   multi-line comment */
+
+// Type declarations
+type Point
+    float x
+    float y
+    color col = #FF0000AA
+
+enum TradeDirection
+    LONG
+    SHORT
+    NEUTRAL
+
+// Variable declarations with different modifiers
+var int counter = 0
+varip float lastPrice = na
+const int MAX_BARS = 500
+series bool isRising = close > open
+
+// Primitive types
+int myInt = 42
+int leadingZero = 00
+int octalLike = 010
+float myFloat = 3.14159
+float scientificNotation = 1.5e10
+float negativeExponent = 3.14e-5
+float intExponential = 2e8
+bool myBool = true
+string myStr = "Hello Pine Script"
+color myColor = #3399FF
+
+// Collections
+array<float> prices = array.new<float>(10, 0.0)
+matrix<int> dataMatrix = matrix.new<int>(3, 3, 0)
+map<string, float> priceMap = map.new<string, float>()
+
+// Control flow
+if close > open
+    counter += 1
+else if close < open
+    counter -= 1
+else
+    counter := 0
+
+// Switch statement
+tradeDir = switch
+    close > open => TradeDirection.LONG
+    close < open => TradeDirection.SHORT
+    => TradeDirection.NEUTRAL
+
+// Loops
+for i = 0 to 9 by 1
+    array.set(prices, i, close[i])
+
+int sum = 0
+while sum < 100
+    sum += 10
+    if sum == 50
+        continue
+    if sum > 80
+        break
+
+// For-in loop
+for price in prices
+    log.info(str.tostring(price))
+
+// Function definition
+calcAverage(float a, float b) =>
+    (a + b) / 2.0
+
+// Function with reference array type parameter
+processPoints(Point[] points) =>
+    if array.size(points) > 0
+        points
+
+// Method definition
+method toString(Point this) =>
+    str.format("Point({0}, {1})", this.x, this.y)
+
+// User-defined type usage
+myPoint = Point.new(10.5, 20.3, color.blue)
+pointStr = myPoint.toString()
+
+// Type casting
+myIntCasted = int(3.7)
+myColorCasted = color(myColor)
+
+// Operators
+result1 = 10 + 20 * 3 - 5 / 2
+result2 = 10 % 3
+isTrue = close > open and volume > 1000000 or not na(high)
+ternary = close > open ? 1 : -1
+
+// Assignment operators
+value = 100
+value += 50
+value -= 25
+value *= 2
+value /= 4
+
+// Tuple destructuring
+[highest, lowest] = [high, low]
+
+// Library import
+import TradingView/ta/1 as ta
+
+// Built-in namespace (library) function calls - Technical Analysis
+sma20 = ta.sma(close, 20)
+ema50 = ta.ema(close, 50)
+rsiValue = ta.rsi(close, 14)
+[upperBand, middleBand, lowerBand] = ta.bb(close, 20, 2)
+atr14 = ta.atr(14)
+highest10 = ta.highest(high, 10)
+
+// Math library examples
+absValue = math.abs(-5)
+maxValue = math.max(10, 20)
+rounded = math.round(3.7)
+sqrtValue = math.sqrt(16)
+
+// String library examples
+upperStr = str.upper("hello")
+formattedStr = str.format("Value: {0}", close)
+stringLen = str.length(myStr)
+
+// Color library examples
+dynColor = color.new(color.red, 50)
+rgbColor = color.rgb(255, 0, 0, 128)
+colorFromGradient = color.from_gradient(rsiValue, 0, 100, color.red, color.green)
+
+// Array library operations
+myArray = array.new_float(5, 0.0)
+array.push(myArray, close)
+arraySize = array.size(myArray)
+arrayMax = array.max(myArray)
+
+// Input library - user inputs
+lengthInput = input.int(14, "Length", minval=1, maxval=100)
+colorInput = input.color(color.blue, "Line Color")
+sourceInput = input.source(close, "Source")
+
+// Barstate library - bar information
+isNewBar = barstate.isnew
+isLastBar = barstate.islast
+isRealtime = barstate.isrealtime
+
+// Builtin variables - OHLCV data
+currentBar = bar_index
+priceOpen = open
+priceHigh = high
+priceLow = low
+priceClose = close
+vol = volume
+averagePrice = hl2  // (high + low) / 2
+typicalPrice = hlc3 // (high + low + close) / 3
+
+// Plotting
+plot(sma20, "SMA 20", color=#FF0000, linewidth=2)
+plotshape(close > sma20, "Buy Signal", location=location.belowbar,
+          color=color.green, style=shape.triangleup)
+bgcolor(close > open ? color.new(color.green, 90) : color.new(color.red, 90))
+
+// Export (for libraries)
+export calcAverage

@@ -1,0 +1,1156 @@
+>//@version=6
+#^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>indicator("Pine Script Syntax Test", overlay=true)
+#^^^^^^^^^ source.pine entity.name.function.pine
+#         ^ source.pine
+#          ^ source.pine string.quoted.double.pine
+#           ^^^^^^^^^^^^^^^^^^^^^^^ source.pine string.quoted.double.pine
+#                                  ^ source.pine string.quoted.double.pine
+#                                   ^^ source.pine
+#                                     ^^^^^^^ source.pine variable.other.pine
+#                                            ^ source.pine keyword.operator.assignment.pine
+#                                             ^^^^ source.pine constant.language.boolean.pine
+#                                                 ^^ source.pine
+>
+>// This is a single line comment
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>/* This is a
+#^ source.pine keyword.operator.arithmetic.pine
+# ^ source.pine keyword.operator.arithmetic.pine
+#  ^ source.pine
+#   ^^^^ source.pine entity.name.type.pine
+#       ^ source.pine
+#        ^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine variable.other.pine
+>   multi-line comment */
+#^^^ source.pine
+#   ^^^^^ source.pine variable.other.pine
+#        ^ source.pine keyword.operator.arithmetic.pine
+#         ^^^^ source.pine storage.type.builtin.pine
+#             ^ source.pine
+#              ^^^^^^^ source.pine variable.other.pine
+#                     ^ source.pine
+#                      ^ source.pine keyword.operator.arithmetic.pine
+#                       ^ source.pine keyword.operator.arithmetic.pine
+>
+>// Type declarations
+#^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>type Point
+#^^^^ source.pine keyword.declaration.pine
+#    ^ source.pine
+#     ^^^^^ source.pine entity.name.type.pine
+>    float x
+#^^^^ source.pine
+#    ^^^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^ source.pine variable.other.pine
+>    float y
+#^^^^ source.pine
+#    ^^^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^ source.pine variable.other.pine
+>    color col = #FF0000AA
+#^^^^ source.pine
+#    ^^^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^^^ source.pine variable.other.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.assignment.pine
+#               ^ source.pine
+#                ^^^^^^^^^ source.pine constant.other.color.pine
+>
+>enum TradeDirection
+#^^^^ source.pine keyword.declaration.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^^^^ source.pine entity.name.type.pine
+>    LONG
+#^^^^ source.pine
+#    ^^^^ source.pine entity.name.type.pine
+>    SHORT
+#^^^^ source.pine
+#    ^^^^^ source.pine entity.name.type.pine
+>    NEUTRAL
+#^^^^ source.pine
+#    ^^^^^^^ source.pine entity.name.type.pine
+>
+>// Variable declarations with different modifiers
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>var int counter = 0
+#^^^ source.pine keyword.declaration.pine
+#   ^ source.pine
+#    ^^^ source.pine storage.type.primitive.pine
+#       ^ source.pine
+#        ^^^^^^^ source.pine variable.other.pine
+#               ^ source.pine
+#                ^ source.pine keyword.operator.assignment.pine
+#                 ^ source.pine
+#                  ^ source.pine constant.numeric.integer.pine
+>varip float lastPrice = na
+#^^^^^ source.pine keyword.declaration.pine
+#     ^ source.pine
+#      ^^^^^ source.pine storage.type.primitive.pine
+#           ^ source.pine
+#            ^^^^^^^^^ source.pine variable.other.pine
+#                     ^ source.pine
+#                      ^ source.pine keyword.operator.assignment.pine
+#                       ^ source.pine
+#                        ^^ source.pine constant.language.null.pine
+>const int MAX_BARS = 500
+#^^^^^ source.pine storage.modifier.pine
+#     ^ source.pine
+#      ^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^^^^^^^^ source.pine entity.name.type.pine
+#                  ^ source.pine
+#                   ^ source.pine keyword.operator.assignment.pine
+#                    ^ source.pine
+#                     ^^^ source.pine constant.numeric.integer.pine
+>series bool isRising = close > open
+#^^^^^^ source.pine storage.modifier.pine
+#      ^ source.pine
+#       ^^^^ source.pine storage.type.primitive.pine
+#           ^ source.pine
+#            ^^^^^^^^ source.pine variable.other.pine
+#                    ^ source.pine
+#                     ^ source.pine keyword.operator.assignment.pine
+#                      ^ source.pine
+#                       ^^^^^ source.pine constant.language.pine
+#                            ^ source.pine
+#                             ^ source.pine keyword.operator.comparison.pine
+#                              ^ source.pine
+#                               ^^^^ source.pine constant.language.pine
+>
+>// Primitive types
+#^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>int myInt = 42
+#^^^ source.pine storage.type.primitive.pine
+#   ^ source.pine
+#    ^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^ source.pine constant.numeric.integer.pine
+>int leadingZero = 00
+#^^^ source.pine storage.type.primitive.pine
+#   ^ source.pine
+#    ^^^^^^^^^^^ source.pine variable.other.pine
+#               ^ source.pine
+#                ^ source.pine keyword.operator.assignment.pine
+#                 ^ source.pine
+#                  ^^ source.pine constant.numeric.integer.pine
+>int octalLike = 010
+#^^^ source.pine storage.type.primitive.pine
+#   ^ source.pine
+#    ^^^^^^^^^ source.pine variable.other.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.assignment.pine
+#               ^ source.pine
+#                ^^^ source.pine constant.numeric.integer.pine
+>float myFloat = 3.14159
+#^^^^^ source.pine storage.type.primitive.pine
+#     ^ source.pine
+#      ^^^^^^^ source.pine variable.other.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.assignment.pine
+#               ^ source.pine
+#                ^^^^^^^ source.pine constant.numeric.float.pine
+>float scientificNotation = 1.5e10
+#^^^^^ source.pine storage.type.primitive.pine
+#     ^ source.pine
+#      ^^^^^^^^^^^^^^^^^^ source.pine variable.other.pine
+#                        ^ source.pine
+#                         ^ source.pine keyword.operator.assignment.pine
+#                          ^ source.pine
+#                           ^^^^^^ source.pine constant.numeric.float.pine
+>float negativeExponent = 3.14e-5
+#^^^^^ source.pine storage.type.primitive.pine
+#     ^ source.pine
+#      ^^^^^^^^^^^^^^^^ source.pine variable.other.pine
+#                      ^ source.pine
+#                       ^ source.pine keyword.operator.assignment.pine
+#                        ^ source.pine
+#                         ^^^^^^^ source.pine constant.numeric.float.pine
+>float intExponential = 2e8
+#^^^^^ source.pine storage.type.primitive.pine
+#     ^ source.pine
+#      ^^^^^^^^^^^^^^ source.pine variable.other.pine
+#                    ^ source.pine
+#                     ^ source.pine keyword.operator.assignment.pine
+#                      ^ source.pine
+#                       ^^^ source.pine constant.numeric.float.pine
+>bool myBool = true
+#^^^^ source.pine storage.type.primitive.pine
+#    ^ source.pine
+#     ^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^ source.pine keyword.operator.assignment.pine
+#             ^ source.pine
+#              ^^^^ source.pine constant.language.boolean.pine
+>string myStr = "Hello Pine Script"
+#^^^^^^ source.pine storage.type.primitive.pine
+#      ^ source.pine
+#       ^^^^^ source.pine variable.other.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.assignment.pine
+#              ^ source.pine
+#               ^ source.pine string.quoted.double.pine
+#                ^^^^^^^^^^^^^^^^^ source.pine string.quoted.double.pine
+#                                 ^ source.pine string.quoted.double.pine
+>color myColor = #3399FF
+#^^^^^ source.pine storage.type.primitive.pine
+#     ^ source.pine
+#      ^^^^^^^ source.pine variable.other.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.assignment.pine
+#               ^ source.pine
+#                ^^^^^^^ source.pine constant.other.color.pine
+>
+>// Collections
+#^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>array<float> prices = array.new<float>(10, 0.0)
+#^^^^^^^^^^^^ source.pine storage.type.collection.pine
+#            ^ source.pine
+#             ^^^^^^ source.pine variable.other.pine
+#                   ^ source.pine
+#                    ^ source.pine keyword.operator.assignment.pine
+#                     ^ source.pine
+#                      ^^^^^^^^^ source.pine entity.name.function
+#                               ^ source.pine keyword.operator.comparison.pine
+#                                ^^^^^ source.pine storage.type.primitive.pine
+#                                     ^ source.pine keyword.operator.comparison.pine
+#                                      ^ source.pine
+#                                       ^^ source.pine constant.numeric.integer.pine
+#                                         ^^ source.pine
+#                                           ^^^ source.pine constant.numeric.float.pine
+#                                              ^^ source.pine
+>matrix<int> dataMatrix = matrix.new<int>(3, 3, 0)
+#^^^^^^^^^^^ source.pine storage.type.collection.pine
+#           ^ source.pine
+#            ^^^^^^^^^^ source.pine variable.other.pine
+#                      ^ source.pine
+#                       ^ source.pine keyword.operator.assignment.pine
+#                        ^ source.pine
+#                         ^^^^^^^^^^ source.pine entity.name.function
+#                                   ^ source.pine keyword.operator.comparison.pine
+#                                    ^^^ source.pine storage.type.primitive.pine
+#                                       ^ source.pine keyword.operator.comparison.pine
+#                                        ^ source.pine
+#                                         ^ source.pine constant.numeric.integer.pine
+#                                          ^^ source.pine
+#                                            ^ source.pine constant.numeric.integer.pine
+#                                             ^^ source.pine
+#                                               ^ source.pine constant.numeric.integer.pine
+#                                                ^^ source.pine
+>map<string, float> priceMap = map.new<string, float>()
+#^^^^^^^^^^^^^^^^^^ source.pine storage.type.collection.map.pine
+#                  ^ source.pine
+#                   ^^^^^^^^ source.pine variable.other.pine
+#                           ^ source.pine
+#                            ^ source.pine keyword.operator.assignment.pine
+#                             ^ source.pine
+#                              ^^^^^^^ source.pine entity.name.function
+#                                     ^ source.pine keyword.operator.comparison.pine
+#                                      ^^^^^^ source.pine storage.type.primitive.pine
+#                                            ^^ source.pine
+#                                              ^^^^^ source.pine storage.type.primitive.pine
+#                                                   ^ source.pine keyword.operator.comparison.pine
+#                                                    ^^^ source.pine
+>
+>// Control flow
+#^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>if close > open
+#^^ source.pine keyword.control.conditional.pine
+#  ^ source.pine
+#   ^^^^^ source.pine constant.language.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.comparison.pine
+#          ^ source.pine
+#           ^^^^ source.pine constant.language.pine
+>    counter += 1
+#^^^^ source.pine
+#    ^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^^ source.pine keyword.operator.assignment.compound.pine
+#              ^ source.pine
+#               ^ source.pine constant.numeric.integer.pine
+>else if close < open
+#^^^^ source.pine keyword.control.conditional.pine
+#    ^ source.pine
+#     ^^ source.pine keyword.control.conditional.pine
+#       ^ source.pine
+#        ^^^^^ source.pine constant.language.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.comparison.pine
+#               ^ source.pine
+#                ^^^^ source.pine constant.language.pine
+>    counter -= 1
+#^^^^ source.pine
+#    ^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^^ source.pine keyword.operator.assignment.compound.pine
+#              ^ source.pine
+#               ^ source.pine constant.numeric.integer.pine
+>else
+#^^^^ source.pine keyword.control.conditional.pine
+>    counter := 0
+#^^^^ source.pine
+#    ^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^^ source.pine keyword.operator.assignment.pine
+#              ^ source.pine
+#               ^ source.pine constant.numeric.integer.pine
+>
+>// Switch statement
+#^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>tradeDir = switch
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^ source.pine keyword.control.conditional.pine
+>    close > open => TradeDirection.LONG
+#^^^^ source.pine
+#    ^^^^^ source.pine constant.language.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.comparison.pine
+#           ^ source.pine
+#            ^^^^ source.pine constant.language.pine
+#                ^ source.pine
+#                 ^^ source.pine keyword.operator.arrow.pine
+#                   ^ source.pine
+#                    ^^^^^^^^^^^^^^ source.pine entity.name.type.pine
+#                                  ^ source.pine
+#                                   ^^^^ source.pine entity.name.type.pine
+>    close < open => TradeDirection.SHORT
+#^^^^ source.pine
+#    ^^^^^ source.pine constant.language.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.comparison.pine
+#           ^ source.pine
+#            ^^^^ source.pine constant.language.pine
+#                ^ source.pine
+#                 ^^ source.pine keyword.operator.arrow.pine
+#                   ^ source.pine
+#                    ^^^^^^^^^^^^^^ source.pine entity.name.type.pine
+#                                  ^ source.pine
+#                                   ^^^^^ source.pine entity.name.type.pine
+>    => TradeDirection.NEUTRAL
+#^^^^ source.pine
+#    ^^ source.pine keyword.operator.arrow.pine
+#      ^ source.pine
+#       ^^^^^^^^^^^^^^ source.pine entity.name.type.pine
+#                     ^ source.pine
+#                      ^^^^^^^ source.pine entity.name.type.pine
+>
+>// Loops
+#^^^^^^^^ source.pine comment.line.double-slash.pine
+>for i = 0 to 9 by 1
+#^^^ source.pine keyword.control.loop.pine
+#   ^ source.pine
+#    ^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^ source.pine keyword.operator.assignment.pine
+#       ^ source.pine
+#        ^ source.pine constant.numeric.integer.pine
+#         ^ source.pine
+#          ^^ source.pine keyword.control.loop.pine
+#            ^ source.pine
+#             ^ source.pine constant.numeric.integer.pine
+#              ^ source.pine
+#               ^^ source.pine keyword.control.loop.pine
+#                 ^ source.pine
+#                  ^ source.pine constant.numeric.integer.pine
+>    array.set(prices, i, close[i])
+#^^^^ source.pine
+#    ^^^^^^^^^ source.pine entity.name.function
+#             ^ source.pine
+#              ^^^^^^ source.pine variable.other.pine
+#                    ^^ source.pine
+#                      ^ source.pine variable.other.pine
+#                       ^^ source.pine
+#                         ^^^^^ source.pine constant.language.pine
+#                              ^ source.pine
+#                               ^ source.pine variable.other.pine
+#                                ^^^ source.pine
+>
+>int sum = 0
+#^^^ source.pine storage.type.primitive.pine
+#   ^ source.pine
+#    ^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^ source.pine constant.numeric.integer.pine
+>while sum < 100
+#^^^^^ source.pine keyword.control.loop.pine
+#     ^ source.pine
+#      ^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.comparison.pine
+#           ^ source.pine
+#            ^^^ source.pine constant.numeric.integer.pine
+>    sum += 10
+#^^^^ source.pine
+#    ^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^^ source.pine keyword.operator.assignment.compound.pine
+#          ^ source.pine
+#           ^^ source.pine constant.numeric.integer.pine
+>    if sum == 50
+#^^^^ source.pine
+#    ^^ source.pine keyword.control.conditional.pine
+#      ^ source.pine
+#       ^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^^ source.pine keyword.operator.comparison.pine
+#             ^ source.pine
+#              ^^ source.pine constant.numeric.integer.pine
+>        continue
+#^^^^^^^^ source.pine
+#        ^^^^^^^^ source.pine keyword.control.flow.pine
+>    if sum > 80
+#^^^^ source.pine
+#    ^^ source.pine keyword.control.conditional.pine
+#      ^ source.pine
+#       ^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.comparison.pine
+#            ^ source.pine
+#             ^^ source.pine constant.numeric.integer.pine
+>        break
+#^^^^^^^^ source.pine
+#        ^^^^^ source.pine keyword.control.flow.pine
+>
+>// For-in loop
+#^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>for price in prices
+#^^^ source.pine keyword.control.loop.pine
+#   ^ source.pine
+#    ^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^^ source.pine keyword.control.loop.pine
+#            ^ source.pine
+#             ^^^^^^ source.pine variable.other.pine
+>    log.info(str.tostring(price))
+#^^^^ source.pine
+#    ^^^^^^^^ source.pine entity.name.function
+#            ^ source.pine
+#             ^^^^^^^^^^^^ source.pine entity.name.function
+#                         ^ source.pine
+#                          ^^^^^ source.pine variable.other.pine
+#                               ^^^ source.pine
+>
+>// Function definition
+#^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>calcAverage(float a, float b) =>
+#^^^^^^^^^^^ source.pine entity.name.function.pine
+#           ^ source.pine
+#            ^^^^^ source.pine storage.type.primitive.pine
+#                 ^ source.pine
+#                  ^ source.pine variable.other.pine
+#                   ^^ source.pine
+#                     ^^^^^ source.pine storage.type.primitive.pine
+#                          ^ source.pine
+#                           ^ source.pine variable.other.pine
+#                            ^^ source.pine
+#                              ^^ source.pine keyword.operator.arrow.pine
+>    (a + b) / 2.0
+#^^^^^ source.pine
+#     ^ source.pine variable.other.pine
+#      ^ source.pine
+#       ^ source.pine keyword.operator.arithmetic.pine
+#        ^ source.pine
+#         ^ source.pine variable.other.pine
+#          ^^ source.pine
+#            ^ source.pine keyword.operator.arithmetic.pine
+#             ^ source.pine
+#              ^^^ source.pine constant.numeric.float.pine
+>
+>// Function with reference array type parameter
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>processPoints(Point[] points) =>
+#^^^^^^^^^^^^^ source.pine entity.name.function.pine
+#             ^ source.pine
+#              ^^^^^^^ source.pine storage.type.reference.array.pine
+#                     ^ source.pine
+#                      ^^^^^^ source.pine variable.other.pine
+#                            ^^ source.pine
+#                              ^^ source.pine keyword.operator.arrow.pine
+>    if array.size(points) > 0
+#^^^^ source.pine
+#    ^^ source.pine keyword.control.conditional.pine
+#      ^ source.pine
+#       ^^^^^^^^^^ source.pine entity.name.function
+#                 ^ source.pine
+#                  ^^^^^^ source.pine variable.other.pine
+#                        ^^ source.pine
+#                          ^ source.pine keyword.operator.comparison.pine
+#                           ^ source.pine
+#                            ^ source.pine constant.numeric.integer.pine
+>        points
+#^^^^^^^^ source.pine
+#        ^^^^^^ source.pine variable.other.pine
+>
+>// Method definition
+#^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>method toString(Point this) =>
+#^^^^^^ source.pine keyword.declaration.method.pine
+#      ^ source.pine
+#       ^^^^^^^^ source.pine entity.name.function.pine
+#               ^ source.pine
+#                ^^^^^ source.pine entity.name.type.pine
+#                     ^ source.pine
+#                      ^^^^ source.pine variable.other.pine
+#                          ^^ source.pine
+#                            ^^ source.pine keyword.operator.arrow.pine
+>    str.format("Point({0}, {1})", this.x, this.y)
+#^^^^ source.pine
+#    ^^^^^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^ source.pine string.quoted.double.pine
+#                ^^^^^^^^^^^^^^^ source.pine string.quoted.double.pine
+#                               ^ source.pine string.quoted.double.pine
+#                                ^^ source.pine
+#                                  ^^^^ source.pine variable.other.pine
+#                                      ^ source.pine
+#                                       ^ source.pine variable.other.pine
+#                                        ^^ source.pine
+#                                          ^^^^ source.pine variable.other.pine
+#                                              ^ source.pine
+#                                               ^ source.pine variable.other.pine
+#                                                ^^ source.pine
+>
+>// User-defined type usage
+#^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>myPoint = Point.new(10.5, 20.3, color.blue)
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^^^^ source.pine entity.name.type.pine
+#               ^ source.pine
+#                ^^^ source.pine entity.name.function.pine
+#                   ^ source.pine
+#                    ^^^^ source.pine constant.numeric.float.pine
+#                        ^^ source.pine
+#                          ^^^^ source.pine constant.numeric.float.pine
+#                              ^^ source.pine
+#                                ^^^^^^^^^^ source.pine entity.name.function
+#                                          ^^ source.pine
+>pointStr = myPoint.toString()
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^ source.pine variable.other.pine
+#                  ^ source.pine
+#                   ^^^^^^^^ source.pine entity.name.function.pine
+#                           ^^^ source.pine
+>
+>// Type casting
+#^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>myIntCasted = int(3.7)
+#^^^^^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^ source.pine keyword.operator.assignment.pine
+#             ^ source.pine
+#              ^^^ source.pine storage.type.primitive.pine
+#                 ^ source.pine
+#                  ^^^ source.pine constant.numeric.float.pine
+#                     ^^ source.pine
+>myColorCasted = color(myColor)
+#^^^^^^^^^^^^^ source.pine variable.other.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.assignment.pine
+#               ^ source.pine
+#                ^^^^^ source.pine storage.type.primitive.pine
+#                     ^ source.pine
+#                      ^^^^^^^ source.pine variable.other.pine
+#                             ^^ source.pine
+>
+>// Operators
+#^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>result1 = 10 + 20 * 3 - 5 / 2
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^ source.pine constant.numeric.integer.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.arithmetic.pine
+#              ^ source.pine
+#               ^^ source.pine constant.numeric.integer.pine
+#                 ^ source.pine
+#                  ^ source.pine keyword.operator.arithmetic.pine
+#                   ^ source.pine
+#                    ^ source.pine constant.numeric.integer.pine
+#                     ^ source.pine
+#                      ^ source.pine keyword.operator.arithmetic.pine
+#                       ^ source.pine
+#                        ^ source.pine constant.numeric.integer.pine
+#                         ^ source.pine
+#                          ^ source.pine keyword.operator.arithmetic.pine
+#                           ^ source.pine
+#                            ^ source.pine constant.numeric.integer.pine
+>result2 = 10 % 3
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^ source.pine constant.numeric.integer.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.arithmetic.pine
+#              ^ source.pine
+#               ^ source.pine constant.numeric.integer.pine
+>isTrue = close > open and volume > 1000000 or not na(high)
+#^^^^^^ source.pine variable.other.pine
+#      ^ source.pine
+#       ^ source.pine keyword.operator.assignment.pine
+#        ^ source.pine
+#         ^^^^^ source.pine constant.language.pine
+#              ^ source.pine
+#               ^ source.pine keyword.operator.comparison.pine
+#                ^ source.pine
+#                 ^^^^ source.pine constant.language.pine
+#                     ^ source.pine
+#                      ^^^ source.pine keyword.control.pine
+#                         ^ source.pine
+#                          ^^^^^^ source.pine constant.language.pine
+#                                ^ source.pine
+#                                 ^ source.pine keyword.operator.comparison.pine
+#                                  ^ source.pine
+#                                   ^^^^^^^ source.pine constant.numeric.integer.pine
+#                                          ^ source.pine
+#                                           ^^ source.pine keyword.control.pine
+#                                             ^ source.pine
+#                                              ^^^ source.pine keyword.control.pine
+#                                                 ^ source.pine
+#                                                  ^^ source.pine entity.name.function
+#                                                    ^ source.pine
+#                                                     ^^^^ source.pine constant.language.pine
+#                                                         ^^ source.pine
+>ternary = close > open ? 1 : -1
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^^^^ source.pine constant.language.pine
+#               ^ source.pine
+#                ^ source.pine keyword.operator.comparison.pine
+#                 ^ source.pine
+#                  ^^^^ source.pine constant.language.pine
+#                      ^ source.pine
+#                       ^ source.pine keyword.control.pine
+#                        ^ source.pine
+#                         ^ source.pine constant.numeric.integer.pine
+#                          ^ source.pine
+#                           ^ source.pine keyword.control.pine
+#                            ^ source.pine
+#                             ^ source.pine keyword.operator.arithmetic.pine
+#                              ^ source.pine constant.numeric.integer.pine
+>
+>// Assignment operators
+#^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>value = 100
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^ source.pine keyword.operator.assignment.pine
+#       ^ source.pine
+#        ^^^ source.pine constant.numeric.integer.pine
+>value += 50
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^^ source.pine keyword.operator.assignment.compound.pine
+#        ^ source.pine
+#         ^^ source.pine constant.numeric.integer.pine
+>value -= 25
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^^ source.pine keyword.operator.assignment.compound.pine
+#        ^ source.pine
+#         ^^ source.pine constant.numeric.integer.pine
+>value *= 2
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^^ source.pine keyword.operator.assignment.compound.pine
+#        ^ source.pine
+#         ^ source.pine constant.numeric.integer.pine
+>value /= 4
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^^ source.pine keyword.operator.assignment.compound.pine
+#        ^ source.pine
+#         ^ source.pine constant.numeric.integer.pine
+>
+>// Tuple destructuring
+#^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>[highest, lowest] = [high, low]
+#^ source.pine
+# ^^^^^^^ source.pine variable.other.pine
+#        ^^ source.pine
+#          ^^^^^^ source.pine variable.other.pine
+#                ^^ source.pine
+#                  ^ source.pine keyword.operator.assignment.pine
+#                   ^^ source.pine
+#                     ^^^^ source.pine constant.language.pine
+#                         ^^ source.pine
+#                           ^^^ source.pine constant.language.pine
+#                              ^^ source.pine
+>
+>// Library import
+#^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>import TradingView/ta/1 as ta
+#^^^^^^ source.pine keyword.declaration.pine
+#      ^ source.pine
+#       ^^^^^^^^^^^ source.pine entity.name.type.pine
+#                  ^ source.pine keyword.operator.arithmetic.pine
+#                   ^^ source.pine variable.other.pine
+#                     ^ source.pine keyword.operator.arithmetic.pine
+#                      ^ source.pine constant.numeric.integer.pine
+#                       ^ source.pine
+#                        ^^ source.pine keyword.declaration.pine
+#                          ^ source.pine
+#                           ^^ source.pine variable.other.pine
+>
+>// Built-in namespace (library) function calls - Technical Analysis
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>sma20 = ta.sma(close, 20)
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^ source.pine keyword.operator.assignment.pine
+#       ^ source.pine
+#        ^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^^^^^ source.pine constant.language.pine
+#                    ^^ source.pine
+#                      ^^ source.pine constant.numeric.integer.pine
+#                        ^^ source.pine
+>ema50 = ta.ema(close, 50)
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^ source.pine keyword.operator.assignment.pine
+#       ^ source.pine
+#        ^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^^^^^ source.pine constant.language.pine
+#                    ^^ source.pine
+#                      ^^ source.pine constant.numeric.integer.pine
+#                        ^^ source.pine
+>rsiValue = ta.rsi(close, 14)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^ source.pine entity.name.function
+#                 ^ source.pine
+#                  ^^^^^ source.pine constant.language.pine
+#                       ^^ source.pine
+#                         ^^ source.pine constant.numeric.integer.pine
+#                           ^^ source.pine
+>[upperBand, middleBand, lowerBand] = ta.bb(close, 20, 2)
+#^ source.pine
+# ^^^^^^^^^ source.pine variable.other.pine
+#          ^^ source.pine
+#            ^^^^^^^^^^ source.pine variable.other.pine
+#                      ^^ source.pine
+#                        ^^^^^^^^^ source.pine variable.other.pine
+#                                 ^^ source.pine
+#                                   ^ source.pine keyword.operator.assignment.pine
+#                                    ^ source.pine
+#                                     ^^^^^ source.pine entity.name.function
+#                                          ^ source.pine
+#                                           ^^^^^ source.pine constant.language.pine
+#                                                ^^ source.pine
+#                                                  ^^ source.pine constant.numeric.integer.pine
+#                                                    ^^ source.pine
+#                                                      ^ source.pine constant.numeric.integer.pine
+#                                                       ^^ source.pine
+>atr14 = ta.atr(14)
+#^^^^^ source.pine variable.other.pine
+#     ^ source.pine
+#      ^ source.pine keyword.operator.assignment.pine
+#       ^ source.pine
+#        ^^^^^^ source.pine entity.name.function
+#              ^ source.pine
+#               ^^ source.pine constant.numeric.integer.pine
+#                 ^^ source.pine
+>highest10 = ta.highest(high, 10)
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^^^^^^^ source.pine entity.name.function
+#                      ^ source.pine
+#                       ^^^^ source.pine constant.language.pine
+#                           ^^ source.pine
+#                             ^^ source.pine constant.numeric.integer.pine
+#                               ^^ source.pine
+>
+>// Math library examples
+#^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>absValue = math.abs(-5)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^ source.pine entity.name.function
+#                   ^ source.pine
+#                    ^ source.pine keyword.operator.arithmetic.pine
+#                     ^ source.pine constant.numeric.integer.pine
+#                      ^^ source.pine
+>maxValue = math.max(10, 20)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^ source.pine entity.name.function
+#                   ^ source.pine
+#                    ^^ source.pine constant.numeric.integer.pine
+#                      ^^ source.pine
+#                        ^^ source.pine constant.numeric.integer.pine
+#                          ^^ source.pine
+>rounded = math.round(3.7)
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^^^ source.pine constant.numeric.float.pine
+#                        ^^ source.pine
+>sqrtValue = math.sqrt(16)
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^^^^^^ source.pine entity.name.function
+#                     ^ source.pine
+#                      ^^ source.pine constant.numeric.integer.pine
+#                        ^^ source.pine
+>
+>// String library examples
+#^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>upperStr = str.upper("hello")
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^ source.pine string.quoted.double.pine
+#                      ^^^^^ source.pine string.quoted.double.pine
+#                           ^ source.pine string.quoted.double.pine
+#                            ^^ source.pine
+>formattedStr = str.format("Value: {0}", close)
+#^^^^^^^^^^^^ source.pine variable.other.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.assignment.pine
+#              ^ source.pine
+#               ^^^^^^^^^^ source.pine entity.name.function
+#                         ^ source.pine
+#                          ^ source.pine string.quoted.double.pine
+#                           ^^^^^^^^^^ source.pine string.quoted.double.pine
+#                                     ^ source.pine string.quoted.double.pine
+#                                      ^^ source.pine
+#                                        ^^^^^ source.pine constant.language.pine
+#                                             ^^ source.pine
+>stringLen = str.length(myStr)
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^^^^^^^ source.pine entity.name.function
+#                      ^ source.pine
+#                       ^^^^^ source.pine variable.other.pine
+#                            ^^ source.pine
+>
+>// Color library examples
+#^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>dynColor = color.new(color.red, 50)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^^^^^^^^^ source.pine entity.name.function
+#                              ^^ source.pine
+#                                ^^ source.pine constant.numeric.integer.pine
+#                                  ^^ source.pine
+>rgbColor = color.rgb(255, 0, 0, 128)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^^^ source.pine constant.numeric.integer.pine
+#                        ^^ source.pine
+#                          ^ source.pine constant.numeric.integer.pine
+#                           ^^ source.pine
+#                             ^ source.pine constant.numeric.integer.pine
+#                              ^^ source.pine
+#                                ^^^ source.pine constant.numeric.integer.pine
+#                                   ^^ source.pine
+>colorFromGradient = color.from_gradient(rsiValue, 0, 100, color.red, color.green)
+#^^^^^^^^^^^^^^^^^ source.pine variable.other.pine
+#                 ^ source.pine
+#                  ^ source.pine keyword.operator.assignment.pine
+#                   ^ source.pine
+#                    ^^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                       ^ source.pine
+#                                        ^^^^^^^^ source.pine variable.other.pine
+#                                                ^^ source.pine
+#                                                  ^ source.pine constant.numeric.integer.pine
+#                                                   ^^ source.pine
+#                                                     ^^^ source.pine constant.numeric.integer.pine
+#                                                        ^^ source.pine
+#                                                          ^^^^^^^^^ source.pine entity.name.function
+#                                                                   ^^ source.pine
+#                                                                     ^^^^^^^^^^^ source.pine entity.name.function
+#                                                                                ^^ source.pine
+>
+>// Array library operations
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>myArray = array.new_float(5, 0.0)
+#^^^^^^^ source.pine variable.other.pine
+#       ^ source.pine
+#        ^ source.pine keyword.operator.assignment.pine
+#         ^ source.pine
+#          ^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                         ^ source.pine
+#                          ^ source.pine constant.numeric.integer.pine
+#                           ^^ source.pine
+#                             ^^^ source.pine constant.numeric.float.pine
+#                                ^^ source.pine
+>array.push(myArray, close)
+#^^^^^^^^^^ source.pine entity.name.function
+#          ^ source.pine
+#           ^^^^^^^ source.pine variable.other.pine
+#                  ^^ source.pine
+#                    ^^^^^ source.pine constant.language.pine
+#                         ^^ source.pine
+>arraySize = array.size(myArray)
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^^^^^^^ source.pine entity.name.function
+#                      ^ source.pine
+#                       ^^^^^^^ source.pine variable.other.pine
+#                              ^^ source.pine
+>arrayMax = array.max(myArray)
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^^ source.pine entity.name.function
+#                    ^ source.pine
+#                     ^^^^^^^ source.pine variable.other.pine
+#                            ^^ source.pine
+>
+>// Input library - user inputs
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>lengthInput = input.int(14, "Length", minval=1, maxval=100)
+#^^^^^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^ source.pine keyword.operator.assignment.pine
+#             ^ source.pine
+#              ^^^^^^^^^ source.pine entity.name.function
+#                       ^ source.pine
+#                        ^^ source.pine constant.numeric.integer.pine
+#                          ^^ source.pine
+#                            ^ source.pine string.quoted.double.pine
+#                             ^^^^^^ source.pine string.quoted.double.pine
+#                                   ^ source.pine string.quoted.double.pine
+#                                    ^^ source.pine
+#                                      ^^^^^^ source.pine variable.other.pine
+#                                            ^ source.pine keyword.operator.assignment.pine
+#                                             ^ source.pine constant.numeric.integer.pine
+#                                              ^^ source.pine
+#                                                ^^^^^^ source.pine variable.other.pine
+#                                                      ^ source.pine keyword.operator.assignment.pine
+#                                                       ^^^ source.pine constant.numeric.integer.pine
+#                                                          ^^ source.pine
+>colorInput = input.color(color.blue, "Line Color")
+#^^^^^^^^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.assignment.pine
+#            ^ source.pine
+#             ^^^^^^^^^^^ source.pine entity.name.function
+#                        ^ source.pine
+#                         ^^^^^^^^^^ source.pine entity.name.function
+#                                   ^^ source.pine
+#                                     ^ source.pine string.quoted.double.pine
+#                                      ^^^^^^^^^^ source.pine string.quoted.double.pine
+#                                                ^ source.pine string.quoted.double.pine
+#                                                 ^^ source.pine
+>sourceInput = input.source(close, "Source")
+#^^^^^^^^^^^ source.pine variable.other.pine
+#           ^ source.pine
+#            ^ source.pine keyword.operator.assignment.pine
+#             ^ source.pine
+#              ^^^^^^^^^^^^ source.pine entity.name.function
+#                          ^ source.pine
+#                           ^^^^^ source.pine constant.language.pine
+#                                ^^ source.pine
+#                                  ^ source.pine string.quoted.double.pine
+#                                   ^^^^^^ source.pine string.quoted.double.pine
+#                                         ^ source.pine string.quoted.double.pine
+#                                          ^^ source.pine
+>
+>// Barstate library - bar information
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>isNewBar = barstate.isnew
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^^^^^^^^^^^^ source.pine entity.name.function
+>isLastBar = barstate.islast
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^^^^^^^^^^^^ source.pine entity.name.function
+>isRealtime = barstate.isrealtime
+#^^^^^^^^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.assignment.pine
+#            ^ source.pine
+#             ^^^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+>
+>// Builtin variables - OHLCV data
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>currentBar = bar_index
+#^^^^^^^^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.assignment.pine
+#            ^ source.pine
+#             ^^^^^^^^^ source.pine constant.language.pine
+>priceOpen = open
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^ source.pine constant.language.pine
+>priceHigh = high
+#^^^^^^^^^ source.pine variable.other.pine
+#         ^ source.pine
+#          ^ source.pine keyword.operator.assignment.pine
+#           ^ source.pine
+#            ^^^^ source.pine constant.language.pine
+>priceLow = low
+#^^^^^^^^ source.pine variable.other.pine
+#        ^ source.pine
+#         ^ source.pine keyword.operator.assignment.pine
+#          ^ source.pine
+#           ^^^ source.pine constant.language.pine
+>priceClose = close
+#^^^^^^^^^^ source.pine variable.other.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.assignment.pine
+#            ^ source.pine
+#             ^^^^^ source.pine constant.language.pine
+>vol = volume
+#^^^ source.pine variable.other.pine
+#   ^ source.pine
+#    ^ source.pine keyword.operator.assignment.pine
+#     ^ source.pine
+#      ^^^^^^ source.pine constant.language.pine
+>averagePrice = hl2  // (high + low) / 2
+#^^^^^^^^^^^^ source.pine variable.other.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.assignment.pine
+#              ^ source.pine
+#               ^^^ source.pine constant.language.pine
+#                  ^^ source.pine
+#                    ^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>typicalPrice = hlc3 // (high + low + close) / 3
+#^^^^^^^^^^^^ source.pine variable.other.pine
+#            ^ source.pine
+#             ^ source.pine keyword.operator.assignment.pine
+#              ^ source.pine
+#               ^^^^ source.pine constant.language.pine
+#                   ^ source.pine
+#                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>
+>// Plotting
+#^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>plot(sma20, "SMA 20", color=#FF0000, linewidth=2)
+#^^^^ source.pine entity.name.function
+#    ^ source.pine
+#     ^^^^^ source.pine variable.other.pine
+#          ^^ source.pine
+#            ^ source.pine string.quoted.double.pine
+#             ^^^^^^ source.pine string.quoted.double.pine
+#                   ^ source.pine string.quoted.double.pine
+#                    ^^ source.pine
+#                      ^^^^^ source.pine storage.type.primitive.pine
+#                           ^ source.pine keyword.operator.assignment.pine
+#                            ^^^^^^^ source.pine constant.other.color.pine
+#                                   ^^ source.pine
+#                                     ^^^^^^^^^ source.pine variable.other.pine
+#                                              ^ source.pine keyword.operator.assignment.pine
+#                                               ^ source.pine constant.numeric.integer.pine
+#                                                ^^ source.pine
+>plotshape(close > sma20, "Buy Signal", location=location.belowbar,
+#^^^^^^^^^ source.pine entity.name.function
+#         ^ source.pine
+#          ^^^^^ source.pine constant.language.pine
+#               ^ source.pine
+#                ^ source.pine keyword.operator.comparison.pine
+#                 ^ source.pine
+#                  ^^^^^ source.pine variable.other.pine
+#                       ^^ source.pine
+#                         ^ source.pine string.quoted.double.pine
+#                          ^^^^^^^^^^ source.pine string.quoted.double.pine
+#                                    ^ source.pine string.quoted.double.pine
+#                                     ^^ source.pine
+#                                       ^^^^^^^^ source.pine variable.other.pine
+#                                               ^ source.pine keyword.operator.assignment.pine
+#                                                ^^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                                                 ^^ source.pine
+>          color=color.green, style=shape.triangleup)
+#^^^^^^^^^^ source.pine
+#          ^^^^^ source.pine storage.type.primitive.pine
+#               ^ source.pine keyword.operator.assignment.pine
+#                ^^^^^^^^^^^ source.pine entity.name.function
+#                           ^^ source.pine
+#                             ^^^^^ source.pine variable.other.pine
+#                                  ^ source.pine keyword.operator.assignment.pine
+#                                   ^^^^^^^^^^^^^^^^ source.pine entity.name.function
+#                                                   ^^ source.pine
+>bgcolor(close > open ? color.new(color.green, 90) : color.new(color.red, 90))
+#^^^^^^^ source.pine entity.name.function
+#       ^ source.pine
+#        ^^^^^ source.pine constant.language.pine
+#             ^ source.pine
+#              ^ source.pine keyword.operator.comparison.pine
+#               ^ source.pine
+#                ^^^^ source.pine constant.language.pine
+#                    ^ source.pine
+#                     ^ source.pine keyword.control.pine
+#                      ^ source.pine
+#                       ^^^^^^^^^ source.pine entity.name.function
+#                                ^ source.pine
+#                                 ^^^^^^^^^^^ source.pine entity.name.function
+#                                            ^^ source.pine
+#                                              ^^ source.pine constant.numeric.integer.pine
+#                                                ^^ source.pine
+#                                                  ^ source.pine keyword.control.pine
+#                                                   ^ source.pine
+#                                                    ^^^^^^^^^ source.pine entity.name.function
+#                                                             ^ source.pine
+#                                                              ^^^^^^^^^ source.pine entity.name.function
+#                                                                       ^^ source.pine
+#                                                                         ^^ source.pine constant.numeric.integer.pine
+#                                                                           ^^^ source.pine
+>
+>// Export (for libraries)
+#^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>export calcAverage
+#^^^^^^ source.pine keyword.declaration.pine
+#      ^ source.pine
+#       ^^^^^^^^^^^ source.pine variable.other.pine

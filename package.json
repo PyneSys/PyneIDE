@@ -1,0 +1,84 @@
+{
+  "name": "pyneide",
+  "displayName": "PyneIDE",
+  "description": "Pine Script and Pyne language support: syntax highlighting for .pine files and Pyne script detection. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
+  "version": "0.0.1",
+  "preview": true,
+  "publisher": "pynesys",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "pine script",
+    "pinescript",
+    "pyne",
+    "pynecore",
+    "trading",
+    "indicators",
+    "strategies",
+    "backtesting"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pynesys/pyneide"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:pine"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pine",
+        "aliases": [
+          "Pine Script",
+          "pine",
+          "pinescript"
+        ],
+        "extensions": [
+          ".pine",
+          ".psc"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/pine-file.svg",
+          "dark": "./icons/pine-file.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pine",
+        "scopeName": "source.pine",
+        "path": "./syntaxes/pine.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "check": "tsc --noEmit",
+    "test:grammar": "vscode-tmgrammar-snap test/grammar/*.pine",
+    "test:grammar:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
+    "vscode:prepublish": "npm run build",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.3.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "vscode-tmgrammar-test": "^0.1.3"
+  },
+  "allowScripts": {
+    "esbuild@0.24.2": true,
+    "@vscode/vsce-sign@2.0.9": true,
+    "keytar@7.9.0": true
+  }
+}

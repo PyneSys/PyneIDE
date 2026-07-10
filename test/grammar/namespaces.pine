@@ -1,0 +1,36 @@
+//@version=6
+strategy("Namespace coverage", overlay=false)
+
+// Namespaces that were missing from the original tmbundle grammar
+s = request.security(syminfo.tickerid, "D", close, barmerge.gaps_off)
+strategy.entry("L", strategy.long)
+strategy.exit("X", "L", profit=100)
+i = input.int(14, "Length")
+f = input.float(1.5)
+log.info("value: {0}", s)
+runtime.error("boom")
+if timeframe.change("D") and not splits.denominator
+    label.new(bar_index, high, text.format_bold)
+p = polyline.new(na)
+e = earnings.future_eps
+x = extend.both
+ff = font.family_monospace
+pos = position.top_center
+tick = ticker.new("BYBIT", "BTCUSDT")
+
+// Pyne-specific virtual libraries
+fp = footprint.rows
+vr = volume_row.price
+
+// Builtin variables incl. additions
+v = bid + ask + hlcc4 + time_tradingday
+n = last_bar_index - bar_index
+d = dayofmonth + hour + minute + second + weekofyear + year
+
+// dayofweek: variable, namespace member and function forms
+w1 = dayofweek
+w2 = dayofweek.monday
+w3 = dayofweek(time)
+
+// arrow must not be split into assignment + comparison
+add(a, b) => a + b

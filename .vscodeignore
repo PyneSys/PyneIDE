@@ -1,0 +1,13 @@
+.github/**
+.claude/**
+src/**
+test/**
+node_modules/**
+esbuild.mjs
+tsconfig.json
+PLAN.md
+TODO.md
+MEMORY.md
+.gitignore
+**/*.map
+*.vsix

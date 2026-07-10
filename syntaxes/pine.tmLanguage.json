@@ -1,0 +1,249 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Pine Script",
+  "scopeName": "source.pine",
+  "fileTypes": ["pine", "psc"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#script-declarations"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtin-libraries"
+    },
+    {
+      "include": "#builtin-variables"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.pine",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.pine",
+          "match": "^\\s*//@\\w+.*$"
+        }
+      ]
+    },
+    "script-declarations": {
+      "patterns": [
+        {
+          "name": "entity.name.function.pine",
+          "match": "\\b(indicator|strategy|library)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "builtin-libraries": {
+      "patterns": [
+        {
+          "name": "entity.name.function",
+          "match": "\\b(adjustment|alert|array|barmerge|barstate|box|chart|color|currency|dayofweek|display|dividends|earnings|extend|font|footprint|format|hline_style|hline|input|label|linefill|line|location|log|map|math|matrix|order|plot_style|plot|polyline|position|request|runtime|scale|session|shape|size|splits|strategy|strat|str|syminfo|table|ta|text|ticker|timeframe|volume_row|xloc|yloc)\\.[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
+    "builtin-variables": {
+      "patterns": [
+        {
+          "name": "constant.language.pine",
+          "match": "\\b(ask|bar_index|bid|close|dayofmonth|dayofweek|high|hl2|hlc3|hlcc4|hour|last_bar_index|last_bar_time|last_bar|low|minute|month|ohlc4|open|second|time_close|time_tradingday|timenow|time|volume|weekofyear|year)\\b(?!\\s*[.(])"
+        },
+        {
+          "name": "constant.language.null.pine",
+          "match": "\\bna\\b(?!\\s*[.(])"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.conditional.pine",
+          "match": "\\b(if|else|switch)\\b"
+        },
+        {
+          "name": "keyword.control.loop.pine",
+          "match": "\\b(for|while|to|by|in)\\b"
+        },
+        {
+          "name": "keyword.control.flow.pine",
+          "match": "\\b(break|continue)\\b"
+        },
+        {
+          "name": "keyword.declaration.method.pine",
+          "match": "\\bmethod(?=\\s+\\w+)"
+        },
+        {
+          "name": "keyword.declaration.pine",
+          "match": "\\b(var|varip|type|enum|export|import|as)\\b"
+        },
+        {
+          "name": "keyword.control.pine",
+          "match": "\\b(and|or|not)\\b"
+        },
+        {
+          "name": "storage.modifier.pine",
+          "match": "\\b(const|series|simple)(?=\\s+\\w+)"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.collection.map.pine",
+          "match": "\\bmap\\s*<\\s*(?:int|float|bool|color|string)\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*\\s*>"
+        },
+        {
+          "name": "storage.type.collection.pine",
+          "match": "\\b(?:array|matrix)\\s*<\\s*[A-Za-z_][A-Za-z0-9_]*\\s*>"
+        },
+        {
+          "name": "storage.type.reference.array.pine",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\[\\](?=\\s+[a-z_])"
+        },
+        {
+          "name": "storage.type.primitive.pine",
+          "match": "\\b(int|float|bool|color|string|void)\\b"
+        },
+        {
+          "name": "storage.type.builtin.pine",
+          "match": "\\b(label|table|box|line|linefill|polyline)\\b"
+        },
+        {
+          "name": "entity.name.type.pine",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.other.color.pine",
+          "match": "#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?"
+        },
+        {
+          "name": "constant.numeric.float.pine",
+          "match": "\\b([0-9]*\\.[0-9]+([eE][+-]?[0-9]+)?|[0-9]+\\.[0-9]*([eE][+-]?[0-9]+)?|[0-9]+[eE][+-]?[0-9]+)\\b"
+        },
+        {
+          "name": "constant.numeric.integer.pine",
+          "match": "\\b[0-9]+\\b"
+        },
+        {
+          "name": "constant.language.boolean.pine",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "string.quoted.double.pine",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.pine",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.pine",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.pine",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.compound.pine",
+          "match": "(\\+=|-=|\\*=|/=|%=)"
+        },
+        {
+          "name": "keyword.operator.arrow.pine",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.comparison.pine",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.pine",
+          "match": "(:=|=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.pine",
+          "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.control.pine",
+          "match": "(\\?|:)"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.constructor.template.pine",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\.new\\s*(?=<)"
+        },
+        {
+          "name": "entity.name.function.constructor.pine",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\.(new|copy)\\b"
+        },
+        {
+          "name": "entity.name.function",
+          "match": "\\b(timestamp|plotchar|plotarrow|plotbar|plotcandle|plotshape|plot|barcolor|bgcolor|alertcondition|alert|hline|fill|linefill|fixnan|nz|na|max_bars_back|dayofmonth|dayofweek|hour|minute|month|second|weekofyear|year|time_close|time)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.typecast.pine",
+          "match": "\\b(color|label|table|bool|box|int|line|float|string|linefill)\\s*(?=\\()"
+        },
+        {
+          "name": "entity.name.function.pine",
+          "match": "\\b[a-z_][A-Za-z0-9_]*\\s*(?=\\()"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.pine",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}
