@@ -4,7 +4,7 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F0**
+**Aktuális fázis: F1**
 
 ---
 
@@ -45,8 +45,10 @@ Cél: telepíthető extension, ami már hasznos (syntax highlight).
       publikáljuk — a kiadási stratégia szerint az MVP után, csendben)
 
 F0 nyitott apróságok:
-- [ ] Licenc-döntés (addig: `--skip-license` a csomagolásnál, README "TBD")
-- [ ] `repository.url` a package.json-ban placeholder (github.com/pynesys/pyneide)
+- [x] Licenc-döntés: GPL-3.0-only (`LICENSE` fájl, `--skip-license` kivéve a
+      CI-ból és a csomagolásból)
+- [x] `repository.url` a package.json-ban: github.com/PyneSys/PyneIDE
+      (privát repó létrehozva, `main` felpusholva)
 - [ ] Vizuális smoke-teszt VSCode-ban (Pine highlight, Pyne badge)
 
 ## F1 — Python környezet bootstrap (M)

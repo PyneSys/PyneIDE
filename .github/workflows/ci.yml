@@ -18,7 +18,7 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: npm run test:grammar
-      - run: npx vsce package --skip-license --out pyneide.vsix
+      - run: npx vsce package --out pyneide.vsix
       - uses: actions/upload-artifact@v4
         with:
           name: pyneide-vsix
