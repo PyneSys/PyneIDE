@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import type { Logger } from './constants';
+import { execChecked } from './exec';
+
 /**
  * Mirror of pynecore's AppState._find_workdir: walk upwards from `startDir`
  * (max 10 levels) looking for a directory named `workdir`; when none is
@@ -20,44 +23,40 @@ export function findWorkdir(startDir: string): { path: string; exists: boolean }
   return { path: path.join(path.resolve(startDir), 'workdir'), exists: false };
 }
 
-export const WORKDIR_SUBDIRS = ['scripts', 'data', 'config', 'output'] as const;
+export interface WorkdirResolution {
+  path: string;
+  exists: boolean;
+  source: 'setting' | 'search' | 'fallback';
+}
 
-const DEMO_SCRIPT = `"""
-@pyne
-
-Demo indicator: fast SMA and slow EMA on the chart.
-"""
-from pynecore.lib import close, color, input, plot, script, ta
-
-
-@script.indicator("Demo — Moving Averages", overlay=True)
-def main(
-    fast_len=input.int(9, "Fast length", minval=1),
-    slow_len=input.int(21, "Slow length", minval=1),
-):
-    fast = ta.sma(close, fast_len)
-    slow = ta.ema(close, slow_len)
-    plot(fast, "Fast SMA", color=color.aqua)
-    plot(slow, "Slow EMA", color=color.orange)
-`;
-
-const WORKDIR_README = `# Pyne workdir
-
-Created by PyneIDE. Layout (used by the \`pyne\` CLI and PyneCore):
-
-- scripts/ - Pyne scripts (.py with a docstring starting with @pyne) and .pine sources
-- data/    - OHLCV data files (.ohlcv + .toml symbol info)
-- config/  - provider credentials and configuration
-- output/  - run results (plot/strategy/trade CSV files)
-
-Download data for a script, e.g.:
-
-    pyne data download ccxt --symbol "BYBIT:BTC/USDT:USDT" --timeframe 1D
-
-Then run it:
-
-    pyne run demo_moving_averages.py
-`;
+/**
+ * Resolution chain: explicit `pyneide.workdir` setting (relative to the
+ * workspace folder, "." allowed) > upward search from the script's directory >
+ * upward search from the workspace folder > fallback `<wsFolder>/workdir`
+ * (which may not exist). Returns undefined when there is nothing to go on.
+ */
+export function resolveWorkdir(opts: {
+  setting?: string;
+  wsFolder?: string;
+  scriptDir?: string;
+}): WorkdirResolution | undefined {
+  const setting = opts.setting?.trim();
+  if (setting) {
+    const base = opts.wsFolder ?? opts.scriptDir ?? '.';
+    const resolved = path.resolve(base, setting);
+    const exists = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
+    return { path: resolved, exists, source: 'setting' };
+  }
+  for (const start of [opts.scriptDir, opts.wsFolder]) {
+    if (!start) continue;
+    const found = findWorkdir(start);
+    if (found.exists) return { path: found.path, exists: true, source: 'search' };
+  }
+  if (opts.wsFolder) {
+    return { path: path.join(path.resolve(opts.wsFolder), 'workdir'), exists: false, source: 'fallback' };
+  }
+  return undefined;
+}
 
 export interface CreatedWorkspace {
   workdir: string;
@@ -66,22 +65,56 @@ export interface CreatedWorkspace {
 }
 
 /**
- * Create the pynecore-compatible workdir structure with a demo script.
- * Existing files are never overwritten.
+ * Scaffold the workdir with the pynecore CLI itself (single source of truth:
+ * its app-callback creates the directory layout, config/providers.toml,
+ * config/api.toml and the demo script + data). The workdir directory is
+ * pre-created so the CLI's interactive "create it?" confirmation is skipped;
+ * `run --help` is the cheapest invocation that triggers the callback without
+ * doing anything else. `--recreate-demo` is only passed when the demo script
+ * is missing, so existing files are never overwritten.
  */
-export function createPyneWorkspace(baseDir: string): CreatedWorkspace {
-  const workdir = path.join(baseDir, 'workdir');
-  const existed = fs.existsSync(workdir);
-  for (const sub of WORKDIR_SUBDIRS) {
-    fs.mkdirSync(path.join(workdir, sub), { recursive: true });
+export async function scaffoldWorkdirWithCli(
+  pyneBin: string,
+  workdir: string,
+  log: Logger
+): Promise<CreatedWorkspace> {
+  if (!fs.existsSync(pyneBin)) {
+    throw new Error(
+      `pyne CLI not found at ${pyneBin} — the selected Python environment does not have pynecore installed`
+    );
   }
-  const readmePath = path.join(workdir, 'README.md');
-  if (!fs.existsSync(readmePath)) {
-    fs.writeFileSync(readmePath, WORKDIR_README);
-  }
-  const demoScript = path.join(workdir, 'scripts', 'demo_moving_averages.py');
+  const created = !fs.existsSync(path.join(workdir, 'scripts'));
+  fs.mkdirSync(workdir, { recursive: true });
+  const demoScript = path.join(workdir, 'scripts', 'demo.py');
+  const args = ['--workdir', workdir];
   if (!fs.existsSync(demoScript)) {
-    fs.writeFileSync(demoScript, DEMO_SCRIPT);
+    args.push('--recreate-demo');
   }
-  return { workdir, demoScript, created: !existed };
+  args.push('run', '--help');
+  await execChecked(pyneBin, args, log, { timeoutMs: 120000 });
+  return { workdir, demoScript, created };
+}
+
+/**
+ * Write `"pyneide.workdir": "."` into `<projectDir>/.vscode/settings.json`,
+ * marking the project folder itself as the workdir. Used when no workspace is
+ * open, so the VSCode configuration API is not available. Returns false when
+ * an existing settings.json could not be parsed (e.g. JSONC comments) — in
+ * that case the file is left untouched.
+ */
+export function markProjectAsWorkdir(projectDir: string): boolean {
+  const vscodeDir = path.join(projectDir, '.vscode');
+  const settingsPath = path.join(vscodeDir, 'settings.json');
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+  }
+  settings['pyneide.workdir'] = '.';
+  fs.mkdirSync(vscodeDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  return true;
 }

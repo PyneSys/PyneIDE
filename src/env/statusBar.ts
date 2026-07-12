@@ -76,7 +76,7 @@ export class EnvStatusBar {
         action: () => void this.manager.setup({ recreate: true }),
       },
       {
-        label: '$(new-folder) Create Pyne Workspace',
+        label: '$(new-folder) Initialize Pyne Project',
         action: () => void vscode.commands.executeCommand('pyneide.createWorkspace'),
       },
       {

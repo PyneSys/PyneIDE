@@ -112,6 +112,14 @@ export function venvPythonPath(venvDir: string): string {
     : path.join(venvDir, 'bin', 'python');
 }
 
+/** The pyne console script installed next to a Python interpreter. */
+export function pyneBinPath(pythonBin: string): string {
+  return path.join(
+    path.dirname(pythonBin),
+    process.platform === 'win32' ? 'pyne.exe' : 'pyne'
+  );
+}
+
 /** Default location of the managed venv. */
 export function managedVenvDir(storageDir: string): string {
   return path.join(storageDir, 'venv');

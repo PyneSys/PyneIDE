@@ -28,6 +28,7 @@
   },
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:python",
     "onLanguage:pine"
   ],
@@ -40,7 +41,7 @@
       },
       {
         "command": "pyneide.createWorkspace",
-        "title": "Create Pyne Workspace",
+        "title": "Initialize Pyne Project",
         "category": "PyneIDE"
       },
       {
@@ -110,6 +111,12 @@
           "default": "https://api.pynesys.io",
           "scope": "machine",
           "markdownDescription": "Base URL of the PyneSys API. Machine-scoped on purpose: a workspace must not be able to redirect your API key to another host."
+        },
+        "pyneide.workdir": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Path to the Pyne workdir, relative to the workspace folder (`.` = the folder itself) or absolute. When empty, PyneIDE searches upward for a directory named `workdir` (pynecore behavior)."
         },
         "pyneide.pineWorkflow": {
           "type": "string",

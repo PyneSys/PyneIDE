@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
-import { findWorkdir } from '../env/workdir';
+import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { DEFAULT_API_BASE_URL, PyneApiClient } from './client';
 
 const SECRET_KEY = 'pynesys.apiKey';
@@ -26,10 +26,8 @@ export function jwtExpiry(token: string): Date | undefined {
 }
 
 /** Read the API key from a pynecore CLI config (workdir/config/api.toml). */
-function readApiTomlKey(startDir: string): string | undefined {
-  const workdir = findWorkdir(startDir);
-  if (!workdir.exists) return undefined;
-  const tomlPath = path.join(workdir.path, 'config', 'api.toml');
+function readApiTomlKey(workdir: string): string | undefined {
+  const tomlPath = path.join(workdir, 'config', 'api.toml');
   try {
     const content = fs.readFileSync(tomlPath, 'utf8');
     // Minimal parse: api_key = "..." under [api]; enough for the CLI's own format.
@@ -65,8 +63,8 @@ export class AuthService {
    */
   async signIn(): Promise<boolean> {
     let initialValue = '';
-    const workspaceDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const cliKey = workspaceDir ? readApiTomlKey(workspaceDir) : undefined;
+    const workdir = resolveWorkspaceWorkdir();
+    const cliKey = workdir?.exists ? readApiTomlKey(workdir.path) : undefined;
     if (cliKey) {
       const choice = await vscode.window.showInformationMessage(
         'PyneIDE: found an API key in workdir/config/api.toml (pyne CLI). Use it?',

@@ -9,8 +9,8 @@ import * as path from 'node:path';
 
 import { bootstrapManagedEnv } from '../../src/env/bootstrap';
 import { execChecked } from '../../src/env/exec';
-import { venvPythonPath, managedVenvDir } from '../../src/env/uv';
-import { createPyneWorkspace, findWorkdir } from '../../src/env/workdir';
+import { venvPythonPath, managedVenvDir, pyneBinPath } from '../../src/env/uv';
+import { findWorkdir, resolveWorkdir, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 
 const log = (msg: string): void => console.log(msg);
 
@@ -29,22 +29,37 @@ async function main(): Promise<void> {
   }
 
   // The pyne CLI must start from the venv.
-  const pyneBin = path.join(
-    path.dirname(pythonBin),
-    process.platform === 'win32' ? 'pyne.exe' : 'pyne'
-  );
+  const pyneBin = pyneBinPath(pythonBin);
   await execChecked(pyneBin, ['--help'], log, { timeoutMs: 60000 });
 
-  // Workdir discovery + workspace scaffolding.
+  // Workdir discovery + CLI scaffolding, subfolder mode (pyne CLI layout).
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-ws-'));
   const before = findWorkdir(base);
   if (before.exists) throw new Error('findWorkdir: false positive');
-  const ws = createPyneWorkspace(base);
+  const ws = await scaffoldWorkdirWithCli(pyneBin, path.join(base, 'workdir'), log);
   const after = findWorkdir(path.join(base, 'workdir', 'scripts'));
   if (!after.exists || after.path !== ws.workdir) {
     throw new Error(`findWorkdir mismatch: ${after.path} != ${ws.workdir}`);
   }
   if (!fs.existsSync(ws.demoScript)) throw new Error('demo script missing');
+  for (const rel of ['config/providers.toml', 'config/api.toml', 'data/demo.ohlcv', 'data/demo.toml']) {
+    if (!fs.existsSync(path.join(ws.workdir, rel))) throw new Error(`${rel} missing`);
+  }
+
+  // Project-root mode: the folder itself is the workdir, marked by setting.
+  const rootBase = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-root-'));
+  const rootWs = await scaffoldWorkdirWithCli(pyneBin, rootBase, log);
+  if (rootWs.workdir !== rootBase || !rootWs.created) {
+    throw new Error(`root-mode scaffold mismatch: ${rootWs.workdir}`);
+  }
+  const bySetting = resolveWorkdir({ setting: '.', wsFolder: rootBase });
+  if (!bySetting?.exists || bySetting.path !== rootBase || bySetting.source !== 'setting') {
+    throw new Error(`resolveWorkdir setting mode failed: ${bySetting?.path}`);
+  }
+  const byFallback = resolveWorkdir({ wsFolder: rootBase });
+  if (byFallback?.exists !== false || byFallback.source !== 'fallback') {
+    throw new Error('resolveWorkdir fallback mode failed');
+  }
 
   log('SMOKE OK');
 }
