@@ -11,6 +11,20 @@ const common = {
   sourcemap: true,
 };
 
+const watchMarkerPlugin = {
+  name: 'watch-marker',
+  setup(build) {
+    build.onStart(() => console.log('[watch] build started'));
+    build.onEnd((result) => {
+      for (const { text, location } of result.errors) {
+        console.error(`[ERROR] ${text}`);
+        if (location) console.error(`    ${location.file}:${location.line}:${location.column}:`);
+      }
+      console.log('[watch] build finished');
+    });
+  },
+};
+
 if (smoke) {
   await esbuild.build({
     ...common,
@@ -25,6 +39,7 @@ if (smoke) {
     outfile: 'dist/extension.js',
     external: ['vscode'],
     minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
   });
 
   if (watch) {
