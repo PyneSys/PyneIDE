@@ -8,7 +8,7 @@ import { CompileService } from './compile/service';
 import { EnvManager } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
-import { markProjectAsWorkdir, scaffoldWorkdirWithCli } from './env/workdir';
+import { markProjectAsWorkdir, recommendTomlExtension, scaffoldWorkdirWithCli } from './env/workdir';
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PyneDecorationProvider } from './pyneDecorations';
 
@@ -156,6 +156,7 @@ async function initProjectCommand(
           .getConfiguration('pyneide', folder.uri)
           .update('workdir', '.', vscode.ConfigurationTarget.WorkspaceFolder);
       }
+      recommendTomlExtension(folder.uri.fsPath);
       updateTerminalWorkdirEnv(context);
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
       await vscode.window.showTextDocument(doc);
@@ -190,6 +191,7 @@ async function initProjectCommand(
           'set "pyneide.workdir": "." there manually.'
       );
     }
+    recommendTomlExtension(baseDir);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {
     void vscode.window.showErrorMessage(

@@ -161,6 +161,23 @@
           "light": "./icons/pine-file.svg",
           "dark": "./icons/pine-file.svg"
         }
+      },
+      {
+        "id": "toml",
+        "aliases": [
+          "TOML"
+        ],
+        "extensions": [
+          ".toml"
+        ],
+        "filenames": [
+          "Cargo.lock",
+          "Gopkg.lock",
+          "Pipfile",
+          "poetry.lock",
+          "uv.lock"
+        ],
+        "configuration": "./language-configuration-toml.json"
       }
     ],
     "grammars": [
@@ -168,6 +185,11 @@
         "language": "pine",
         "scopeName": "source.pine",
         "path": "./syntaxes/pine.tmLanguage.json"
+      },
+      {
+        "language": "toml",
+        "scopeName": "source.toml",
+        "path": "./syntaxes/toml.tmLanguage.json"
       }
     ]
   },
