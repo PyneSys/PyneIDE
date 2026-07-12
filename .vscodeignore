@@ -11,3 +11,4 @@ MEMORY.md
 .gitignore
 **/*.map
 *.vsix
+dist/env-smoke.js

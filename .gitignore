@@ -22,6 +22,7 @@ $RECYCLE.BIN/
 node_modules/
 dist/
 out/
+build/
 *.vsix
 .vscode-test/
 *.tsbuildinfo
@@ -51,10 +52,10 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.venv/
-venv/
-env/
-ENV/
+/.venv/
+/venv/
+/env/
+/ENV/
 .python-version
 .pytest_cache/
 .mypy_cache/

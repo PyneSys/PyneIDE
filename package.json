@@ -32,6 +32,111 @@
     "onLanguage:pine"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "pyneide.setupEnvironment",
+        "title": "Setup Environment",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.createWorkspace",
+        "title": "Create Pyne Workspace",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.showEnvironmentLog",
+        "title": "Show Environment Log",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.environmentMenu",
+        "title": "Environment Menu",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.signIn",
+        "title": "Sign In to PyneSys",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.signOut",
+        "title": "Sign Out from PyneSys",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.compilePine",
+        "title": "Compile Pine Script",
+        "category": "PyneIDE",
+        "enablement": "editorLangId == pine"
+      },
+      {
+        "command": "pyneide.showUsage",
+        "title": "Show API Usage",
+        "category": "PyneIDE"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "pyneide.compilePine",
+          "when": "resourceLangId == pine",
+          "group": "pyneide@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PyneIDE",
+      "properties": {
+        "pyneide.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to a Python interpreter to use instead of the managed environment. PyneIDE does not install packages into it, only checks that `pynesys-pynecore` and `debugpy` are available."
+        },
+        "pyneide.venvPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to a virtualenv directory to use instead of the managed environment. Takes precedence over `#pyneide.pythonPath#`. PyneIDE does not install packages into it."
+        },
+        "pyneide.useOwnPynecore": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Keep an already installed (e.g. editable/development) PyneCore in the managed environment instead of the pinned version; only a minimum-version check is performed."
+        },
+        "pyneide.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.pynesys.io",
+          "scope": "machine",
+          "markdownDescription": "Base URL of the PyneSys API. Machine-scoped on purpose: a workspace must not be able to redirect your API key to another host."
+        },
+        "pyneide.pineWorkflow": {
+          "type": "string",
+          "enum": ["ask", "migration", "pine-first"],
+          "enumDescriptions": [
+            "Ask on the first compilation in the project",
+            "Compile once, then continue the work in the generated Python file",
+            ".pine stays the source of truth; the .py is a derived artifact, recompiled on save"
+          ],
+          "default": "ask",
+          "scope": "resource",
+          "markdownDescription": "How Pine Script files are used in this project."
+        },
+        "pyneide.compileOnSave": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Recompile .pine files on save. Only applies in the `pine-first` workflow."
+        },
+        "pyneide.strictCompile": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
+        }
+      }
+    },
     "languages": [
       {
         "id": "pine",
@@ -65,8 +170,10 @@
     "check": "tsc --noEmit",
     "test:grammar": "vscode-tmgrammar-snap test/grammar/*.pine",
     "test:grammar:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
+    "test:env": "node esbuild.mjs --smoke && node dist/env-smoke.js",
     "vscode:prepublish": "npm run build",
-    "package": "vsce package"
+    "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
+    "package": "vsce package --out build/"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

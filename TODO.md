@@ -4,7 +4,7 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F1**
+**Aktuális fázis: F2 kész (élő teszt vár) -> F3 következik**
 
 ---
 
@@ -53,24 +53,71 @@ F0 nyitott apróságok:
 
 ## F1 — Python környezet bootstrap (M)
 
-- [ ] `uv` letöltés/bundle + dedikált venv a `globalStorage`-ban
-- [ ] Pinnelt `pynecore[all]` + `debugpy` telepítés (Python 3.14)
-- [ ] Környezet-ellenőrző status bar + "Setup Environment" parancs
-- [ ] Override-ok: `pyneide.pythonPath`, `pyneide.venvPath`, `pyneide.useOwnPynecore`
-- [ ] Workdir-kezelés + "Create Pyne workspace" parancs
-- [ ] CI smoke-teszt mindhárom OS-en
+- [x] `uv` beszerzés
+  - [x] Platform-triple felismerés (darwin/linux/win, x64/arm64), letöltés a
+        GitHub release-ből a `globalStorage/uv` alá, pinnelt verzió (0.11.28)
+  - [x] Beégetett SHA-256 ellenőrzés letöltés után (supply-chain védelem)
+  - [x] Kicsomagolás `tar`-ral (macOS/Linux: tar.gz; Windows 10+: beépített
+        bsdtar kezeli a zipet is)
+  - [x] Proxy: a letöltés `node:https`-en (VSCode proxy-patch érvényesül),
+        az uv-spawnok a `http.proxy` beállítást env-ként kapják
+- [x] Menedzselt venv a `globalStorage`-ban
+  - [x] `uv venv --python 3.14` (UV_PYTHON_INSTALL_DIR a globalStorage alatt,
+        önálló, rendszertől független Python)
+  - [x] Pinnelt `pynesys-pynecore[all]==6.5.7` + `debugpy==1.8.21` telepítés
+  - [x] `env.json` marker (pinnelt verziók); eltérésnél újratelepítés-ajánlat
+  - [x] Verifikáció: venv-python importteszt (pynecore + debugpy verzióval)
+- [x] Környezet-UI
+  - [x] Status bar elem (állapot: setup kell / folyamatban / kész / hiba),
+        kattintásra quickpick menü
+  - [x] `PyneIDE: Setup Environment` parancs (withProgress, hibatűrő
+        újratelepítés: venv törlés + újraépítés)
+  - [x] Output channel ("PyneIDE Environment") minden lépés logjával
+  - [x] Első aktiváláskor rákérdezés (nem töltünk le csendben)
+- [x] Override-ok (machine-szkópú beállítások)
+  - [x] `pyneide.pythonPath` — saját interpreter, csak csomag-ellenőrzés
+  - [x] `pyneide.venvPath` — saját venv, az extension nem telepít bele
+  - [x] `pyneide.useOwnPynecore` — pin helyett csak minimum-verzió ellenőrzés
+- [x] Workdir-kezelés
+  - [x] `findWorkdir()` a pynecore `AppState._find_workdir` tükrözése
+        (felfelé keresés max 10 szint, `workdir` nevű mappa)
+  - [x] `PyneIDE: Create Pyne Workspace` parancs: workdir/ + scripts/, data/,
+        config/, output/ + demó script (`@pyne`, SMA/EMA indikátor) + README
+- [x] CI smoke-teszt job mindhárom OS-en (ubuntu/macos/windows matrix: uv
+      letöltés, venv, pinnelt csomagok, importteszt VSCode nélkül); lokálisan
+      macOS-en lefutott ("SMOKE OK"), a GitHub Actions futás push után derül ki
 
 ## F2 — PyneSys fiók és Pine fordítás (M)
 
-- [ ] API-kulcs kezelés (SecretStorage, "Sign in" parancs, validálás)
-- [ ] Migrációs mód / Pine-first mód (explicit módválasztás)
-- [ ] `Pine: Compile` parancs + compile-on-save (debounce, 429-sorbaállítás)
-- [ ] Hibaválasz -> VSCode diagnostics (sor-szintű)
-- [ ] Kvóta-visszajelzés (429/413/402 emberi nyelven)
-- [ ] Lokális fordítási cache (tartalomhash)
+- [x] API-kliens (TS, `node:https` — proxy-kompatibilis; a pynecore
+      `pynesys/api.py` kliens szerződését tükrözi: form-encoded compile,
+      `detail:{status,error,line,file}` hibaformátum)
+- [x] API-kulcs kezelés
+  - [x] SecretStorage-tárolás, `PyneSys: Sign In` / `Sign Out` parancsok
+  - [x] Validálás olcsó hívással (`/auth/verify-token`), lejárat-info
+        (lokális JWT-dekódolás, mint a CLI `verify_token_local`)
+  - [x] CLI-interop: `workdir/config/api.toml` kulcs felajánlása importra
+- [x] Módválasztás (explicit, workspace-szinten): migrációs mód (egyszeri
+      fordítás, felülírás-védelem hash-alapon) / Pine-first mód (a `.py`
+      derivált, generált-fájl figyelmeztetés szerkesztéskor)
+- [x] `Pine: Compile` parancs + compile-on-save Pine-first módban (debounce,
+      soros fordítási sor, compile-lock 429 újrapróbálás)
+- [x] Hibaválasz -> VSCode diagnostics (sor-szintű, teljes sor jelölve)
+- [x] Kvóta-visszajelzés: 429/413/402/401 emberi nyelven + `Show API Usage`
+      parancs (napi/órás limit, reset-idő)
+- [x] Lokális fordítási cache (tartalomhash + strict flag; kíméli a kvótát)
+- [x] Gitignore-ajánlás a generált `.py`-ra Pine-first módban (egyszeri)
+
+F2 nyitott: élő végpont-teszt valódi API-kulccsal (Sign In -> Compile ->
+diagnostics) a felhasználóra vár; a kliens-szerződés curl-lel ellenőrizve.
 
 ## F3 — Futtatás és chart (L) — első "wow" mérföldkő
 
+- [ ] Workdir-feloldási lánc (elfogadva 2026-07-10): `pyneide.workdir`
+      resource-szkópú beállítás > felfelé keresés a script mappájától >
+      felfelé keresés a workspace foldertől > létrehozás felajánlása;
+      spawn-oknál mindig explicit `--workdir` / `PYNE_WORK_DIR` átadás,
+      a feloldott workdir látszik a UI-ban (tooltip)
 - [ ] Runner-bridge Python-csomag (`run_iter()` + NDJSON stream + stdin vezérlés)
 - [ ] Chart webview KLineCharttal (gyertyák, plotok, trade-markerek, equity)
 - [ ] Adatválasztó UI + `pyne data download` integráció
