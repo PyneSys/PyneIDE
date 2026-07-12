@@ -115,6 +115,13 @@ venv-et készít és csomagot rak bele — nem függ a rendszer Pythonjától.
   import hook is pontosan ezt nézi). Az extension NEM vezet be új kiterjesztést —
   a `.py` marad, és a Python nyelvi mód öröklődik; a Pyne-specifikus UI
   (CodeLens, ikon, futtatógomb) a docstring-detektálásra épül.
+- **TOML** (implementálva, terven kívüli bővítés): a Pyne sok TOML-t használ
+  (api.toml, syminfo `.toml`, configok), a VSCode-ban viszont nincs beépített
+  TOML-nyelv. Beépítünk egy önálló `source.toml` TextMate grammart (highlight-
+  only) + language-configet, és puhán ajánljuk a gazdagabb
+  `tamasfe.even-better-toml`-t a `.vscode/extensions.json`-ba — de KÖTELEZŐ
+  függőség nélkül, hogy a "szabad Pyne-út, külső függőség nélkül" elv és az
+  offline/légrés-telepítés ne sérüljön.
 
 ### 3.3 A "zárt" Pyne mód: **Pyne Edge** (elfogadva)
 
@@ -225,8 +232,11 @@ Cél: az extension önállóan képes PyneCore-t futtatni mindhárom platformon.
   hibatűrő újratelepítés, proxy-támogatás.
 - `pyneide.pythonPath` override haladóknak.
 - Workdir-kezelés: a pynecore workdir-felfedezésével kompatibilis logika
-  (felfelé keresés), "Create Pyne workspace" parancs (scripts/, data/, config/,
-  output/ + demo script).
+  (felfelé keresés), `PyneIDE: Initialize Pyne Project` parancs. Onboarding-döntés
+  (2026-07-12): a projektmappa MAGA a preferált workdir (nem `<mappa>/workdir`),
+  amit a `pyneide.workdir: "."` marker jelöl; a quickpick "ebbe a mappába" /
+  "workdir/ almappa" opciót kínál. A scaffoldolást a pynecore CLI-re bízzuk
+  (nincs kézi másolat), a `PYNE_WORK_DIR`-t az integrált terminálba injektáljuk.
 
 ### F2 — PyneSys fiók és Pine fordítás (M)
 
@@ -257,6 +267,11 @@ Cél: `.pine` fájl fordítása API-n át, hibák a Problems panelben.
 
 Cél: egy gombnyomásra fut a script és KLineChart-on látszik az eredmény.
 
+- **Workdir-feloldási lánc** (implementálva 2026-07-12): `pyneide.workdir`
+  beállítás > felfelé keresés a script mappájától > felfelé a workspace
+  foldertől > `<ws>/workdir` fallback; spawn-oknál mindig explicit workdir-átadás
+  (`PYNE_WORK_DIR` a terminálban). Hátra: futtatáskor, feloldhatatlan workdir
+  esetén egykattintásos "Initialize this folder?" prompt.
 - **Runner-bridge** (Python, a venv-be telepített saját kis csomag):
   `ScriptRunner.run_iter()`-re épül, stdout-on NDJSON-t streamel:
   bar + plot-értékek + új trade-ek eseményenként; végén strategy-összesítő.

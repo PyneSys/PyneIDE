@@ -4,7 +4,9 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F2 kész (élő teszt vár) -> F3 következik**
+**Aktuális fázis: F3 folyamatban** — az onboarding/workdir-alapok és a
+workdir-feloldási lánc kész (+ terven kívüli TOML-támogatás); hátra a
+futtatás + chart (runner-bridge, KLineChart, adat-UI).
 
 ---
 
@@ -41,6 +43,15 @@ Cél: telepíthető extension, ami már hasznos (syntax highlight).
         vscode-tmgrammar-snap)
   - [x] `vsce package` lefut, VSIX telepítve (`pynesys.pyneide@0.0.1`);
         vizuális ellenőrzés (highlight + badge) a felhasználóra vár
+- [x] TOML-támogatás (terven kívüli bővítés, 2026-07-12; a Pyne sok TOML-t
+      használ: api.toml, syminfo .toml, configok — a VSCode-ban nincs beépített
+      TOML-nyelv)
+  - [x] Beépített önálló `source.toml` TextMate grammar
+        (`syntaxes/toml.tmLanguage.json`) + `language-configuration-toml.json`,
+        highlight-only (nincs séma/formázás), grammar-snapshot teszttel
+  - [x] Nyelv-regisztráció a package.json-ban (`.toml` + gyakori lockfile-nevek)
+  - [x] Puha ajánlás: `tamasfe.even-better-toml` a `.vscode/extensions.json`-ba
+        projekt-inicializáláskor (NINCS kötelező függőség — offline/légrés-barát)
 - [x] Kimenet: "Pine + Pyne language support" csomag (Marketplace-re még nem
       publikáljuk — a kiadási stratégia szerint az MVP után, csendben)
 
@@ -78,11 +89,16 @@ F0 nyitott apróságok:
   - [x] `pyneide.pythonPath` — saját interpreter, csak csomag-ellenőrzés
   - [x] `pyneide.venvPath` — saját venv, az extension nem telepít bele
   - [x] `pyneide.useOwnPynecore` — pin helyett csak minimum-verzió ellenőrzés
-- [x] Workdir-kezelés
+- [x] Workdir-kezelés (az onboarding 2026-07-12-én átdolgozva)
   - [x] `findWorkdir()` a pynecore `AppState._find_workdir` tükrözése
         (felfelé keresés max 10 szint, `workdir` nevű mappa)
-  - [x] `PyneIDE: Create Pyne Workspace` parancs: workdir/ + scripts/, data/,
-        config/, output/ + demó script (`@pyne`, SMA/EMA indikátor) + README
+  - [x] `PyneIDE: Initialize Pyne Project` parancs (id: `pyneide.createWorkspace`):
+        quickpick "ebbe a mappába" (alap; `pyneide.workdir: "."` marker írása) /
+        "workdir/ almappa" (pyne CLI-elrendezés); nyitott-mappa nélküli flow is
+  - [x] Scaffold delegálása a pynecore CLI-nek (`scaffoldWorkdirWithCli`,
+        nincs kézi másolat — a pynecore az egyetlen forrás); a demót és a
+        konfigokat a `pyne` bináris hozza létre
+  - [x] `onStartupFinished` aktiválás (status bar üres workspace-ben is látszik)
 - [x] CI smoke-teszt job mindhárom OS-en (ubuntu/macos/windows matrix: uv
       letöltés, venv, pinnelt csomagok, importteszt VSCode nélkül); lokálisan
       macOS-en lefutott ("SMOKE OK"), a GitHub Actions futás push után derül ki
@@ -113,11 +129,14 @@ diagnostics) a felhasználóra vár; a kliens-szerződés curl-lel ellenőrizve.
 
 ## F3 — Futtatás és chart (L) — első "wow" mérföldkő
 
-- [ ] Workdir-feloldási lánc (elfogadva 2026-07-10): `pyneide.workdir`
-      resource-szkópú beállítás > felfelé keresés a script mappájától >
-      felfelé keresés a workspace foldertől > létrehozás felajánlása;
-      spawn-oknál mindig explicit `--workdir` / `PYNE_WORK_DIR` átadás,
-      a feloldott workdir látszik a UI-ban (tooltip)
+- [x] Workdir-feloldási lánc (elfogadva 2026-07-10, implementálva 2026-07-12):
+      `pyneide.workdir` resource-szkópú beállítás > felfelé keresés a script
+      mappájától > felfelé keresés a workspace foldertől > `<ws>/workdir`
+      fallback. Tiszta `resolveWorkdir()` (src/env/workdir.ts) + vscode-kötött
+      `resolveWorkspaceWorkdir()` (src/env/workdirConfig.ts); `PYNE_WORK_DIR`
+      injektálva az integrált terminálba (`environmentVariableCollection`).
+      Hátra: futtatáskor (ha nincs feloldható workdir) egykattintásos
+      "Initialize this folder?" prompt — sosem némán adoptálunk mappát.
 - [ ] Runner-bridge Python-csomag (`run_iter()` + NDJSON stream + stdin vezérlés)
 - [ ] Chart webview KLineCharttal (gyertyák, plotok, trade-markerek, equity)
 - [ ] Adatválasztó UI + `pyne data download` integráció
