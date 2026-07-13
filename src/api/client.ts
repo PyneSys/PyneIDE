@@ -1,13 +1,15 @@
-import * as https from 'node:https';
-import * as http from 'node:http';
-
 /**
  * Client for the PyneSys API. Mirrors the contract of pynecore's
  * pynesys/api.py client: form-encoded compile, plain-text Python response,
  * error envelope {"detail": {status, error, line, file}}.
  *
- * Uses node:http(s), which the VSCode extension host proxy-patches, so the
- * user's http.proxy settings apply.
+ * Uses the global fetch (undici) rather than node:http(s): the VSCode extension
+ * host proxy-patches node:http(s) (@vscode/proxy-agent), and that patch drops
+ * the body of Cloudflare's chunked responses — a 200 arrives with an empty
+ * body. fetch runs on a separate stack; the host still gives it proxy and
+ * system-certificate support via the http.fetchAdditionalSupport setting
+ * (on by default), so nothing regresses for proxy users. See
+ * microsoft/vscode#173861.
  */
 
 export const DEFAULT_API_BASE_URL = 'https://api.pynesys.io';
@@ -47,43 +49,83 @@ export interface TokenVerification {
 
 interface HttpResponse {
   status: number;
-  headers: http.IncomingHttpHeaders;
+  headers: Record<string, string>;
   text: string;
 }
+
+// Response headers worth logging when diagnosing an empty/truncated body:
+// they reveal a proxy or CDN sitting between the extension host and the API.
+const DIAGNOSTIC_HEADERS = [
+  'content-length',
+  'content-type',
+  'transfer-encoding',
+  'connection',
+  'server',
+  'via',
+  'x-cache',
+  'cf-ray',
+];
 
 export class PyneApiClient {
   constructor(
     private readonly apiKey: string,
-    private readonly baseUrl: string = DEFAULT_API_BASE_URL
+    private readonly baseUrl: string = DEFAULT_API_BASE_URL,
+    private readonly log: (message: string) => void = () => {}
   ) {}
 
-  private request(
+  private async request(
     method: 'GET' | 'POST',
     path: string,
     options: { body?: string; contentType?: string; auth?: boolean; timeoutMs?: number } = {}
   ): Promise<HttpResponse> {
     const { body, contentType, auth = true, timeoutMs = 30000 } = options;
-    const url = new URL(this.baseUrl.replace(/\/$/, '') + path);
+    const url = this.baseUrl.replace(/\/$/, '') + path;
     const headers: Record<string, string> = { 'User-Agent': 'PyneIDE' };
     if (auth) headers.Authorization = `Bearer ${this.apiKey}`;
     if (contentType) headers['Content-Type'] = contentType;
-    if (body) headers['Content-Length'] = String(Buffer.byteLength(body));
 
-    return new Promise((resolve, reject) => {
-      const req = https.request(url, { method, headers, timeout: timeoutMs }, (res) => {
-        let text = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk: string) => (text += chunk));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
-        res.on('error', reject);
-      });
-      req.on('timeout', () => {
-        req.destroy(new Error(`Request timed out after ${timeoutMs} ms`));
-      });
-      req.on('error', reject);
-      if (body) req.write(body);
-      req.end();
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(url, { method, headers, body, signal: controller.signal });
+    } catch (err) {
+      if (controller.signal.aborted) throw new Error(`Request timed out after ${timeoutMs} ms`);
+      throw err instanceof Error ? err : new Error(String(err));
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const text = await res.text();
+    const responseHeaders: Record<string, string> = {};
+    res.headers.forEach((value, key) => (responseHeaders[key] = value));
+    const response: HttpResponse = { status: res.status, headers: responseHeaders, text };
+    this.logResponse(method, path, response);
+    return response;
+  }
+
+  /** Log status, body size and proxy-relevant headers (never the query string, which carries the token). */
+  private logResponse(method: 'GET' | 'POST', path: string, res: HttpResponse): void {
+    const relevant = DIAGNOSTIC_HEADERS.filter((k) => res.headers[k] !== undefined)
+      .map((k) => `${k}=${String(res.headers[k])}`)
+      .join(', ');
+    this.log(
+      `${method} ${path.split('?')[0]} -> HTTP ${res.status}, body ${res.text.length} bytes` +
+        (relevant ? ` [${relevant}]` : '')
+    );
+  }
+
+  /** Parse a JSON body, turning the cryptic "Unexpected end of JSON input" into a diagnostic error. */
+  private static parseJson<T>(res: HttpResponse, context: string): T {
+    try {
+      return JSON.parse(res.text) as T;
+    } catch {
+      const snippet = res.text.length > 200 ? `${res.text.slice(0, 200)}…` : res.text;
+      throw new Error(
+        `${context}: HTTP ${res.status} with an unparseable body ` +
+          `(${res.text.length} bytes). Body: ${JSON.stringify(snippet)}`
+      );
+    }
   }
 
   /** Extract the error detail from an error response body. */
@@ -136,10 +178,10 @@ export class PyneApiClient {
           PyneApiClient.parseErrorDetail(res.text, res.status).error
       );
     }
-    const data = JSON.parse(res.text) as {
+    const data = PyneApiClient.parseJson<{
       daily: { limit: number; used: number; remaining: number; reset_at: string };
       hourly: { limit: number; used: number; remaining: number; reset_at: string };
-    };
+    }>(res, 'account/usage');
     const period = (p: typeof data.daily): UsagePeriod => ({
       limit: p.limit,
       used: p.used,
@@ -162,11 +204,11 @@ export class PyneApiClient {
         message: PyneApiClient.parseErrorDetail(res.text, res.status).error,
       };
     }
-    const data = JSON.parse(res.text) as {
+    const data = PyneApiClient.parseJson<{
       valid: boolean;
       message?: string;
       expires_at?: string;
-    };
+    }>(res, 'auth/verify-token');
     return {
       valid: data.valid,
       message: data.message ?? '',

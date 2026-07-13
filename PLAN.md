@@ -244,24 +244,22 @@ Cél: `.pine` fájl fordítása API-n át, hibák a Problems panelben.
 
 - API-kulcs kezelés: `SecretStorage`-ban tárolva, "Sign in" parancs
   (app.pynesys.io-ra irányít, kulcs beillesztése, validálás egy olcsó hívással).
-- **Két munkafolyamat, explicit móddal** (fájlonként/projektben választható):
-  - **Migrációs mód** (TV -> Pyne áttérés): a `.pine`-t egyszer fordítjuk le,
-    az eredmény `.py` lesz az elsődleges forrás, onnantól Pyne-ban folytatódik
-    a munka. A generált fájl normál, szerkeszthető kóddá "válik" (nem
-    újragenerálódik, felülírás-védelem).
-  - **Pine-first mód** (két célpont: TV is, PyneSys is): a `.pine` marad a
-    forrás igazsága, a `.py` derivált artifact — minden futtatás előtt
-    újrafordul (cache-ből, ha nem változott), kézzel nem szerkesztendő
-    (read-only jelölés + figyelmeztetés).
-- `Pine: Compile` parancs + compile-on-save opció (Pine-first módban). Debounce
-  + a per-user compile-lock (429) kezelése sorbaállítással.
+- **Egyszerű fordítási modell** (egyszerűsítve 2026-07-12, a korábbi
+  migration/Pine-first módválasztó helyett): a `.pine` futtatása mindig
+  háttérben fordít (cache-találatnál API-hívás nélkül), a `.py` mellette
+  landol és szabadon szerkeszthető. Aki Pine-first módon dolgozik, a
+  `.pine`-on marad; aki lefordította és átírta a `.py`-t, onnantól azon
+  dolgozik. Egyetlen védelem: hash-alapú felülírás-védelem (kézzel
+  szerkesztett `.py`-ra rákérdez fordítás előtt).
+- `Pine: Compile` parancs (explicit fordítás) + a per-user compile-lock (429)
+  kezelése sorbaállítással.
 - A hibaválasz (`detail.error`, `detail.line`, `detail.file`) leképezése VSCode
   diagnostics-ra. Oszlop híján teljes sort jelölünk.
 - Kvóta-visszajelzés: 429/413/402 emberi nyelven (napi/órás limit, méretlimit,
   kredit), státuszsorban a terv-limit.
 - Fordítási cache tartalomhash alapján (az API is cache-el, de a lokális cache
   a rate limitet kíméli).
-- A kimenő `.py` elhelyezése: a `.pine` mellé (mint a `pyne run`), gitignore-ajánlással.
+- A kimenő `.py` elhelyezése: a `.pine` mellé (mint a `pyne run`).
 
 ### F3 — Futtatás és chart (L) — ez az első "wow" mérföldkő
 
@@ -270,8 +268,8 @@ Cél: egy gombnyomásra fut a script és KLineChart-on látszik az eredmény.
 - **Workdir-feloldási lánc** (implementálva 2026-07-12): `pyneide.workdir`
   beállítás > felfelé keresés a script mappájától > felfelé a workspace
   foldertől > `<ws>/workdir` fallback; spawn-oknál mindig explicit workdir-átadás
-  (`PYNE_WORK_DIR` a terminálban). Hátra: futtatáskor, feloldhatatlan workdir
-  esetén egykattintásos "Initialize this folder?" prompt.
+  (`PYNE_WORK_DIR` a terminálban). Futtatáskor feloldhatatlan workdir esetén
+  egykattintásos "Initialize Project" prompt (implementálva 2026-07-12).
 - **Runner-bridge** (Python, a venv-be telepített saját kis csomag):
   `ScriptRunner.run_iter()`-re épül, stdout-on NDJSON-t streamel:
   bar + plot-értékek + új trade-ek eseményenként; végén strategy-összesítő.
@@ -431,7 +429,7 @@ F3 ──► F9
 |------------------------------------------------------------------|----------------------------------------------------------------------|
 | Sourcemap-pontosság a blank-line collapse miatt                   | Mapping-tudatos collapse vagy utólagos korrekció + teszt-korpusz      |
 | Fordítói átnevezések (collision rename) a Variables panelben      | Név-tábla a sourcemap mellé (F6)                                      |
-| API rate limit fejlesztés közben (compile-on-save)                | Lokális cache + debounce + Pine-first/migrációs mód szétválasztás     |
+| API rate limit fejlesztés közben (futtatásonkénti fordítás)       | Lokális tartalomhash-cache: változatlan forrásnál nincs API-hívás     |
 | Windows-támogatás (venv, path-ok, debugpy)                        | CI-ben mindhárom OS-en smoke-teszt F1-től kezdve                       |
 | KLineChart nagy adatmennyiség (100k+ bar + sok plot)              | Lazy load / windowing a webview-ban; korai teljesítmény-teszt F3-ban  |
 | "Pine Script" védjegy                                             | Szabadon hivatkozunk rá, de mindenütt disclaimer: nem TradingView-termék |

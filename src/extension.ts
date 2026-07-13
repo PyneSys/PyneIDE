@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { AuthService } from './api/auth';
+import { ChartPanelManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
 import { EnvManager } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
@@ -11,6 +12,7 @@ import { pyneBinPath } from './env/uv';
 import { markProjectAsWorkdir, recommendTomlExtension, scaffoldWorkdirWithCli } from './env/workdir';
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PyneDecorationProvider } from './pyneDecorations';
+import { RunService } from './run/runService';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 
@@ -21,7 +23,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const manager = new EnvManager(context.globalStorageUri.fsPath, output);
   context.subscriptions.push(output, manager);
 
-  new EnvStatusBar(manager).register(context);
+  const compileOutput = vscode.window.createOutputChannel('PyneIDE Compiler');
+  const auth = new AuthService(context, compileOutput);
+
+  new EnvStatusBar(manager, auth).register(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.setup()),
@@ -44,14 +49,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders(() => updateTerminalWorkdirEnv(context))
   );
 
-  const auth = new AuthService(context);
-  const compileOutput = vscode.window.createOutputChannel('PyneIDE Compiler');
   context.subscriptions.push(
     compileOutput,
     vscode.commands.registerCommand('pyneide.signIn', () => auth.signIn()),
     vscode.commands.registerCommand('pyneide.signOut', () => auth.signOut())
   );
-  new CompileService(context, auth, compileOutput).register();
+  const compileService = new CompileService(context, auth, compileOutput);
+  compileService.register();
+
+  const runService = new RunService(context, manager, compileService);
+  runService.register();
+  runService.listener = new ChartPanelManager(context);
 
   void initialCheck(context, manager);
 }
@@ -92,24 +100,12 @@ function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
  * or undefined when the environment is unavailable (after informing the user).
  */
 async function ensurePyneCli(manager: EnvManager): Promise<string | undefined> {
-  let state = manager.state.kind === 'ready' ? manager.state : await manager.check();
-  if (state.kind === 'needs-setup') {
-    const choice = await vscode.window.showInformationMessage(
-      'Initializing a Pyne project uses the pyne CLI, so the Python environment ' +
-        'must be set up first.',
-      'Setup Now'
-    );
-    if (choice !== 'Setup Now') return undefined;
-    await manager.setup();
-    state = manager.state;
-  }
-  if (state.kind !== 'ready') {
-    void vscode.window.showErrorMessage(
-      'PyneIDE: the Python environment is not available, cannot initialize the project.'
-    );
-    return undefined;
-  }
-  const pyneBin = pyneBinPath(state.pythonBin);
+  const pythonBin = await manager.ensureReady(
+    'Initializing a Pyne project uses the pyne CLI, so the Python environment ' +
+      'must be set up first.'
+  );
+  if (!pythonBin) return undefined;
+  const pyneBin = pyneBinPath(pythonBin);
   if (!fs.existsSync(pyneBin)) {
     void vscode.window.showErrorMessage(
       `PyneIDE: pyne CLI not found at ${pyneBin} — ` +

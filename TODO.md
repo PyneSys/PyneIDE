@@ -4,9 +4,10 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F3 folyamatban** — az onboarding/workdir-alapok és a
-workdir-feloldási lánc kész (+ terven kívüli TOML-támogatás); hátra a
-futtatás + chart (runner-bridge, KLineChart, adat-UI).
+**Aktuális fázis: F3 kész** — runner-bridge (NDJSON + vezérlés), Run
+parancs/CodeLens, KLineChart webview (plotok, trade-markerek, equity,
+trade/stats táblák), adatválasztó + download; élő EDH-teszt OK (2026-07-12).
+Következő: F4 (Pyne debugger).
 
 ---
 
@@ -113,16 +114,17 @@ F0 nyitott apróságok:
   - [x] Validálás olcsó hívással (`/auth/verify-token`), lejárat-info
         (lokális JWT-dekódolás, mint a CLI `verify_token_local`)
   - [x] CLI-interop: `workdir/config/api.toml` kulcs felajánlása importra
-- [x] Módválasztás (explicit, workspace-szinten): migrációs mód (egyszeri
-      fordítás, felülírás-védelem hash-alapon) / Pine-first mód (a `.py`
-      derivált, generált-fájl figyelmeztetés szerkesztéskor)
-- [x] `Pine: Compile` parancs + compile-on-save Pine-first módban (debounce,
-      soros fordítási sor, compile-lock 429 újrapróbálás)
+- [x] Egyszerű fordítási modell (egyszerűsítve 2026-07-12, a korábbi
+      migration/Pine-first módválasztó kivezetve): a `.pine` futtatása mindig
+      háttérben fordít, a `.py` mellette landol és szabadon szerkeszthető;
+      egyetlen védelem a hash-alapú felülírás-védelem (kézzel szerkesztett
+      `.py`-ra rákérdez fordítás előtt)
+- [x] `Pine: Compile` parancs (soros fordítási sor, compile-lock 429
+      újrapróbálás)
 - [x] Hibaválasz -> VSCode diagnostics (sor-szintű, teljes sor jelölve)
 - [x] Kvóta-visszajelzés: 429/413/402/401 emberi nyelven + `Show API Usage`
       parancs (napi/órás limit, reset-idő)
 - [x] Lokális fordítási cache (tartalomhash + strict flag; kíméli a kvótát)
-- [x] Gitignore-ajánlás a generált `.py`-ra Pine-first módban (egyszeri)
 
 F2 nyitott: élő végpont-teszt valódi API-kulccsal (Sign In -> Compile ->
 diagnostics) a felhasználóra vár; a kliens-szerződés curl-lel ellenőrizve.
@@ -135,14 +137,39 @@ diagnostics) a felhasználóra vár; a kliens-szerződés curl-lel ellenőrizve.
       fallback. Tiszta `resolveWorkdir()` (src/env/workdir.ts) + vscode-kötött
       `resolveWorkspaceWorkdir()` (src/env/workdirConfig.ts); `PYNE_WORK_DIR`
       injektálva az integrált terminálba (`environmentVariableCollection`).
-      Hátra: futtatáskor (ha nincs feloldható workdir) egykattintásos
-      "Initialize this folder?" prompt — sosem némán adoptálunk mappát.
-- [ ] Runner-bridge Python-csomag (`run_iter()` + NDJSON stream + stdin vezérlés)
-- [ ] Chart webview KLineCharttal (gyertyák, plotok, trade-markerek, equity)
-- [ ] Adatválasztó UI + `pyne data download` integráció
-- [ ] Run CodeLens / editor-title gomb (Pine: fordítás + futtatás)
-- [ ] Trade lista / statisztika táblázat-nézet
-- [ ] Teljesítmény-teszt: 100k+ bar a webview-ban
+- [x] Runner-bridge Python-csomag (implementálva 2026-07-12):
+      `python/pyneide_bridge/` az extensionben (nem pip-csomag; PYTHONPATH-on
+      fut a venv Pythonjával). NDJSON események a védett stdout-on (fd-hijack:
+      user print/pynecore log stderr-re megy), stdin vezérlés
+      (pause/resume/step/cancel — a bar-stepping alapja F4-hez). TS kliens:
+      `src/run/bridgeClient.ts`; smoke: `test:env` bridge round-trippel.
+- [x] Chart webview KLineCharttal (implementálva 2026-07-12): v10 dataLoader
+      modell + throttled `resetData()` (adaptív tick), gyertyák + VOL, plotok
+      (overlay/pane heurisztika — a pynecore plot() nem ad stílus-metaadatot),
+      strategy entry/exit annotációk, equity pane. Chrome-ban vizuálisan
+      tesztelve stream-replay-jel.
+- [x] Adatválasztó UI + `pyne data download` integráció (implementálva
+      2026-07-12): quickpick a workdir `data/` .ohlcv fájljaiból (syminfo
+      leírással, utolsó választás megjegyezve scriptenként) + "Download new
+      data…" provider-stringgel, progress + output channel.
+- [x] Run CodeLens / editor-title gomb (implementálva 2026-07-12):
+      `pyneide.runScript` parancs, CodeLens + editor-title/run gomb
+      (`pyneide.isPyneScript` kontext-kulcs @pyne detektálással), Pine esetén
+      háttérfordítás előbb (cache-találatnál API-hívás nélkül; kézzel
+      szerkesztett .py-t csak rákérdezés után ír felül).
+      Feloldhatatlan workdirnél egykattintásos "Initialize Project"
+      prompt — sosem némán adoptálunk mappát.
+- [x] Trade lista / statisztika táblázat-nézet (implementálva 2026-07-12): a
+      chart webview alján összecsukható Trades/Stats tabok; trade-sorra
+      kattintva a chart az entry pontra ugrik. Auto-expand futás végén.
+- [x] Teljesítmény-teszt: 100k+ bar a webview-ban (2026-07-12): 120k bar +
+      3 plot + equity + VOL szintetikus stream: teljes feldolgozás + render
+      123 ms Chrome-ban — windowing nem kell.
+
+F3 élő végpont-teszt (2026-07-12, felhasználó, EDH): Run gomb -> adatválasztó
+-> chart streaming OK a demo adatokkal. Közben javítva: `pyneDetect.ts` a
+többsoros docstringet (`"""` + újsor + `@pyne`) nem ismerte fel — a regex a
+pynecore `_PYNE_HEAD_RE`-hez igazítva (`\s*` a nyitó idézőjel után).
 
 ## F4 — Pyne debugger (M)
 

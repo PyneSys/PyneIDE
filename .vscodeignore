@@ -10,5 +10,6 @@ TODO.md
 MEMORY.md
 .gitignore
 **/*.map
+**/__pycache__/**
 *.vsix
 dist/env-smoke.js

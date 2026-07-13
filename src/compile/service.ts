@@ -7,8 +7,6 @@ import * as vscode from 'vscode';
 import type { AuthService } from '../api/auth';
 import type { CompileResult, PyneApiClient } from '../api/client';
 
-type Workflow = 'migration' | 'pine-first';
-
 interface CacheEntry {
   pineHash: string;
   outHash: string;
@@ -16,8 +14,6 @@ interface CacheEntry {
 }
 
 const CACHE_KEY = 'pyneide.compileCache';
-const GITIGNORE_HINT_KEY = 'pyneide.gitignoreHintShown';
-const DEBOUNCE_MS = 800;
 const LOCK_RETRY_MS = 1500;
 const LOCK_RETRIES = 3;
 
@@ -26,15 +22,14 @@ function sha256(text: string): string {
 }
 
 /**
- * Compiles .pine documents through the PyneSys API: explicit
- * migration/Pine-first workflow, serial queue (the API holds a per-user
- * compile lock), content-hash cache, diagnostics, quota messages.
+ * Compiles .pine documents through the PyneSys API: serial queue (the API
+ * holds a per-user compile lock), content-hash cache, diagnostics, quota
+ * messages. Running a .pine always compiles it in the background; the
+ * generated .py sits next to it and is free to edit — the only guard is the
+ * overwrite prompt when a compile would clobber manual edits.
  */
 export class CompileService {
   private readonly diagnostics = vscode.languages.createDiagnosticCollection('pyne-compile');
-  private readonly debounceTimers = new Map<string, NodeJS.Timeout>();
-  private readonly sessionWorkflows = new Map<string, Workflow>();
-  private readonly generatedWarningShown = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -47,9 +42,7 @@ export class CompileService {
     this.context.subscriptions.push(
       this.diagnostics,
       vscode.commands.registerCommand('pyneide.compilePine', () => this.compileActiveEditor()),
-      vscode.commands.registerCommand('pyneide.showUsage', () => this.showUsage()),
-      vscode.workspace.onDidSaveTextDocument((doc) => this.onSave(doc)),
-      vscode.workspace.onDidOpenTextDocument((doc) => this.warnIfGenerated(doc))
+      vscode.commands.registerCommand('pyneide.showUsage', () => this.showUsage())
     );
   }
 
@@ -67,6 +60,27 @@ export class CompileService {
     await this.context.globalState.update(CACHE_KEY, cache);
   }
 
+  /**
+   * Make sure a fresh .py exists for a .pine document; returns its path.
+   * Compiles in the background (the content-hash cache skips the API when
+   * nothing changed) and only reports success when the output is fresh —
+   * e.g. a declined overwrite prompt aborts the run.
+   */
+  async ensureCompiledForRun(doc: vscode.TextDocument): Promise<string | undefined> {
+    await this.enqueueCompile(doc, 'run');
+
+    const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
+    const strict = vscode.workspace
+      .getConfiguration('pyneide', doc.uri)
+      .get<boolean>('strictCompile', false);
+    const pineHash = sha256(`${strict}:${doc.getText()}`);
+    const cached = this.cache()[outputPath];
+    if (cached && cached.pineHash === pineHash && fs.existsSync(outputPath)) {
+      return outputPath;
+    }
+    return undefined;
+  }
+
   private async compileActiveEditor(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.languageId !== 'pine') {
@@ -76,85 +90,10 @@ export class CompileService {
     if (editor.document.isDirty) {
       await editor.document.save();
     }
-    // A manual compile supersedes any pending save-triggered one.
-    const key = editor.document.uri.toString();
-    clearTimeout(this.debounceTimers.get(key));
-    this.debounceTimers.delete(key);
     await this.enqueueCompile(editor.document, 'manual');
   }
 
-  private onSave(doc: vscode.TextDocument): void {
-    if (doc.languageId !== 'pine') return;
-    const config = vscode.workspace.getConfiguration('pyneide', doc.uri);
-    if (!config.get<boolean>('compileOnSave', true)) return;
-    // compile-on-save only applies in Pine-first mode; in migration mode
-    // compilation is a deliberate one-time action.
-    if (this.knownWorkflow(doc) !== 'pine-first') return;
-    const key = doc.uri.toString();
-    clearTimeout(this.debounceTimers.get(key));
-    this.debounceTimers.set(
-      key,
-      setTimeout(() => {
-        this.debounceTimers.delete(key);
-        void this.enqueueCompile(doc, 'save');
-      }, DEBOUNCE_MS)
-    );
-  }
-
-  /** Workflow if already decided (setting or session), undefined otherwise. */
-  private knownWorkflow(doc: vscode.TextDocument): Workflow | undefined {
-    const configured = vscode.workspace
-      .getConfiguration('pyneide', doc.uri)
-      .get<string>('pineWorkflow', 'ask');
-    if (configured === 'migration' || configured === 'pine-first') return configured;
-    return this.sessionWorkflows.get(this.workflowScope(doc));
-  }
-
-  private workflowScope(doc: vscode.TextDocument): string {
-    return (
-      vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() ?? doc.uri.toString()
-    );
-  }
-
-  private async resolveWorkflow(doc: vscode.TextDocument): Promise<Workflow | undefined> {
-    const known = this.knownWorkflow(doc);
-    if (known) return known;
-
-    const picked = await vscode.window.showQuickPick(
-      [
-        {
-          label: '$(arrow-right) Migration',
-          description: 'Compile once, then continue the work in Python (Pyne)',
-          detail: 'The generated .py becomes your editable source; no automatic recompilation.',
-          value: 'migration' as Workflow,
-        },
-        {
-          label: '$(pin) Pine-first',
-          description: '.pine stays the source of truth',
-          detail:
-            'The .py is a derived artifact: recompiled on save, manual edits are discouraged.',
-          value: 'pine-first' as Workflow,
-        },
-      ],
-      {
-        title: 'PyneIDE: how do you want to work with Pine Script in this project?',
-        ignoreFocusOut: true,
-      }
-    );
-    if (!picked) return undefined;
-
-    const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
-    if (folder) {
-      await vscode.workspace
-        .getConfiguration('pyneide', doc.uri)
-        .update('pineWorkflow', picked.value, vscode.ConfigurationTarget.WorkspaceFolder);
-    } else {
-      this.sessionWorkflows.set(this.workflowScope(doc), picked.value);
-    }
-    return picked.value;
-  }
-
-  private async enqueueCompile(doc: vscode.TextDocument, trigger: 'manual' | 'save'): Promise<void> {
+  private async enqueueCompile(doc: vscode.TextDocument, trigger: 'manual' | 'run'): Promise<void> {
     const run = async (): Promise<void> => {
       try {
         await this.compileDocument(doc, trigger);
@@ -168,10 +107,7 @@ export class CompileService {
     await this.queue;
   }
 
-  private async compileDocument(doc: vscode.TextDocument, trigger: 'manual' | 'save'): Promise<void> {
-    const workflow = await this.resolveWorkflow(doc);
-    if (!workflow) return;
-
+  private async compileDocument(doc: vscode.TextDocument, trigger: 'manual' | 'run'): Promise<void> {
     const client = await this.auth.requireClient();
     if (!client) return;
 
@@ -194,8 +130,8 @@ export class CompileService {
     }
 
     // Overwrite protection: never destroy an output we did not generate or
-    // that was modified since we generated it (the migration workflow expects
-    // the user to continue editing the .py).
+    // that was modified since we generated it (the .py is free to edit and
+    // may have become the user's source).
     if (fs.existsSync(outputPath)) {
       const outHash = sha256(fs.readFileSync(outputPath, 'utf8'));
       const editedByUser = !cached || cached.outHash !== outHash;
@@ -226,10 +162,6 @@ export class CompileService {
     await this.updateCache(outputPath, { pineHash, outHash: sha256(result.code), strict });
     this.log(`Compiled OK: ${outputPath}`);
     vscode.window.setStatusBarMessage(`$(check) Pine compiled: ${path.basename(outputPath)}`, 5000);
-
-    if (workflow === 'pine-first') {
-      await this.suggestGitignore(doc);
-    }
   }
 
   /** The API serializes compiles per user; retry briefly when the lock is busy. */
@@ -322,50 +254,4 @@ export class CompileService {
     }
   }
 
-  /** Warn once per session when a generated (Pine-first) .py is opened. */
-  private warnIfGenerated(doc: vscode.TextDocument): void {
-    if (!doc.uri.fsPath.endsWith('.py')) return;
-    if (this.generatedWarningShown.has(doc.uri.fsPath)) return;
-    const entry = this.cache()[doc.uri.fsPath];
-    if (!entry) return;
-    const pinePath = doc.uri.fsPath.replace(/\.py$/, '.pine');
-    if (!fs.existsSync(pinePath)) return;
-    const workflow = vscode.workspace
-      .getConfiguration('pyneide', doc.uri)
-      .get<string>('pineWorkflow', 'ask');
-    if (workflow !== 'pine-first') return;
-    this.generatedWarningShown.add(doc.uri.fsPath);
-    void vscode.window.showWarningMessage(
-      `PyneIDE: ${path.basename(doc.uri.fsPath)} is generated from ` +
-        `${path.basename(pinePath)} (Pine-first mode) — manual edits will be overwritten on the next compile.`
-    );
-  }
-
-  /** Suggest gitignoring generated .py files, once per workspace. */
-  private async suggestGitignore(doc: vscode.TextDocument): Promise<void> {
-    const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
-    if (!folder) return;
-    const shown = this.context.globalState.get<string[]>(GITIGNORE_HINT_KEY, []);
-    if (shown.includes(folder.uri.toString())) return;
-    await this.context.globalState.update(GITIGNORE_HINT_KEY, [...shown, folder.uri.toString()]);
-
-    const relOutput = path.relative(folder.uri.fsPath, doc.uri.fsPath.replace(/\.pine$/, '.py'));
-    if (relOutput.startsWith('..')) return;
-    const pattern = relOutput.split(path.sep).join('/');
-    const choice = await vscode.window.showInformationMessage(
-      'PyneIDE: in Pine-first mode the generated .py files are derived artifacts — ' +
-        'consider adding them to .gitignore.',
-      'Add to .gitignore'
-    );
-    if (choice !== 'Add to .gitignore') return;
-    const gitignorePath = path.join(folder.uri.fsPath, '.gitignore');
-    const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
-    if (!existing.split('\n').includes(pattern)) {
-      fs.writeFileSync(
-        gitignorePath,
-        existing + (existing.endsWith('\n') || existing === '' ? '' : '\n') + pattern + '\n'
-      );
-    }
-    void vscode.window.showInformationMessage(`PyneIDE: added "${pattern}" to .gitignore.`);
-  }
 }

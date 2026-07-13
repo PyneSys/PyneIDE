@@ -10,10 +10,10 @@
  */
 
 const PYNE_HEAD_RE =
-  /^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')[^\S\r\n]*@pyne(?:\s|\1|$)/;
+  /^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')\s*@pyne(?:\s|\1|$)/;
 
 const PYNE_EDGE_RE =
-  /^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')[^\S\r\n]*@pyne[^\S\r\n]+edge(?:\s|\1|$)/;
+  /^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')\s*@pyne[^\S\r\n]+edge(?:\s|\1|$)/;
 
 export type PyneKind = 'pyne' | 'edge';
 

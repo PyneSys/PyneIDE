@@ -1,0 +1,321 @@
+"""Wires pynecore's ScriptRunner to the NDJSON protocol.
+
+Mirrors the file-mode path of ``pyne run`` (pynecore/cli/commands/run.py) but
+CLI-free: no typer, no rich, no provider mode. Pine compilation is the IDE's
+job (F2) — this module only runs ``.py`` Pyne scripts against ``.ohlcv`` data.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+from .control import Control
+from .protocol import Emitter, num_or_none, sanitize
+
+# Flush the pending bar batch when it reaches this many rows or this age.
+FLUSH_AGE_SECONDS = 0.1
+
+_TRADE_FIELDS = (
+    ("entry_id", "entryId"),
+    ("entry_bar_index", "entryBar"),
+    ("entry_time", "entryTime"),
+    ("entry_price", "entryPrice"),
+    ("entry_comment", "entryComment"),
+    ("exit_id", "exitId"),
+    ("exit_bar_index", "exitBar"),
+    ("exit_time", "exitTime"),
+    ("exit_price", "exitPrice"),
+    ("exit_comment", "exitComment"),
+    ("size", "size"),
+    ("commission", "commission"),
+    ("profit", "profit"),
+    ("profit_percent", "profitPct"),
+    ("cum_profit", "cumProfit"),
+    ("cum_profit_percent", "cumProfitPct"),
+)
+
+
+def _serialize_trade(trade: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for attr, key in _TRADE_FIELDS:
+        out[key] = sanitize(getattr(trade, attr, None))
+    return out
+
+
+def _serialize_syminfo(syminfo: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for slot in getattr(type(syminfo), "__slots__", ()):
+        value = getattr(syminfo, slot, None)
+        if isinstance(value, (str, bool, int, float)):
+            out[slot] = sanitize(value)
+    return out
+
+
+def _script_type_name(script: Any) -> str:
+    from pynecore.types import script_type
+
+    st = getattr(script, "script_type", None)
+    if st == script_type.strategy:
+        return "strategy"
+    if st == script_type.indicator:
+        return "indicator"
+    return "library"
+
+
+def _resolve_script(workdir: Path, script_arg: str) -> Path:
+    script = Path(script_arg)
+    if len(script.parts) == 1:
+        script = workdir / "scripts" / script
+    if script.suffix == "":
+        script = script.with_suffix(".py")
+    if script.suffix != ".py":
+        raise FileNotFoundError(
+            f"Only .py Pyne scripts can run through the bridge, got: {script.name} "
+            f"(compile .pine to .py first)")
+    if not script.exists():
+        raise FileNotFoundError(f"Script file not found: {script}")
+    return script
+
+
+def _resolve_data(workdir: Path, data_arg: str) -> Path:
+    data = Path(data_arg)
+    if len(data.parts) == 1:
+        data = workdir / "data" / data
+    # A dot inside the name may belong to the symbol (BTCUSDT.P), append by
+    # name instead of with_suffix.
+    if not data.name.endswith(".ohlcv"):
+        data = data.with_name(data.name + ".ohlcv")
+    if not data.exists():
+        raise FileNotFoundError(
+            f"OHLCV data file not found: {data} "
+            f"(convert other formats with: pyne data convert-from)")
+    return data
+
+
+def run(args: Any, emitter: Emitter, control: Control) -> int:
+    """Execute the script run; returns the process exit code."""
+    from pynecore.core.aggregator import validate_aggregation
+    from pynecore.core.ohlcv_file import OHLCVReader
+    from pynecore.core.script_runner import ScriptRunner
+    from pynecore.core.syminfo import SymInfo
+    from pynecore.lib.timeframe import in_seconds
+
+    workdir = Path(args.workdir).resolve()
+    script = _resolve_script(workdir, args.script)
+    data_path = _resolve_data(workdir, args.data)
+
+    syminfo = SymInfo.load_toml(data_path.with_suffix(".toml"))
+
+    output_dir = workdir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plot_path = output_dir / f"{script.stem}.csv"
+    strat_path = output_dir / f"{script.stem}_strat.csv"
+    trade_path = output_dir / f"{script.stem}_trade.csv"
+
+    # --security KEY=VALUE mappings (backtest file mode only)
+    security_data: dict[str, str] | None = None
+    if args.security:
+        security_data = {}
+        for item in args.security:
+            key, _, value = item.partition("=")
+            if not key or not value:
+                raise ValueError(f"Invalid --security mapping: {item!r}")
+            sec_path = Path(value)
+            if len(sec_path.parts) == 1:
+                sec_path = workdir / "data" / sec_path
+            if sec_path.name.endswith(".ohlcv"):
+                sec_path = sec_path.with_name(sec_path.name[: -len(".ohlcv")])
+            if not sec_path.with_name(sec_path.name + ".ohlcv").exists():
+                raise FileNotFoundError(
+                    f"Security data not found: {sec_path.name}.ohlcv")
+            security_data[key] = str(sec_path)
+
+    # Chart timeframe override / bar magnifier (mirrors pyne run --timeframe)
+    magnifier_mode = False
+    magnifier_source_tf: str | None = None
+    if args.timeframe:
+        chart_tf = args.timeframe.upper()
+        in_seconds(chart_tf)  # raises on invalid timeframe
+        data_tf = syminfo.period
+        if chart_tf != data_tf:
+            validate_aggregation(data_tf, chart_tf)
+            syminfo.period = chart_tf
+            magnifier_mode = True
+            magnifier_source_tf = data_tf
+
+    # Library scripts' imports resolve against workdir/scripts/lib, like the CLI.
+    lib_dir = workdir / "scripts" / "lib"
+    if lib_dir.is_dir():
+        sys.path.insert(0, str(lib_dir))
+
+    with OHLCVReader(data_path) as reader:
+        time_from_ts = int(args.time_from) if args.time_from is not None \
+            else int(reader.start_datetime.timestamp())
+        time_to_ts = int(args.time_to) if args.time_to is not None \
+            else int(reader.end_datetime.timestamp())
+
+        size = reader.get_size(time_from_ts, time_to_ts)
+
+        # Pine anchors last_bar_time to the window's final REAL bar — scan back
+        # over the writer's gap-fill tail (volume == -1 records).
+        last_bar_time = None
+        start_pos, end_pos = reader.get_positions(time_from_ts, time_to_ts)
+        for pos in range(end_pos - 1, start_pos - 1, -1):
+            tail_bar = reader.read(pos)
+            if not (tail_bar.volume < 0):
+                last_bar_time = int(tail_bar.timestamp * 1000)
+                break
+
+        magnifier_iter = None
+        if magnifier_mode:
+            magnifier_iter = reader.read_from(time_from_ts, time_to_ts)
+            ohlcv_iter = iter(())
+        else:
+            ohlcv_iter = reader.read_from(time_from_ts, time_to_ts)
+
+        runner = ScriptRunner(
+            script, ohlcv_iter, syminfo,
+            last_bar_index=size - 1,
+            last_bar_time=last_bar_time,
+            plot_path=plot_path, strat_path=strat_path, trade_path=trade_path,
+            security_data=security_data,
+            magnifier_iter=magnifier_iter,
+            magnifier_source_tf=magnifier_source_tf,
+            chart_data_path=data_path,
+        )
+
+        is_strategy = _script_type_name(runner.script) == "strategy"
+        emitter.emit({
+            "e": "start",
+            "script": str(script),
+            "scriptTitle": sanitize(getattr(runner.script, "title", None)),
+            "scriptType": _script_type_name(runner.script),
+            "overlay": bool(getattr(runner.script, "overlay", False)),
+            "syminfo": _serialize_syminfo(syminfo),
+            "data": str(data_path),
+            "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},
+            "outputs": {
+                "plot": str(plot_path),
+                "strat": str(strat_path) if is_strategy else None,
+                "trades": str(trade_path) if is_strategy else None,
+            },
+        })
+
+        return _stream_run(runner, emitter, control,
+                           total_bars=size,
+                           is_strategy=is_strategy,
+                           batch_size=args.batch_size)
+
+
+def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
+                total_bars: int, is_strategy: bool, batch_size: int) -> int:
+    from pynecore import lib
+
+    plot_keys: list[str] = []
+    plot_index: dict[str, int] = {}
+    batch: list[list[Any]] = []
+    trade_batch: list[dict[str, Any]] = []
+    bars_done = 0
+    last_flush = time.monotonic()
+    cancelled = False
+
+    def flush() -> None:
+        nonlocal batch, trade_batch, last_flush
+        if batch:
+            emitter.emit({"e": "bars", "d": batch})
+            batch = []
+        if trade_batch:
+            emitter.emit({"e": "trades", "d": trade_batch})
+            trade_batch = []
+        emitter.emit({"e": "progress", "done": bars_done, "total": total_bars})
+        last_flush = time.monotonic()
+
+    gen = runner.run_iter()
+    try:
+        for item in gen:
+            if control.idle:
+                # Entering pause (or cancel): push the pending batch out so
+                # the UI shows every processed bar while the run is halted.
+                flush()
+            if not control.gate():
+                cancelled = True
+                break
+
+            candle = item[0]
+            plot_data = item[1]
+            bars_done += 1
+
+            # lib.* holds the mintick-rounded values of the current bar
+            # (raw .ohlcv floats carry float32 storage dust).
+            row: list[Any] = [
+                int(candle.timestamp) * 1000,
+                num_or_none(lib.open), num_or_none(lib.high),
+                num_or_none(lib.low), num_or_none(lib.close),
+                num_or_none(lib.volume),
+            ]
+
+            if plot_data:
+                new_keys = [k for k in plot_data if k not in plot_index]
+                if new_keys:
+                    # Rows already in the batch align to the shorter key list
+                    # (missing trailing columns read as null) — flush them
+                    # before announcing the grown layout.
+                    flush()
+                    for k in new_keys:
+                        plot_index[k] = len(plot_keys)
+                        plot_keys.append(k)
+                    emitter.emit({"e": "plotKeys", "keys": plot_keys})
+                plots: list[Any] = [None] * len(plot_keys)
+                for k, v in plot_data.items():
+                    plots[plot_index[k]] = num_or_none(v)
+                row.append(plots)
+            else:
+                row.append(None)
+
+            if is_strategy:
+                position = runner.script.position
+                equity = float(position.equity) if position and position.equity \
+                    else runner.script.initial_capital
+                row.append(num_or_none(equity))
+                if len(item) > 2 and item[2]:
+                    for trade in item[2]:
+                        trade_batch.append(_serialize_trade(trade))
+
+            batch.append(row)
+            if len(batch) >= batch_size or \
+                    time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
+                flush()
+    finally:
+        # Runs ScriptRunner.run_iter's finally: writes strategy stats CSV,
+        # exports still-open trades, closes writers, tears down security
+        # subprocesses.
+        gen.close()
+
+    flush()
+
+    if is_strategy:
+        position = runner.script.position
+        if position is not None:
+            open_trades = [_serialize_trade(t) for t in position.open_trades]
+            if open_trades:
+                emitter.emit({"e": "openTrades", "d": open_trades})
+            try:
+                from pynecore.core.strategy_stats import calculate_strategy_statistics
+                stats = calculate_strategy_statistics(
+                    position, runner.script.initial_capital,
+                    runner.equity_curve if runner.equity_curve else None,
+                    runner.first_price, runner.last_price,
+                )
+                emitter.emit({
+                    "e": "stats",
+                    "d": {k: sanitize(v) for k, v in stats.to_dict().items()},
+                })
+            except Exception as exc:  # stats are best-effort, the run itself succeeded
+                emitter.emit({"e": "log", "level": "warning",
+                              "message": f"strategy statistics failed: {exc}"})
+
+    emitter.emit({"e": "end", "bars": bars_done, "cancelled": cancelled})
+    return 0

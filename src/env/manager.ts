@@ -200,6 +200,28 @@ export class EnvManager {
     }
   }
 
+  /**
+   * Ensure a usable Python environment, offering setup when missing.
+   * Returns the interpreter path, or undefined when the user declined or
+   * setup failed (after informing them).
+   */
+  async ensureReady(reason: string): Promise<string | undefined> {
+    let state = this.stateValue.kind === 'ready' ? this.stateValue : await this.check();
+    if (state.kind === 'needs-setup') {
+      const choice = await vscode.window.showInformationMessage(reason, 'Setup Now');
+      if (choice !== 'Setup Now') return undefined;
+      await this.setup();
+      state = this.stateValue;
+    }
+    if (state.kind !== 'ready') {
+      void vscode.window.showErrorMessage(
+        'PyneIDE: the Python environment is not available.'
+      );
+      return undefined;
+    }
+    return state.pythonBin;
+  }
+
   dispose(): void {
     this.onDidChangeStateEmitter.dispose();
   }

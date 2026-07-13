@@ -1,12 +1,16 @@
 import * as vscode from 'vscode';
 
+import type { AuthService } from '../api/auth';
 import type { EnvManager, EnvState } from './manager';
 
 /** Status bar item reflecting the environment state, with a quickpick menu. */
 export class EnvStatusBar {
   private readonly item: vscode.StatusBarItem;
 
-  constructor(private readonly manager: EnvManager) {
+  constructor(
+    private readonly manager: EnvManager,
+    private readonly auth: AuthService
+  ) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.name = 'PyneIDE Environment';
     this.item.command = 'pyneide.environmentMenu';
@@ -58,7 +62,7 @@ export class EnvStatusBar {
 
   private async showMenu(): Promise<void> {
     const state = this.manager.state;
-    const items: (vscode.QuickPickItem & { action: () => void })[] = [];
+    const items: (vscode.QuickPickItem & { action?: () => void })[] = [];
     if (state.kind === 'needs-setup' || state.kind === 'error' || state.kind === 'unknown') {
       items.push({
         label: '$(cloud-download) Setup Environment',
@@ -89,9 +93,25 @@ export class EnvStatusBar {
           void vscode.commands.executeCommand('workbench.action.openSettings', 'pyneide'),
       }
     );
+
+    items.push({ label: 'PyneSys Account', kind: vscode.QuickPickItemKind.Separator });
+    if (await this.auth.getKey()) {
+      items.push({
+        label: '$(sign-out) Sign Out from PyneSys',
+        description: 'Remove the stored API key',
+        action: () => void vscode.commands.executeCommand('pyneide.signOut'),
+      });
+    } else {
+      items.push({
+        label: '$(sign-in) Sign In to PyneSys',
+        description: 'Store your PyneSys API key',
+        action: () => void vscode.commands.executeCommand('pyneide.signIn'),
+      });
+    }
+
     const picked = await vscode.window.showQuickPick(items, {
       placeHolder: this.item.tooltip?.toString(),
     });
-    picked?.action();
+    picked?.action?.();
   }
 }

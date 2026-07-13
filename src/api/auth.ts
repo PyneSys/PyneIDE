@@ -39,7 +39,14 @@ function readApiTomlKey(workdir: string): string | undefined {
 }
 
 export class AuthService {
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly output: vscode.OutputChannel
+  ) {}
+
+  private log = (message: string): void => {
+    this.output.appendLine(message);
+  };
 
   baseUrl(): string {
     return (
@@ -54,7 +61,7 @@ export class AuthService {
 
   async client(): Promise<PyneApiClient | undefined> {
     const key = await this.getKey();
-    return key ? new PyneApiClient(key, this.baseUrl()) : undefined;
+    return key ? new PyneApiClient(key, this.baseUrl(), this.log) : undefined;
   }
 
   /**
@@ -86,11 +93,21 @@ export class AuthService {
     if (!key) return false;
 
     const trimmed = key.trim();
-    const client = new PyneApiClient(trimmed, this.baseUrl());
-    const verification = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'PyneIDE: validating API key…' },
-      () => client.verifyToken(trimmed)
-    );
+    const client = new PyneApiClient(trimmed, this.baseUrl(), this.log);
+    let verification;
+    try {
+      verification = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'PyneIDE: validating API key…' },
+        () => client.verifyToken(trimmed)
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`Key validation failed: ${message}`);
+      void vscode.window.showErrorMessage(
+        `PyneIDE: could not validate the API key: ${message}`
+      );
+      return false;
+    }
     if (!verification.valid) {
       void vscode.window.showErrorMessage(
         `PyneIDE: the API key is not valid: ${verification.message}`

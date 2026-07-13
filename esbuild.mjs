@@ -42,11 +42,26 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // Chart webview bundle: browser code (klinecharts inlined), no vscode API.
+  const webviewCtx = await esbuild.context({
+    ...common,
+    entryPoints: ['src/chart/webview/main.ts'],
+    outfile: 'dist/chart-webview.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
+    await webviewCtx.watch();
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
+    await webviewCtx.rebuild();
     await ctx.dispose();
+    await webviewCtx.dispose();
   }
 }
