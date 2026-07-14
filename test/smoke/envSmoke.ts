@@ -47,13 +47,36 @@ def main():
 `;
 
 /**
+ * Evaluate a pyneide_bridge.debug_inspect helper (base64 JSON array of scalar
+ * entries) exactly as the IDE-side DAP proxy does, and decode it.
+ */
+async function evalPineHelper(
+  dap: DapClient,
+  frameId: number,
+  fn: string,
+  call: string
+): Promise<Record<string, string>[]> {
+  const res = (await dap.request('evaluate', {
+    expression: `__import__("pyneide_bridge.debug_inspect", fromlist=["${fn}"]).${call}`,
+    frameId,
+    context: 'watch',
+  })) as { result: string };
+  const b64 = /^'([A-Za-z0-9+/=]*)'$/.exec(res.result)?.[1];
+  if (b64 === undefined) {
+    throw new Error(`debug: ${fn} returned no base64 payload: ${res.result}`);
+  }
+  const decoded = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+  return Array.isArray(decoded) ? decoded : [];
+}
+
+/**
  * Debug round-trip: bridge with a debugpy listener + a raw DAP client.
  * Covers the import-hook line-preservation contract (the breakpoint is set on
  * a source line of the heavily AST-transformed script and must bind and stop
- * exactly there, with locals visible) and the Pine state introspection the
- * IDE-side DAP proxy uses: pyneide_bridge.debug_inspect.pine_slots must
- * resolve the persistent/series slot names, and a slot evaluate must render
- * through the SeriesImpl presentation plugin.
+ * exactly there, with locals visible) and the Pine introspection the IDE-side
+ * DAP proxy composes its three scopes from: pine_slots (named Locals state),
+ * pine_bar (the Pyne current-bar scope) and pine_globals (imported sources +
+ * constants), plus a slot evaluate rendering through the SeriesImpl plugin.
  */
 async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string): Promise<void> {
   const scriptPath = path.join(workdir, 'scripts', 'dbgvars.py');
@@ -149,21 +172,56 @@ async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string
     if (b64 === undefined) {
       throw new Error(`debug: pine_slots returned no base64 payload: ${slotsEval.result}`);
     }
-    const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')) as {
-      context: { name: string; value: string; type: string }[];
-      slots: { name: string; param: string; slot: number; kind: string }[];
-    };
-    const counter = payload.slots.find((s) => s.name === 'counter');
-    const smooth = payload.slots.find((s) => s.name === 'smooth');
+    const slots = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')) as {
+      name: string;
+      param: string;
+      slot: number;
+      kind: string;
+    }[];
+    const counter = slots.find((s) => s.name === 'counter');
+    const smooth = slots.find((s) => s.name === 'smooth');
     if (counter?.kind !== 'var' || smooth?.kind !== 'series') {
-      throw new Error(`debug: pine_slots missed the state names: ${JSON.stringify(payload)}`);
+      throw new Error(`debug: pine_slots missed the state names: ${JSON.stringify(slots)}`);
     }
-    // The bar context leads the curated Locals: bar_index + OHLCV, read live
-    // off pynecore.lib. bar_index is the first thing a Pine dev looks for.
-    const barIndex = payload.context.find((c) => c.name === 'bar_index');
-    const closeCtx = payload.context.find((c) => c.name === 'close');
-    if (barIndex === undefined || !/^\d+$/.test(barIndex.value) || closeCtx === undefined) {
-      throw new Error(`debug: bar context missing bar_index/close: ${JSON.stringify(payload.context)}`);
+    // The synthetic Pyne scope: the current bar's runtime values, read live off
+    // pynecore.lib. bar_index leads (the first thing a Pine dev looks for).
+    const bar = await evalPineHelper(dap, frame.id, 'pine_bar', 'pine_bar()');
+    const barIndex = bar.find((c) => c.name === 'bar_index');
+    const closeBar = bar.find((c) => c.name === 'close');
+    if (barIndex === undefined || !/^\d+$/.test(barIndex.value) || closeBar === undefined) {
+      throw new Error(`debug: Pyne scope missing bar_index/close: ${JSON.stringify(bar)}`);
+    }
+    // The curated Globals scope: the script's imported value sources. dbgvars
+    // imports `close`, which the transform rewrote to lib.close — pine_globals
+    // must reconstruct it from the source and resolve its current value.
+    const globals = await evalPineHelper(dap, frame.id, 'pine_globals', 'pine_globals(globals())');
+    const closeGlobal = globals.find((c) => c.name === 'close');
+    if (closeGlobal === undefined || !/\d/.test(closeGlobal.value)) {
+      throw new Error(
+        `debug: Globals scope missing imported source 'close': ${JSON.stringify(globals)}`
+      );
+    }
+
+    // Watch resolution: the transform rewrote `close` to lib.close and dropped
+    // the import, so a bare `close` watch is a NameError until bind_sources
+    // binds it into the module globals (the proxy does this at every stop; the
+    // raw DAP client here calls it directly). Then `close` must evaluate.
+    const bound = (await dap.request('evaluate', {
+      expression:
+        '__import__("pyneide_bridge.debug_inspect", fromlist=["bind_sources"]).bind_sources(globals())',
+      frameId: frame.id,
+      context: 'watch',
+    })) as { result: string };
+    if (!/^[1-9]/.test(bound.result)) {
+      throw new Error(`debug: bind_sources bound no imported sources: ${bound.result}`);
+    }
+    const closeWatch = (await dap.request('evaluate', {
+      expression: 'close',
+      frameId: frame.id,
+      context: 'watch',
+    })) as { result: string };
+    if (!/^\d/.test(closeWatch.result.replace('-', ''))) {
+      throw new Error(`debug: bare 'close' watch did not resolve after bind: ${closeWatch.result}`);
     }
     // ...and the slots evaluate to live values: the persistent already
     // incremented on this first bar, the series buffer renders through the
@@ -199,7 +257,7 @@ async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string
   }
   log(
     `Debug smoke OK: breakpoint hit at dbgvars.py:${bpLine}, ` +
-      `bar context + pine slots resolved, ${end.bars} bars completed`
+      `Pyne/Locals/Globals scopes resolved, ${end.bars} bars completed`
   );
 }
 

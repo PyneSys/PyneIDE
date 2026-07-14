@@ -2,13 +2,20 @@
  * DAP proxy between VSCode and the bridge's debugpy listener.
  *
  * Instead of pointing VSCode directly at the endpoint (DebugAdapterServer),
- * an inline adapter relays the wire protocol so the Locals scope can be
- * enriched with the script's Pine-level state: persistent and series
- * variables live in anonymous `__state__[N]` slots at runtime, and only the
- * transform layout still knows their source names. On every Locals fetch the
- * proxy resolves the names in-session (an `evaluate` on the bridge's
- * pyneide_bridge.debug_inspect helper, which reads `__pyne_slot_layout__`)
- * and injects the named variables at the top of the list.
+ * an inline adapter relays the wire protocol so the variable scopes can be
+ * recomposed into what a Pine developer actually wants to see. At every stop
+ * the proxy presents three scopes (see pyneide_bridge.debug_inspect):
+ *
+ *  - **Pyne** — a synthetic scope the proxy answers itself: the current bar's
+ *    runtime values (bar_index + OHLCV + derived sources + time), read live
+ *    off `pynecore.lib` via an in-session `evaluate`.
+ *  - **Locals** — the frame's real locals plus the script's named
+ *    persistent/series state. That state lives in anonymous `__state__[N]`
+ *    slots at runtime; only the module's `__pyne_slot_layout__` still knows
+ *    the source names, so the proxy resolves them in-session and injects them.
+ *  - **Globals** — replaced with the script's meaningful module globals only
+ *    (imported value sources + user constants); the pynecore module noise is
+ *    dropped.
  *
  * The proxy also reports execution state (stopped at a breakpoint / resumed,
  * plus the thread id) so the RunService can compose bar-level controls with
@@ -23,6 +30,16 @@ const INTERNAL_SEQ_BASE = 1 << 30;
 const INTERNAL_TIMEOUT_MS = 5000;
 /** Upper bound on injected variables — a runaway layout must not stall the UI. */
 const MAX_PINE_SLOTS = 100;
+/** variablesReference range for the proxy's own synthetic scopes (Pyne). */
+const SYNTHETIC_REF_BASE = 1_500_000_000;
+/** seq range for responses the proxy sends the client without a server round-trip. */
+const SYNTHETIC_SEQ_BASE = 1_400_000_000;
+
+/** debug_inspect helper expressions, evaluated in the stopped frame. */
+const PINE_BAR_EXPR =
+  '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_bar"]).pine_bar()';
+const PINE_GLOBALS_EXPR =
+  '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_globals"]).pine_globals(globals())';
 
 interface DapMessage {
   seq: number;
@@ -45,16 +62,11 @@ interface PineSlot {
   own: boolean;
 }
 
-/** Current bar_index + OHLCV, rendered by the bridge helper (scalars). */
-interface PineContextEntry {
+/** A rendered scalar variable from a bridge helper (Pyne / Globals scopes). */
+interface PineEntry {
   name: string;
   value: string;
   type: string;
-}
-
-interface PineData {
-  context: PineContextEntry[];
-  slots: PineSlot[];
 }
 
 export interface PyneDapProxyHooks {
@@ -124,6 +136,12 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   private readonly pendingLocals = new Map<number, number>(); // seq -> frameId
   private readonly pendingResumes = new Set<number>();
 
+  // Synthetic-scope allocation: the Pyne scope's variablesReference and the
+  // seq the proxy stamps on responses it answers itself (both in their own
+  // high ranges so they never collide with the debuggee's).
+  private syntheticRef = SYNTHETIC_REF_BASE;
+  private syntheticSeq = SYNTHETIC_SEQ_BASE;
+
   // Last breakpoint requests the client sent, replayed to toggle the debuggee's
   // breakpoints for the run-to-bar fast path (source path -> setBreakpoints args).
   private readonly clientBreakpoints = new Map<string, Record<string, unknown>>();
@@ -136,7 +154,11 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   private stopGeneration = 0;
   private readonly frameNames = new Map<number, string>();
   private readonly localsRefs = new Map<number, number>(); // variablesReference -> frameId
-  private readonly pineDataCache = new Map<number, Promise<PineData>>(); // frameId
+  // Scopes the proxy answers itself (no server round-trip): the synthetic Pyne
+  // scope, and the (real) Globals scope whose contents are wholly replaced.
+  private readonly pyneScopeRefs = new Map<number, number>(); // ref -> frameId
+  private readonly globalsScopeRefs = new Map<number, number>(); // ref -> frameId
+  private readonly pineSlotsCache = new Map<number, Promise<PineSlot[]>>(); // frameId
 
   constructor(
     host: string,
@@ -159,7 +181,27 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
     const msg = message as DapMessage;
-    if (msg.type === 'request' && typeof msg.seq === 'number') this.trackClientRequest(msg);
+    if (msg.type === 'request' && typeof msg.seq === 'number') {
+      // Variables requests for a proxy-owned scope are answered in-session and
+      // never forwarded (the Pyne scope is synthetic; the Globals scope's real
+      // contents are discarded in favour of the curated list).
+      if (msg.command === 'variables') {
+        const ref = (msg.arguments ?? {}).variablesReference;
+        if (typeof ref === 'number') {
+          const pyneFrame = this.pyneScopeRefs.get(ref);
+          if (pyneFrame !== undefined) {
+            void this.answerSyntheticScope(msg.seq, PINE_BAR_EXPR, pyneFrame);
+            return;
+          }
+          const globalsFrame = this.globalsScopeRefs.get(ref);
+          if (globalsFrame !== undefined) {
+            void this.answerSyntheticScope(msg.seq, PINE_GLOBALS_EXPR, globalsFrame);
+            return;
+          }
+        }
+      }
+      this.trackClientRequest(msg);
+    }
     if (!this.connected) {
       this.outQueue.push(msg);
       return;
@@ -289,16 +331,21 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           for (const scope of scopes) {
             if (scope.presentationHint === 'locals' || scope.name === 'Locals') {
               this.localsRefs.set(scope.variablesReference, scopesFrame);
+            } else if (scope.presentationHint === 'globals' || scope.name === 'Globals') {
+              // Keep the scope, but the proxy answers its variables request with
+              // the curated list (see handleMessage) — the raw pynecore module
+              // namespace is never fetched.
+              this.globalsScopeRefs.set(scope.variablesReference, scopesFrame);
             }
           }
-          // Drop the module Globals scope entirely: it is the pynecore module
-          // namespace (imported classes, lib functions, dunders) — Python noise
-          // that buries the Pine essence. The curated Locals (bar context +
-          // named state + user locals) is all a Pine developer needs; watch
-          // expressions still reach anything else.
-          msg.body.scopes = scopes.filter(
-            (scope) => !(scope.presentationHint === 'globals' || scope.name === 'Globals')
-          );
+          // Lead with a synthetic Pyne scope (the current-bar runtime dashboard):
+          // bar_index + OHLCV + derived sources + time, answered in-session.
+          const pyneRef = this.syntheticRef++;
+          this.pyneScopeRefs.set(pyneRef, scopesFrame);
+          msg.body.scopes = [
+            { name: 'Pyne', variablesReference: pyneRef, expensive: false },
+            ...scopes,
+          ];
         }
       }
       const localsFrame = this.pendingLocals.get(seq);
@@ -367,9 +414,36 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     this.stopGeneration++;
     this.frameNames.clear();
     this.localsRefs.clear();
-    this.pineDataCache.clear();
+    this.pyneScopeRefs.clear();
+    this.globalsScopeRefs.clear();
+    this.pineSlotsCache.clear();
+    // Bind the script's imported source names into the module globals BEFORE
+    // surfacing the stop, so a watch expression like `close` resolves to
+    // lib.close instead of a NameError (the transform rewrote all bare source
+    // references to lib.* and dropped the import). Best-effort; refreshed here
+    // every stop.
+    if (threadId !== undefined) {
+      try {
+        await this.bindSources(threadId);
+      } catch {
+        // watch source-name binding is a convenience; a failure just leaves
+        // bare `close` unresolved, exactly as before.
+      }
+    }
     this.hooks.onExecState(true, threadId, reason);
     this.emit(msg);
+  }
+
+  /** Bind imported source names into the module globals (see debug_inspect). */
+  private async bindSources(threadId: number): Promise<void> {
+    const stack = await this.request('stackTrace', { threadId, levels: 1 });
+    const frames = stack.stackFrames as { id: number }[] | undefined;
+    const frameId = frames?.[0]?.id;
+    if (typeof frameId !== 'number') return;
+    await this.evaluate(
+      '__import__("pyneide_bridge.debug_inspect", fromlist=["bind_sources"]).bind_sources(globals())',
+      frameId
+    );
   }
 
   /** Live `bar_index` of the suspended debuggee (pynecore.lib, module scope). */
@@ -387,7 +461,43 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     return value;
   }
 
-  // --- Pine variable enrichment -------------------------------------------------
+  // --- variable scope composition -----------------------------------------------
+
+  /**
+   * Answer a proxy-owned scope's `variables` request in-session, without a
+   * server round-trip: evaluate the debug_inspect helper (Pyne bar data or
+   * curated Globals), then send the client a variables response stamped with
+   * its own request seq. On any failure the scope comes back empty rather than
+   * surfacing the error to VSCode.
+   */
+  private async answerSyntheticScope(
+    requestSeq: number,
+    expr: string,
+    frameId: number
+  ): Promise<void> {
+    let entries: PineEntry[] = [];
+    try {
+      entries = await this.evalEntries(expr, frameId);
+    } catch {
+      entries = [];
+    }
+    this.emit({
+      seq: this.syntheticSeq++,
+      type: 'response',
+      request_seq: requestSeq,
+      success: true,
+      command: 'variables',
+      body: {
+        variables: entries.map((e) => ({
+          name: e.name,
+          value: e.value,
+          type: e.type,
+          variablesReference: 0,
+          presentationHint: { kind: 'data' },
+        })),
+      },
+    });
+  }
 
   private async enrichLocals(frameId: number, msg: DapMessage): Promise<void> {
     const body = msg.body as { variables: Record<string, unknown>[] };
@@ -399,7 +509,8 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       (v) => typeof v.name === 'string' && !isJunkLocal(v.name)
     );
     try {
-      const injected = await this.pineVariables(frameId);
+      // The scope's named persistent/series state leads, then the real locals.
+      const injected = await this.pineSlotVariables(frameId);
       body.variables = [...injected, ...userLocals];
     } catch {
       // Enrichment is best-effort: on failure the filtered Locals still pass.
@@ -408,27 +519,19 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     this.emit(msg);
   }
 
-  private async pineVariables(frameId: number): Promise<Record<string, unknown>[]> {
+  /** The frame's named persistent/series state slots as Locals variables. */
+  private async pineSlotVariables(frameId: number): Promise<Record<string, unknown>[]> {
     const generation = this.stopGeneration;
-    let dataPromise = this.pineDataCache.get(frameId);
-    if (!dataPromise) {
-      dataPromise = this.fetchPineData(frameId);
-      this.pineDataCache.set(frameId, dataPromise);
+    let slotsPromise = this.pineSlotsCache.get(frameId);
+    if (!slotsPromise) {
+      slotsPromise = this.fetchPineSlots(frameId);
+      this.pineSlotsCache.set(frameId, slotsPromise);
     }
-    const data = await dataPromise;
+    const slots = await slotsPromise;
     if (generation !== this.stopGeneration) return [];
 
-    // Bar context first (bar_index leads), then named persistent/series slots.
-    const contextVars = data.context.map((entry) => ({
-      name: entry.name,
-      value: entry.value,
-      type: entry.type,
-      variablesReference: 0,
-      presentationHint: { kind: 'data' },
-    }));
-
     const slotVars = await Promise.all(
-      data.slots.map(async (slot) => {
+      slots.map(async (slot) => {
         const expr = slotExpression(slot);
         try {
           const body = await this.evaluate(expr, frameId);
@@ -452,28 +555,29 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         }
       })
     );
-    return [...contextVars, ...slotVars.filter((v): v is NonNullable<typeof v> => v !== undefined)];
+    return slotVars.filter((v): v is NonNullable<typeof v> => v !== undefined);
   }
 
-  private async fetchPineData(frameId: number): Promise<PineData> {
-    const empty: PineData = { context: [], slots: [] };
+  private async fetchPineSlots(frameId: number): Promise<PineSlot[]> {
     const frameName = this.frameNames.get(frameId);
-    if (!frameName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(frameName)) return empty;
+    if (!frameName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(frameName)) return [];
     const expr =
       '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_slots"])' +
       `.pine_slots(locals(), globals(), "${frameName}")`;
+    const slots = (await this.evalEntries(expr, frameId)) as unknown as PineSlot[];
+    return slots.slice(0, MAX_PINE_SLOTS);
+  }
+
+  /**
+   * Evaluate a debug_inspect helper (whose result is repr(str) of a base64 JSON
+   * array) and decode it. Returns [] if the result is not the expected shape.
+   */
+  private async evalEntries(expr: string, frameId: number): Promise<PineEntry[]> {
     const body = await this.evaluate(expr, frameId);
-    // The evaluate result is repr(str) of the base64 payload.
     const match = /^'([A-Za-z0-9+/=]*)'$/.exec(String(body.result ?? ''));
-    if (!match) return empty;
-    const payload = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')) as {
-      context?: PineContextEntry[];
-      slots?: PineSlot[];
-    };
-    return {
-      context: payload.context ?? [],
-      slots: (payload.slots ?? []).slice(0, MAX_PINE_SLOTS),
-    };
+    if (!match) return [];
+    const decoded = JSON.parse(Buffer.from(match[1], 'base64').toString('utf8'));
+    return Array.isArray(decoded) ? (decoded as PineEntry[]) : [];
   }
 
   /**

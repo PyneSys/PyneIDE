@@ -26,16 +26,17 @@ export function registerPyneDebug(
 ): void {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory('pyne', {
-      createDebugAdapterDescriptor(session) {
-        const connect = session.configuration.connect as
-          | { host?: string; port?: number }
-          | undefined;
-        if (!connect?.port) {
+      async createDebugAdapterDescriptor(session) {
+        // Minted here (not from the config) so a restart — which reuses the
+        // resolved attach config with a now-dead port and re-invokes this
+        // factory — spawns a fresh bridge instead of dialling the corpse.
+        const ep = await runService.acquireDebugEndpoint(session.configuration);
+        if (!ep) {
           throw new Error(
             'PyneIDE: the pyne debug session has no debugpy endpoint (use a launch config).'
           );
         }
-        const proxy = new PyneDapProxy(connect.host ?? '127.0.0.1', connect.port, {
+        const proxy = new PyneDapProxy(ep.host, ep.port, {
           onExecState: (stopped, threadId) => runService.onDebugExecState(stopped, threadId),
         });
         // The proxy owns the debuggee's breakpoints, so the run-to-bar fast

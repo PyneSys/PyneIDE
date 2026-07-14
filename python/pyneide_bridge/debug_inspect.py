@@ -1,29 +1,62 @@
 """Frame introspection for the IDE-side debug adapter proxy.
 
-At runtime the transform stores Pine persistent/series variables in anonymous
-``__state__[N]`` slots; the source names survive only in the transform layout
-(the module's ``__pyne_slot_layout__`` dict, ``names`` tuple). The proxy
-evaluates :func:`pine_slots` inside the stopped frame (pydevd ``evaluate``)
-and injects the named variables into the Locals scope.
+The proxy composes three variable scopes at a stop, each fed by one helper
+here (evaluated in the stopped frame via pydevd ``evaluate``):
+
+* **Pyne** (:func:`pine_bar`) — the current bar's live runtime values
+  (``bar_index`` + OHLCV + derived sources + ``time``), read straight off
+  ``pynecore.lib``, regardless of what the script imports. A dashboard of
+  "where am I", not scope-accessible names.
+* **Locals** (:func:`pine_slots`) — the named persistent/series state of the
+  stopped scope. At runtime the transform stores these in anonymous
+  ``__state__[N]`` slots; the source names survive only in the module's
+  ``__pyne_slot_layout__``. The proxy injects them alongside the frame's real
+  locals.
+* **Globals** (:func:`pine_globals`) — what the script's module scope actually
+  exposes: the value sources it imported (``from pynecore.lib import close``,
+  rewritten to ``lib.close`` by the transform, so reconstructed from the
+  original source file) plus the user's module-level constants. The pynecore
+  module noise (imported modules, classes, the script functions, dunders) is
+  left out.
 
 Everything here must be side-effect free: it runs against a live, suspended
-script. The result is base64-encoded JSON, because the evaluate response
+script. Each result is base64-encoded JSON, because the evaluate response
 carries ``repr(str)`` and base64 keeps that trivially parseable.
 """
 
 from __future__ import annotations
 
+import ast
 import base64
 import importlib
 import json
+import os
+import types
 from typing import Any
 
 _STATE_PREFIX = "__state·"  # scope-qualified hidden param: __state·main__
 
-# The current bar's essence, read straight off ``pynecore.lib`` (the runner
-# sets these per bar as plain scalars). ``bar_index`` leads because "which bar
-# am I on" is the first question at a breakpoint.
-_CONTEXT_NAMES = ("bar_index", "open", "high", "low", "close", "volume")
+# The Pyne scope: the current bar's essence, read straight off ``pynecore.lib``
+# (the runner sets these per bar as plain scalars). ``bar_index`` leads because
+# "which bar am I on" is the first question at a breakpoint. ``bid``/``ask`` are
+# intentionally omitted — pynecore always reports them ``na`` (no tick data), so
+# they would only add ``nan`` noise.
+_BAR_NAMES = (
+    "bar_index",
+    "open", "high", "low", "close", "volume",
+    "hl2", "hlc3", "ohlc4", "hlcc4",
+    "time",
+)
+
+# The built-in price sources a script can import from ``pynecore.lib``; used to
+# recover which of a script's imports are value sources for the Globals scope.
+_SOURCE_NAMES = frozenset({
+    "open", "high", "low", "close", "volume", "bid", "ask",
+    "hl2", "hlc3", "ohlc4", "hlcc4",
+})
+
+# path -> (mtime, mapping display-name -> lib source-name) for imported sources.
+_import_cache: dict[str, tuple[float, dict[str, str]]] = {}
 
 
 def _fmt(value: Any) -> str:
@@ -33,20 +66,150 @@ def _fmt(value: Any) -> str:
         return "<unrepr>"
 
 
-def _bar_context() -> list[dict[str, Any]]:
-    """Current bar_index + OHLCV from the live ``pynecore.lib`` module."""
+def _is_source_sentinel(value: Any) -> bool:
+    """True for an unresolved ``Source`` placeholder (source not in this feed)."""
     try:
-        lib = importlib.import_module("pynecore.lib")
+        from pynecore.types.source import Source
     except Exception:
-        return []
+        return False
+    return isinstance(value, Source)
+
+
+def _lib():
+    try:
+        return importlib.import_module("pynecore.lib")
+    except Exception:
+        return None
+
+
+def pine_bar() -> str:
+    """Current ``bar_index`` + OHLCV/derived sources + ``time`` from ``lib``.
+
+    :return: base64 of ``[{name, value, type}]``.
+    """
+    lib = _lib()
     out: list[dict[str, Any]] = []
-    for name in _CONTEXT_NAMES:
+    if lib is not None:
+        for name in _BAR_NAMES:
+            try:
+                value = getattr(lib, name)
+            except Exception:
+                continue
+            if _is_source_sentinel(value):
+                continue
+            out.append({"name": name, "value": _fmt(value), "type": type(value).__name__})
+    return base64.b64encode(json.dumps(out).encode("utf-8")).decode("ascii")
+
+
+def _imported_sources(path: str) -> dict[str, str]:
+    """Value sources the script imports (display-name -> lib source-name).
+
+    The ``ImportNormalizer`` transform strips the original
+    ``from pynecore.lib import close`` and rewrites ``close`` to ``lib.close``,
+    so the imported names are gone from the runtime module namespace. They are
+    recovered by parsing the original source file (cached by mtime).
+    """
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return {}
+    cached = _import_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    mapping: dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError, ValueError):
+        return {}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        if node.module != "pynecore.lib" and not node.module.startswith("pynecore.lib."):
+            continue
+        for alias in node.names:
+            if alias.name in _SOURCE_NAMES:
+                mapping[alias.asname or alias.name] = alias.name
+    _import_cache[path] = (mtime, mapping)
+    return mapping
+
+
+def _is_constant(name: str, value: Any) -> bool:
+    """A user module-level constant worth showing in Globals.
+
+    Keeps plain literal values (the script's ``TT_* = "..."`` constants); drops
+    dunders, the normalized ``lib`` import, imported modules, classes and
+    functions — the Python plumbing that buries the script's own globals.
+    """
+    if name.startswith("__") or name == "lib":
+        return False
+    if isinstance(value, (types.ModuleType, type)) or callable(value):
+        return False
+    return isinstance(value, (str, int, float, bool, bytes, tuple, frozenset)) or value is None
+
+
+def pine_globals(frame_globals: dict[str, Any]) -> str:
+    """The script's meaningful module globals: imported sources + constants.
+
+    :param frame_globals: The frame's ``globals()`` (pydevd evaluate context).
+    :return: base64 of ``[{name, value, type}]``.
+    """
+    out: list[dict[str, Any]] = []
+    lib = _lib()
+    path = frame_globals.get("__file__")
+    imported: dict[str, str] = {}
+    if lib is not None and isinstance(path, str):
+        imported = _imported_sources(path)
+        for display, real in imported.items():
+            try:
+                value = getattr(lib, real)
+            except Exception:
+                continue
+            if _is_source_sentinel(value):
+                continue
+            out.append({"name": display, "value": _fmt(value), "type": type(value).__name__})
+    for name in sorted(frame_globals):
+        # Skip the imported sources: they are listed above, and ``bind_sources``
+        # injects them into the module globals (so watch expressions resolve),
+        # which would otherwise make them re-appear here as bare constants.
+        if name in imported:
+            continue
+        value = frame_globals[name]
+        if _is_constant(name, value):
+            out.append({"name": name, "value": _fmt(value), "type": type(value).__name__})
+    return base64.b64encode(json.dumps(out).encode("utf-8")).decode("ascii")
+
+
+def bind_sources(frame_globals: dict[str, Any]) -> int:
+    """Bind the script's imported source names into the module globals.
+
+    The ``ImportNormalizer`` transform rewrites ``close`` to ``lib.close`` and
+    strips the import, so a bare ``close`` in a watch expression is a NameError.
+    This binds each imported source (only those the script actually imports) to
+    its current ``lib`` value in the module globals, so watch/repl expressions
+    like ``close`` or ``ta.sma(close, 14)`` resolve. The transformed code never
+    reads the bare names (always ``lib.*``), so this has no effect on execution;
+    a real local of the same name still shadows it (locals resolve first). Call
+    at every stop to refresh the values.
+
+    :param frame_globals: The frame's ``globals()`` (the module dict).
+    :return: The number of names bound.
+    """
+    lib = _lib()
+    path = frame_globals.get("__file__")
+    if lib is None or not isinstance(path, str):
+        return 0
+    bound = 0
+    for display, real in _imported_sources(path).items():
         try:
-            value = getattr(lib, name)
+            value = getattr(lib, real)
         except Exception:
             continue
-        out.append({"name": name, "value": _fmt(value), "type": type(value).__name__})
-    return out
+        if _is_source_sentinel(value):
+            continue
+        frame_globals[display] = value
+        bound += 1
+    return bound
 
 
 def _scope_base(scope: str) -> str:
@@ -90,8 +253,7 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
     :param frame_locals: The frame's ``locals()`` (pydevd evaluate context).
     :param frame_globals: The frame's ``globals()``.
     :param frame_name: The frame's function name (from the DAP stack trace).
-    :return: base64 of ``{"context": [{name, value, type}],
-             "slots": [{name, param, slot, kind, owner, own}]}``.
+    :return: base64 of ``[{name, param, slot, kind, owner, own}]``.
     """
     layouts = frame_globals.get("__pyne_slot_layout__") or {}
     slots: list[dict[str, Any]] = []
@@ -124,5 +286,4 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
                 "owner": owner,
                 "own": owner == frame_name,
             })
-    payload = json.dumps({"context": _bar_context(), "slots": slots})
-    return base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return base64.b64encode(json.dumps(slots).encode("utf-8")).decode("ascii")

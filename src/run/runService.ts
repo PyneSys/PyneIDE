@@ -35,6 +35,8 @@ export type RunControlAction = 'pause' | 'resume' | 'step' | 'cancel';
 
 /** How long a debug launch waits for the bridge to report its debugpy port. */
 const DEBUG_ENDPOINT_TIMEOUT_MS = 30000;
+/** Grace given to a cancelled run to exit before a restart hard-kills it. */
+const RUN_DRAIN_GRACE_MS = 4000;
 
 interface PreparedRun {
   pythonBin: string;
@@ -55,6 +57,12 @@ export class RunService {
   private barsDone = 0;
   private barsTotal = 0;
   private debugSession: vscode.DebugSession | undefined;
+  /**
+   * Endpoint of the bridge a launch just spawned, handed to the adapter factory
+   * (createDebugAdapterDescriptor). Consumed once; a restart finds it empty (or
+   * mismatched) and spawns a fresh bridge instead (see acquireDebugEndpoint).
+   */
+  private pendingDebugEndpoint: { host: string; port: number } | undefined;
   /** Debugger execution state, reported by the DAP proxy. */
   private debugStopped = false;
   private debugThreadId: number | undefined;
@@ -193,23 +201,12 @@ export class RunService {
     });
     if (!prepared) return null;
 
-    let onEndpoint: (ep: { host: string; port: number }) => void;
-    const endpoint = new Promise<{ host: string; port: number } | undefined>((resolve) => {
-      onEndpoint = resolve;
-      setTimeout(() => resolve(undefined), DEBUG_ENDPOINT_TIMEOUT_MS);
-    });
-    const runDone = this.executeRun({
-      ...prepared,
-      debug: { onEndpoint: (host, port) => onEndpoint({ host, port }) },
-    });
-    // A run that dies before reporting the endpoint (spawn failure, bad
-    // script) must abort the debug session instead of waiting for the timeout.
-    const ep = await Promise.race([endpoint, runDone.then(() => undefined)]);
-    if (!ep) {
-      this.output.appendLine('Debug launch aborted: no debugpy endpoint from the bridge.');
-      this.activeRun?.cancel();
-      return null;
-    }
+    const ep = await this.spawnDebugRun(prepared);
+    if (!ep) return null;
+    // Hand the live endpoint to the adapter factory. On a restart VSCode reuses
+    // THIS resolved config (dead port and all) without re-resolving, so the
+    // factory reads pyneManaged/data to spawn a fresh bridge (acquireDebugEndpoint).
+    this.pendingDebugEndpoint = ep;
 
     const justMyCode =
       typeof config.justMyCode === 'boolean'
@@ -221,6 +218,9 @@ export class RunService {
       ...config,
       request: 'attach',
       connect: { host: ep.host, port: ep.port },
+      pyneManaged: true,
+      // Freeze the resolved data so a restart reuses it instead of re-prompting.
+      data: prepared.data,
       justMyCode,
       // Keep stepping inside the user's Pyne script, never in the runner.
       // Both the bridge and (in dev) the editable pynecore checkout live
@@ -238,6 +238,91 @@ export class RunService {
         ? { variablePresentation: config.variablePresentation }
         : {}),
     };
+  }
+
+  /**
+   * Provide the debugpy endpoint the `pyne` adapter factory should connect to.
+   *
+   * VSCode restart reuses the RESOLVED attach config (whose port died with the
+   * first launch's bridge) and re-invokes the factory WITHOUT re-running config
+   * resolution — so a fresh live endpoint is minted here, not in resolveDebugLaunch:
+   *  - user-authored `attach`: connect to their endpoint verbatim;
+   *  - initial launch: hand over the endpoint resolveDebugLaunch just spawned;
+   *  - restart: drain the run the terminated session left cancelling, then spawn
+   *    a fresh bridge for the same script (recompiling, reusing the picked data).
+   */
+  async acquireDebugEndpoint(
+    config: vscode.DebugConfiguration
+  ): Promise<{ host: string; port: number } | undefined> {
+    const connect = config.connect as { host?: string; port?: number } | undefined;
+    if (!config.pyneManaged) {
+      return connect?.port ? { host: connect.host ?? '127.0.0.1', port: connect.port } : undefined;
+    }
+    const pending = this.pendingDebugEndpoint;
+    if (pending && connect?.port === pending.port) {
+      this.pendingDebugEndpoint = undefined;
+      return pending;
+    }
+    return this.relaunchDebug(config);
+  }
+
+  /** Spawn a bridge run in the background and resolve once it reports its
+   * debugpy endpoint; undefined if the run dies or times out first. */
+  private async spawnDebugRun(
+    prepared: PreparedRun
+  ): Promise<{ host: string; port: number } | undefined> {
+    let onEndpoint: (ep: { host: string; port: number }) => void;
+    const endpoint = new Promise<{ host: string; port: number } | undefined>((resolve) => {
+      onEndpoint = resolve;
+      setTimeout(() => resolve(undefined), DEBUG_ENDPOINT_TIMEOUT_MS);
+    });
+    const runDone = this.executeRun({
+      ...prepared,
+      debug: { onEndpoint: (host, port) => onEndpoint({ host, port }) },
+    });
+    // A run that dies before reporting the endpoint (spawn failure, bad
+    // script) must abort the debug session instead of waiting for the timeout.
+    const ep = await Promise.race([endpoint, runDone.then(() => undefined)]);
+    if (!ep) {
+      this.output.appendLine('Debug launch aborted: no debugpy endpoint from the bridge.');
+      this.activeRun?.cancel();
+      return undefined;
+    }
+    return ep;
+  }
+
+  /** Restart path: rebuild the run pipeline for a resolved config and spawn a
+   * fresh bridge, after draining the previous run the terminate left cancelling. */
+  private async relaunchDebug(
+    config: vscode.DebugConfiguration
+  ): Promise<{ host: string; port: number } | undefined> {
+    await this.drainActiveRun();
+    const script = typeof config.script === 'string' ? config.script : undefined;
+    if (!script) {
+      void vscode.window.showWarningMessage('PyneIDE: cannot restart debugging — no script.');
+      return undefined;
+    }
+    const doc = await vscode.workspace.openTextDocument(script);
+    const prepared = await this.prepareRun(doc, {
+      data: typeof config.data === 'string' && config.data ? config.data : undefined,
+    });
+    if (!prepared) return undefined;
+    return this.spawnDebugRun(prepared);
+  }
+
+  /** Cancel the active run and wait for the process to exit (hard-kill on
+   * grace timeout), so a restart's fresh launch never hits the "in progress"
+   * guard. executeRun clears `activeRun` on exit, before this await resumes. */
+  private async drainActiveRun(): Promise<void> {
+    const run = this.activeRun;
+    if (!run) return;
+    run.cancel();
+    const killer = setTimeout(() => run.kill(), RUN_DRAIN_GRACE_MS);
+    try {
+      await run.exited;
+    } finally {
+      clearTimeout(killer);
+    }
   }
 
   /** Shared pipeline: compile (Pine), env, workdir, data. */
