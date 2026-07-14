@@ -82,32 +82,90 @@ def _lib():
         return None
 
 
+def _is_module_property(value: Any) -> bool:
+    """True for a Pine hybrid property (a ``@module_property`` lib function).
+
+    Such a name reads as a value in Pine — a bare ``time`` compiles to
+    ``lib.time()`` (see ``ModulePropertyTransformer``). The decorator stamps
+    ``__module_property__`` on the function, and only these are safe to call
+    with no arguments; plain lib functions (``na`` and friends, which need an
+    argument) and namespace modules (``dayofweek``) carry no such marker.
+    """
+    return callable(value) and getattr(value, "__module_property__", False) is True
+
+
+def _resolve(value: Any) -> Any:
+    """Evaluate a module property to its current value; pass anything else
+    through unchanged.
+
+    Mirrors the transform's bare-read rewrite: a module property is a function
+    at runtime, but semantically a value, so a zero-arg call yields the current
+    bar's value instead of showing ``<function time at 0x…>``.
+    """
+    if _is_module_property(value):
+        try:
+            return value()
+        except Exception:
+            return value
+    return value
+
+
+def _bar_datetime(lib: Any, time_ms: int) -> str | None:
+    """Human-readable exchange-timezone datetime for a bar time (Unix ms).
+
+    ``time`` is a Unix millisecond timestamp; on the Pyne dashboard a date is
+    more legible. ``lib._get_dt(ms, None)`` converts it in the exchange
+    timezone (the ``None`` timezone default — the same one the chart shows).
+    """
+    get_dt = getattr(lib, "_get_dt", None)
+    if get_dt is None:
+        return None
+    try:
+        return get_dt(time_ms, None).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
 def pine_bar() -> str:
     """Current ``bar_index`` + OHLCV/derived sources + ``time`` from ``lib``.
+
+    ``time`` is kept as its raw Unix-ms value (what the Pine code sees); a
+    derived ``datetime`` entry renders the same instant in the exchange
+    timezone for readability.
 
     :return: base64 of ``[{name, value, type}]``.
     """
     lib = _lib()
     out: list[dict[str, Any]] = []
     if lib is not None:
+        time_ms: int | None = None
         for name in _BAR_NAMES:
             try:
-                value = getattr(lib, name)
+                value = _resolve(getattr(lib, name))
             except Exception:
                 continue
             if _is_source_sentinel(value):
                 continue
+            if name == "time" and isinstance(value, int) and not isinstance(value, bool):
+                time_ms = value
             out.append({"name": name, "value": _fmt(value), "type": type(value).__name__})
+        if time_ms is not None:
+            dt = _bar_datetime(lib, time_ms)
+            if dt is not None:
+                out.append({"name": "datetime", "value": dt, "type": "str"})
     return base64.b64encode(json.dumps(out).encode("utf-8")).decode("ascii")
 
 
 def _imported_sources(path: str) -> dict[str, str]:
-    """Value sources the script imports (display-name -> lib source-name).
+    """Value-like lib names the script imports (display-name -> lib name).
 
-    The ``ImportNormalizer`` transform strips the original
-    ``from pynecore.lib import close`` and rewrites ``close`` to ``lib.close``,
-    so the imported names are gone from the runtime module namespace. They are
-    recovered by parsing the original source file (cached by mtime).
+    Covers the built-in price sources (``close`` …) and the Pine module
+    properties (``time`` …). The ``ImportNormalizer`` transform strips the
+    original ``from pynecore.lib import close`` and rewrites ``close`` to
+    ``lib.close``, so the imported names are gone from the runtime module
+    namespace; they are recovered by parsing the original source file (cached
+    by mtime). Callers pass each recovered value through :func:`_resolve`, so a
+    module property is shown/bound as its current value, not as a function.
     """
     try:
         mtime = os.stat(path).st_mtime
@@ -122,13 +180,14 @@ def _imported_sources(path: str) -> dict[str, str]:
             tree = ast.parse(f.read())
     except (OSError, SyntaxError, ValueError):
         return {}
+    lib = _lib()
     for node in tree.body:
         if not isinstance(node, ast.ImportFrom) or not node.module:
             continue
         if node.module != "pynecore.lib" and not node.module.startswith("pynecore.lib."):
             continue
         for alias in node.names:
-            if alias.name in _SOURCE_NAMES:
+            if alias.name in _SOURCE_NAMES or _is_module_property(getattr(lib, alias.name, None)):
                 mapping[alias.asname or alias.name] = alias.name
     _import_cache[path] = (mtime, mapping)
     return mapping
@@ -162,7 +221,7 @@ def pine_globals(frame_globals: dict[str, Any]) -> str:
         imported = _imported_sources(path)
         for display, real in imported.items():
             try:
-                value = getattr(lib, real)
+                value = _resolve(getattr(lib, real))
             except Exception:
                 continue
             if _is_source_sentinel(value):
@@ -181,14 +240,17 @@ def pine_globals(frame_globals: dict[str, Any]) -> str:
 
 
 def bind_sources(frame_globals: dict[str, Any]) -> int:
-    """Bind the script's imported source names into the module globals.
+    """Bind the script's imported source / module-property names into globals.
 
     The ``ImportNormalizer`` transform rewrites ``close`` to ``lib.close`` and
-    strips the import, so a bare ``close`` in a watch expression is a NameError.
-    This binds each imported source (only those the script actually imports) to
-    its current ``lib`` value in the module globals, so watch/repl expressions
-    like ``close`` or ``ta.sma(close, 14)`` resolve. The transformed code never
-    reads the bare names (always ``lib.*``), so this has no effect on execution;
+    strips the import, so a bare ``close`` in a watch expression is a NameError;
+    a module property such as ``time`` is further rewritten to a ``lib.time()``
+    call. This binds each imported source / module property (only those the
+    script actually imports) to its current value in the module globals — a
+    module property to its resolved (called) value, not the function — so
+    watch/repl expressions like ``close``, ``ta.sma(close, 14)`` or ``time``
+    resolve. The transformed code never reads the bare names (always ``lib.*``),
+    so this has no effect on execution;
     a real local of the same name still shadows it (locals resolve first). Call
     at every stop to refresh the values.
 
@@ -202,7 +264,7 @@ def bind_sources(frame_globals: dict[str, Any]) -> int:
     bound = 0
     for display, real in _imported_sources(path).items():
         try:
-            value = getattr(lib, real)
+            value = _resolve(getattr(lib, real))
         except Exception:
             continue
         if _is_source_sentinel(value):

@@ -755,15 +755,29 @@ function slotExpression(slot: PineSlot): string {
 }
 
 /**
+ * Eldobható plumbing-temp nevek, amiket a function_isolation transformer szór be
+ * izolált hívásoknál: `__st__` (child-state walrus), `__b__` (bind temp), `__i__`
+ * (loop index) és a loop-hoist számláló/gyereklista párok (`__cnt_0__`,
+ * `__chl_0__`, ...). Nem script-változók, csak a hívás-átírás melléktermékei.
+ */
+const ISOLATION_TEMP = /^(__st__|__b__|__i__|__cnt_\d+__|__chl_\d+__)$/;
+
+/**
  * A top-level Locals entry that is Python plumbing rather than script state:
  * the transform's hidden state param (`__state__`, or scope-qualified
- * `__state·main__`) plus pydevd's group pseudo-nodes ("special variables" — the
- * space gives them away, no Python identifier has one). Everything else stays,
- * including PyneComp's own dunder-named locals (`__block_result__`, `__switch__`,
+ * `__state·main__`), the function_isolation temps (see {@link ISOLATION_TEMP}),
+ * plus pydevd's group pseudo-nodes ("special variables" — the space gives them
+ * away, no Python identifier has one). Everything else stays, including
+ * PyneComp's own dunder-named locals (`__block_result__`, `__switch__`,
  * `__eval__`, ...) which are meaningful script variables, not plumbing.
  */
 function isJunkLocal(name: string): boolean {
-  return name === '__state__' || name.startsWith('__state·') || name.includes(' ');
+  return (
+    name === '__state__' ||
+    name.startsWith('__state·') ||
+    ISOLATION_TEMP.test(name) ||
+    name.includes(' ')
+  );
 }
 
 /** A CPython dunder attribute (`__class__`, `__dict__`, `__doc__`, ...). */
