@@ -54,6 +54,8 @@ export interface StartEvent {
   scriptType: 'indicator' | 'strategy' | 'library';
   /** Script-level `overlay=` from indicator()/strategy(): plots default to the price pane. */
   overlay: boolean;
+  /** True for a data-only chart preview (raw candles, no script/plots). */
+  dataOnly?: boolean;
   syminfo: Record<string, string | number | boolean | null>;
   data: string;
   range: { from: number; to: number; bars: number };
@@ -81,10 +83,13 @@ export interface BridgeRunOptions {
   pythonBin: string;
   /** Directory that CONTAINS the pyneide_bridge package (`<ext>/python`). */
   bridgeRoot: string;
-  /** Script path or bare name (resolved against `<workdir>/scripts`). */
-  script: string;
+  /** Script path or bare name (resolved against `<workdir>/scripts`).
+   * Omitted for a data-only preview. */
+  script?: string;
   /** .ohlcv path or bare name (resolved against `<workdir>/data`). */
   data: string;
+  /** Stream raw candles only (chart preview), no script run. */
+  dataOnly?: boolean;
   /** Resolved pyne workdir (always explicit — never rely on cwd). */
   workdir: string;
   /** Run window start/end, epoch seconds UTC. */
@@ -120,18 +125,9 @@ export class BridgeRun {
   }
 
   static start(opts: BridgeRunOptions): BridgeRun {
-    const args = [
-      '-X',
-      'utf8',
-      '-m',
-      'pyneide_bridge',
-      '--script',
-      opts.script,
-      '--data',
-      opts.data,
-      '--workdir',
-      opts.workdir,
-    ];
+    const args = ['-X', 'utf8', '-m', 'pyneide_bridge', '--data', opts.data, '--workdir', opts.workdir];
+    if (opts.script) args.push('--script', opts.script);
+    if (opts.dataOnly) args.push('--data-only');
     if (opts.timeFrom !== undefined) args.push('--time-from', String(opts.timeFrom));
     if (opts.timeTo !== undefined) args.push('--time-to', String(opts.timeTo));
     if (opts.timeframe) args.push('--timeframe', opts.timeframe);

@@ -18,17 +18,20 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import type { ChartManager } from '../chart/chartPanel';
 import type { CompileService } from '../compile/service';
 import type { DebugBreakpointControl } from '../debug/dapProxy';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
-import { pickRunData } from './dataSelect';
+import { getRememberedData, pickRunData } from './dataSelect';
 
 export interface RunListener {
-  onEvent(event: BridgeEvent): void;
-  onFinished(): void;
+  /** `chartKey` identifies which script's chart the event belongs to (the
+   * user's source path — .pine for Pine, not the compiled .py). */
+  onEvent(event: BridgeEvent, chartKey: string): void;
+  onFinished(chartKey: string): void;
 }
 
 export type RunControlAction = 'pause' | 'resume' | 'step' | 'cancel';
@@ -43,6 +46,8 @@ interface PreparedRun {
   scriptPath: string;
   data: string;
   workdir: string;
+  /** The user's source path — the chart key this run streams to (Part B). */
+  chartKey: string;
 }
 
 export class RunService {
@@ -79,6 +84,14 @@ export class RunService {
   private debugControl: DebugBreakpointControl | undefined;
   /** External subscriber (chart webview) for the live event stream. */
   listener: RunListener | undefined;
+  /** Typed handle to the same object as `listener`, for revealing panels and
+   * routing data-only previews (set via attachChart). */
+  private chartManager: ChartManager | undefined;
+  /** Live data-only preview processes, one per chart key. A real run for a
+   * chart supersedes (cancels) its preview so both never drive one panel. */
+  private readonly previewRuns = new Map<string, BridgeRun>();
+  /** Chart key of the currently active real run (undefined when idle). */
+  private activeChartKey: string | undefined;
 
   /** How many trailing bars of a run-to-bar crawl on the per-bar breakpoint
    * (the rest fly with breakpoints removed). */
@@ -102,6 +115,12 @@ export class RunService {
       ),
       vscode.commands.registerCommand('pyneide.debugScript', (uri?: vscode.Uri) =>
         this.debugFromCommand(uri)
+      ),
+      vscode.commands.registerCommand('pyneide.changeRunData', (uri?: vscode.Uri) =>
+        this.changeRunData(uri)
+      ),
+      vscode.commands.registerCommand('pyneide.openChart', (uri?: vscode.Uri) =>
+        this.openChart(uri)
       ),
       vscode.commands.registerCommand('pyneide.pauseRun', () => this.control('pause')),
       vscode.commands.registerCommand('pyneide.resumeRun', () => this.control('resume')),
@@ -159,6 +178,116 @@ export class RunService {
       name: `Debug ${path.basename(doc.uri.fsPath)}`,
       script: doc.uri.fsPath,
     });
+  }
+
+  /** Wire the chart manager (also the RunListener) so runs/previews can reveal
+   * panels and route data-only previews. */
+  attachChart(chartManager: ChartManager): void {
+    this.listener = chartManager;
+    this.chartManager = chartManager;
+  }
+
+  /** Resolve the pieces every chart/data action needs: the script doc, its
+   * workdir, and a ready Python interpreter. Undefined if anything is missing. */
+  private async resolveChartContext(
+    uri?: vscode.Uri
+  ): Promise<{ doc: vscode.TextDocument; workdir: string; pythonBin: string } | undefined> {
+    const doc = await this.resolveDocument(uri);
+    if (!doc) return undefined;
+    if (doc.languageId !== 'pine' && doc.languageId !== 'python') {
+      void vscode.window.showWarningMessage('PyneIDE: open a Pyne (.py) or Pine (.pine) script.');
+      return undefined;
+    }
+    const pythonBin = await this.manager.ensureReady(
+      'Selecting data needs the Python environment. Set it up now?'
+    );
+    if (!pythonBin) return undefined;
+    const workdir = await this.resolveOrInitWorkdir(doc, doc.uri.fsPath);
+    if (!workdir) return undefined;
+    return { doc, workdir, pythonBin };
+  }
+
+  /**
+   * Re-pick the OHLCV data bound to a script (its source path) without running.
+   * The choice is remembered, so the next run/chart-open uses it silently; if a
+   * chart is open for the script (and no run is streaming to it) its preview
+   * reloads on the new data. Returns the picked data name, or undefined.
+   */
+  async changeRunData(uri?: vscode.Uri): Promise<string | undefined> {
+    const ctx = await this.resolveChartContext(uri);
+    if (!ctx) return undefined;
+    const chartKey = ctx.doc.uri.fsPath;
+    const data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
+    if (data && this.activeChartKey !== chartKey) {
+      this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
+    }
+    return data;
+  }
+
+  /**
+   * Open (or focus) a script's chart and load its bound data as raw candles,
+   * before any run. First run for the script with no remembered data opens the
+   * picker; afterwards it loads silently.
+   */
+  async openChart(uri?: vscode.Uri): Promise<void> {
+    const ctx = await this.resolveChartContext(uri);
+    if (!ctx) return;
+    const chartKey = ctx.doc.uri.fsPath;
+    let data = getRememberedData(this.context, ctx.workdir, chartKey);
+    if (!data) {
+      data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
+    }
+    if (!data) return;
+    this.chartManager?.reveal(chartKey, path.basename(chartKey));
+    // A run already streaming to this chart owns it — don't fight it with a
+    // preview; the new data still takes effect on the next run.
+    if (this.activeChartKey !== chartKey) {
+      this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
+    }
+  }
+
+  /**
+   * Called when the chart's Data button is clicked (webview -> host): re-pick
+   * and reload the preview for the script bound to `chartKey`.
+   */
+  async reselectChartData(chartKey: string): Promise<void> {
+    const doc = await vscode.workspace.openTextDocument(chartKey).then(
+      (d) => d,
+      () => undefined
+    );
+    await this.changeRunData(doc?.uri);
+  }
+
+  /** Spawn (or replace) a data-only preview streaming raw candles to a chart. */
+  private startPreview(chartKey: string, workdir: string, pythonBin: string, data: string): void {
+    this.supersedePreview(chartKey);
+    let run: BridgeRun;
+    run = BridgeRun.start({
+      pythonBin,
+      bridgeRoot: vscode.Uri.joinPath(this.context.extensionUri, 'python').fsPath,
+      data,
+      workdir,
+      dataOnly: true,
+      onEvent: (event) => {
+        // A later preview or a real run may have superseded this one; drop its
+        // trailing events so they never land on a panel showing something else.
+        if (this.previewRuns.get(chartKey) === run) this.listener?.onEvent(event, chartKey);
+      },
+      onLog: (line) => this.output.appendLine(line),
+    });
+    this.previewRuns.set(chartKey, run);
+    void run.exited.then(() => {
+      if (this.previewRuns.get(chartKey) === run) this.previewRuns.delete(chartKey);
+    });
+  }
+
+  /** Stop the chart's active preview (if any) so it stops emitting events. */
+  private supersedePreview(chartKey: string): void {
+    const preview = this.previewRuns.get(chartKey);
+    if (preview) {
+      this.previewRuns.delete(chartKey);
+      preview.cancel();
+    }
   }
 
   private async resolveDocument(uri?: vscode.Uri): Promise<vscode.TextDocument | undefined> {
@@ -389,17 +518,20 @@ export class RunService {
       return undefined;
     }
 
-    let data = overrides?.data;
+    // Data is bound to the user's source file (the .pine, not the compiled .py),
+    // so it stays stable across recompiles and matches the chart's key (Part B).
+    const sourceKey = doc.uri.fsPath;
+    let data = overrides?.data ?? getRememberedData(this.context, workdir, sourceKey);
     if (!data) {
       this.output.appendLine(`Workdir resolved: ${workdir} — opening data picker.`);
-      data = await pickRunData(this.context, workdir, scriptPath, pythonBin, this.output);
+      data = await pickRunData(this.context, workdir, sourceKey, pythonBin, this.output);
     }
     if (!data) {
       this.output.appendLine('Run stopped: no data selected.');
       return undefined;
     }
 
-    return { pythonBin, scriptPath, data, workdir };
+    return { pythonBin, scriptPath, data, workdir, chartKey: sourceKey };
   }
 
   /**
@@ -669,9 +801,14 @@ export class RunService {
     scriptPath: string;
     data: string;
     workdir: string;
+    chartKey: string;
     debug?: { onEndpoint: (host: string, port: number) => void };
   }): Promise<void> {
     const scriptName = path.basename(opts.scriptPath);
+    const chartKey = opts.chartKey;
+    // A real run owns the chart: stop any data-only preview streaming to it.
+    this.supersedePreview(chartKey);
+    this.activeChartKey = chartKey;
     this.output.appendLine(
       `--- ${opts.debug ? 'Debug' : 'Run'}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
     );
@@ -746,7 +883,7 @@ export class RunService {
             cancelled = event.cancelled;
             break;
         }
-        this.listener?.onEvent(event);
+        this.listener?.onEvent(event, chartKey);
       },
       onLog: (line) => this.output.appendLine(line),
     });
@@ -754,10 +891,11 @@ export class RunService {
 
     const code = await run.exited;
     this.activeRun = undefined;
+    this.activeChartKey = undefined;
     this.debugControl?.setRunToBarTarget(undefined);
     this.flyToBar = undefined;
     this.setRunActive(false);
-    this.listener?.onFinished();
+    this.listener?.onFinished(chartKey);
     // The debuggee is gone; close the debug session with it.
     if (this.debugSession) {
       void vscode.debug.stopDebugging(this.debugSession);

@@ -1,5 +1,5 @@
 /**
- * Message protocol between the extension host (ChartPanelManager) and the
+ * Message protocol between the extension host (ChartPanel) and the
  * chart webview. A thin projection of the bridge events: the panel forwards,
  * the webview owns all chart state.
  */
@@ -16,4 +16,5 @@ export type ChartInMessage =
 
 export type ChartOutMessage =
   | { type: 'ready' }
-  | { type: 'openCsv'; which: 'plot' | 'trades' };
+  | { type: 'openCsv'; which: 'plot' | 'trades' }
+  | { type: 'selectData' };

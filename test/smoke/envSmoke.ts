@@ -439,6 +439,33 @@ async function main(): Promise<void> {
   if (errEvent) throw new Error(`bridge: error event: ${errEvent.message}`);
   log(`Bridge streamed ${barCount} bars`);
 
+  // Data-only chart preview: raw candles from demo.ohlcv, no script.
+  const doEvents: BridgeEvent[] = [];
+  const doRun = BridgeRun.start({
+    pythonBin,
+    bridgeRoot,
+    data: 'demo',
+    workdir: ws.workdir,
+    dataOnly: true,
+    batchSize: 50,
+    onEvent: (ev) => doEvents.push(ev),
+    onLog: (line) => log(`[bridge] ${line}`),
+  });
+  const doExit = await doRun.exited;
+  if (doExit !== 0) throw new Error(`data-only bridge exit code ${doExit}`);
+  const doStart = doEvents.find((ev): ev is Extract<BridgeEvent, { e: 'start' }> => ev.e === 'start');
+  if (!doStart || doStart.dataOnly !== true) throw new Error('data-only: start missing dataOnly flag');
+  if (!doStart.syminfo.ticker) throw new Error('data-only: start missing syminfo');
+  const doBars = doEvents
+    .filter((ev): ev is Extract<BridgeEvent, { e: 'bars' }> => ev.e === 'bars')
+    .reduce((n, ev) => n + ev.d.length, 0);
+  const doEnd = doEvents.find((ev): ev is Extract<BridgeEvent, { e: 'end' }> => ev.e === 'end');
+  if (!doEnd || doEnd.cancelled || doEnd.bars !== doBars || doBars === 0) {
+    throw new Error(`data-only: bad end state (bars=${doBars}, end=${JSON.stringify(doEnd)})`);
+  }
+  if (doEvents.some((ev) => ev.e === 'error')) throw new Error('data-only: error event');
+  log(`Data-only preview streamed ${doBars} raw candles`);
+
   await debugSmoke(pythonBin, bridgeRoot, ws.workdir);
   await conditionalBreakpointSmoke(pythonBin, bridgeRoot, ws.workdir);
 

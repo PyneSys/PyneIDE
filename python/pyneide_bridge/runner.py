@@ -260,6 +260,82 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                            batch_size=args.batch_size)
 
 
+def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
+    """Stream the raw .ohlcv candles for a chart preview — no ScriptRunner, no
+    plots. Lets a chart open on its bound data before any run, so the run only
+    overlays the plots later. Emits a `start` (with ``dataOnly: True``) + `bars`
+    + `end`; honours cancel so closing the chart / starting a real run stops it.
+    """
+    from pynecore.core.ohlcv_file import OHLCVReader
+    from pynecore.core.syminfo import SymInfo
+
+    workdir = Path(args.workdir).resolve()
+    data_path = _resolve_data(workdir, args.data)
+    syminfo = SymInfo.load_toml(data_path.with_suffix(".toml"))
+    mintick = getattr(syminfo, "mintick", None)
+
+    with OHLCVReader(data_path) as reader:
+        time_from_ts = int(args.time_from) if args.time_from is not None \
+            else int(reader.start_datetime.timestamp())
+        time_to_ts = int(args.time_to) if args.time_to is not None \
+            else int(reader.end_datetime.timestamp())
+        size = reader.get_size(time_from_ts, time_to_ts)
+
+        emitter.emit({
+            "e": "start",
+            "script": "",
+            "scriptTitle": None,
+            "scriptType": "indicator",
+            "overlay": True,
+            "dataOnly": True,
+            "syminfo": _serialize_syminfo(syminfo),
+            "data": str(data_path),
+            "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},
+            "outputs": {"plot": "", "strat": None, "trades": None},
+        })
+
+        # Raw .ohlcv floats carry float32 storage dust; snap to the symbol's
+        # mintick so the preview matches the price grid a run would render.
+        def rt(value: float) -> float:
+            if mintick and mintick > 0:
+                return round(round(value / mintick) * mintick, 10)
+            return value
+
+        batch: list[list[Any]] = []
+        bars_done = 0
+        last_flush = time.monotonic()
+        cancelled = False
+
+        def flush() -> None:
+            nonlocal batch, last_flush
+            if batch:
+                emitter.emit({"e": "bars", "d": batch})
+                batch = []
+            emitter.emit({"e": "progress", "done": bars_done, "total": size})
+            last_flush = time.monotonic()
+
+        for candle in reader.read_from(time_from_ts, time_to_ts):
+            if control.idle:
+                flush()
+            if not control.gate():
+                cancelled = True
+                break
+            bars_done += 1
+            batch.append([
+                int(candle.timestamp) * 1000,
+                num_or_none(rt(candle.open)), num_or_none(rt(candle.high)),
+                num_or_none(rt(candle.low)), num_or_none(rt(candle.close)),
+                num_or_none(candle.volume), None,
+            ])
+            if len(batch) >= args.batch_size or \
+                    time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
+                flush()
+
+        flush()
+        emitter.emit({"e": "end", "bars": bars_done, "cancelled": cancelled})
+        return 0
+
+
 def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 total_bars: int, is_strategy: bool, batch_size: int) -> int:
     from pynecore import lib

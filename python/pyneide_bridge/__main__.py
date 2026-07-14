@@ -30,11 +30,15 @@ def main() -> int:
     from .protocol import Emitter
 
     parser = argparse.ArgumentParser(prog="pyneide_bridge")
-    parser.add_argument("--script", required=True,
-                        help="Pyne .py script (bare name resolves in workdir/scripts)")
+    parser.add_argument("--script", default=None,
+                        help="Pyne .py script (bare name resolves in workdir/scripts); "
+                             "not required with --data-only")
     parser.add_argument("--data", required=True,
                         help=".ohlcv data file (bare name resolves in workdir/data)")
     parser.add_argument("--workdir", required=True, help="Resolved pyne workdir")
+    parser.add_argument("--data-only", action="store_true",
+                        help="Stream the raw .ohlcv candles without running a script "
+                             "(chart preview); ignores --script/--debugpy-port")
     parser.add_argument("--time-from", type=int, default=None,
                         help="Start of the run window (epoch seconds, UTC)")
     parser.add_argument("--time-to", type=int, default=None,
@@ -70,6 +74,24 @@ def main() -> int:
     # PYNE_WORK_DIR keeps pynecore-internal workdir discovery consistent with
     # the IDE's resolved workdir, whatever the folder is named.
     os.environ.setdefault("PYNE_WORK_DIR", args.workdir)
+
+    if args.data_only:
+        from .runner import run_data_only
+        try:
+            return run_data_only(args, emitter, control)
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+
+    if not args.script:
+        emitter.emit({"e": "error", "message": "--script is required for a run",
+                      "kind": "ValueError", "traceback": ""})
+        return 1
 
     if args.debugpy_port is not None:
         # Listen + wait BEFORE the user script is imported (the import hook

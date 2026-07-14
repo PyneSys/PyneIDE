@@ -1,8 +1,11 @@
 /**
- * Chart webview panel: owns the WebviewPanel lifecycle and forwards the
- * bridge event stream to the webview (see webview/main.ts for chart logic).
- * Messages are queued until the webview reports ready, so a run can start
- * streaming before the panel finished loading.
+ * Chart webview panels: one per script (keyed by the user's source path), so
+ * every script can have its own chart open at once. `ChartManager` owns the
+ * map and routes the bridge event stream (tagged with a chart key by
+ * RunService) to the right panel; `ChartPanel` owns a single WebviewPanel
+ * lifecycle and forwards events to its webview (see webview/main.ts for chart
+ * logic). Messages are queued until the webview reports ready, so a run can
+ * start streaming before the panel finished loading.
  */
 import * as vscode from 'vscode';
 
@@ -10,19 +13,25 @@ import type { BridgeEvent, StartEvent } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
 import type { ChartInMessage, ChartOutMessage } from './messages';
 
-export class ChartPanelManager implements RunListener {
+/** One chart webview, bound to a single script's chart key. */
+export class ChartPanel {
   private panel: vscode.WebviewPanel | undefined;
   private ready = false;
   private queue: ChartInMessage[] = [];
   private lastStart: StartEvent | undefined;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly onDispose: () => void,
+    private readonly onSelectData: () => void
+  ) {}
 
-  onEvent(event: BridgeEvent): void {
+  /** Route a bridge event (already known to belong to this chart) to the webview. */
+  handleEvent(event: BridgeEvent): void {
     switch (event.e) {
       case 'start':
         this.lastStart = event;
-        this.show(event.scriptTitle ?? undefined);
+        this.reveal(event.scriptTitle ?? undefined);
         this.post({ type: 'reset', start: event });
         break;
       case 'bars':
@@ -48,39 +57,10 @@ export class ChartPanelManager implements RunListener {
     }
   }
 
-  onFinished(): void {
-    // The 'end' event already closed out the chart state.
-  }
-
-  private handleOutMessage(msg: ChartOutMessage): void {
-    switch (msg.type) {
-      case 'ready':
-        this.ready = true;
-        for (const queued of this.queue) {
-          void this.panel?.webview.postMessage(queued);
-        }
-        this.queue = [];
-        break;
-      case 'openCsv': {
-        const file = msg.which === 'plot' ? this.lastStart?.outputs.plot : this.lastStart?.outputs.trades;
-        if (file) void vscode.window.showTextDocument(vscode.Uri.file(file));
-        break;
-      }
-    }
-  }
-
-  private post(message: ChartInMessage): void {
-    if (!this.panel) return;
-    if (!this.ready) {
-      this.queue.push(message);
-      return;
-    }
-    void this.panel.webview.postMessage(message);
-  }
-
-  private show(title?: string): void {
+  /** Create (if needed) and reveal the panel, optionally retitling it. */
+  reveal(title?: string): void {
     if (this.panel) {
-      this.panel.title = title ?? 'Pyne Chart';
+      if (title) this.panel.title = title;
       this.panel.reveal(undefined, true);
       return;
     }
@@ -101,7 +81,42 @@ export class ChartPanelManager implements RunListener {
       this.panel = undefined;
       this.ready = false;
       this.queue = [];
+      this.onDispose();
     });
+  }
+
+  dispose(): void {
+    this.panel?.dispose();
+  }
+
+  private handleOutMessage(msg: ChartOutMessage): void {
+    switch (msg.type) {
+      case 'ready':
+        this.ready = true;
+        for (const queued of this.queue) {
+          void this.panel?.webview.postMessage(queued);
+        }
+        this.queue = [];
+        break;
+      case 'openCsv': {
+        const file =
+          msg.which === 'plot' ? this.lastStart?.outputs.plot : this.lastStart?.outputs.trades;
+        if (file) void vscode.window.showTextDocument(vscode.Uri.file(file));
+        break;
+      }
+      case 'selectData':
+        this.onSelectData();
+        break;
+    }
+  }
+
+  private post(message: ChartInMessage): void {
+    if (!this.panel) return;
+    if (!this.ready) {
+      this.queue.push(message);
+      return;
+    }
+    void this.panel.webview.postMessage(message);
   }
 
   private html(webview: vscode.Webview, distRoot: vscode.Uri): string {
@@ -209,6 +224,8 @@ export class ChartPanelManager implements RunListener {
 </head>
 <body>
 <div id="toolbar">
+  <button id="tb-data" title="Select the OHLCV data for this script">Data</button>
+  <span class="sep"></span>
   <button id="tb-volume" title="Show/hide volume">Volume</button>
   <span class="sep"></span>
   <button id="tb-goto" title="Scroll the chart to a date/time">Go to date…</button>
@@ -236,5 +253,47 @@ export class ChartPanelManager implements RunListener {
 <script src="${scriptUri}"></script>
 </body>
 </html>`;
+  }
+}
+
+/**
+ * Owns one `ChartPanel` per script (keyed by chart key) and routes the run
+ * event stream to the matching panel. Implements RunListener: RunService tags
+ * every event with the chart key of the script being run.
+ */
+export class ChartManager implements RunListener {
+  private readonly panels = new Map<string, ChartPanel>();
+  /** Set by the host: invoked when a panel's Data button is clicked, with the
+   * script's chart key, to re-pick and reload that chart's data. */
+  onSelectData: ((chartKey: string) => void) | undefined;
+
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  onEvent(event: BridgeEvent, chartKey: string): void {
+    this.panelFor(chartKey).handleEvent(event);
+  }
+
+  onFinished(_chartKey: string): void {
+    // The 'end' event already closed out the chart state.
+  }
+
+  /** Open (or focus) a script's chart panel on demand — used by "Open chart". */
+  reveal(chartKey: string, title?: string): ChartPanel {
+    const panel = this.panelFor(chartKey);
+    panel.reveal(title);
+    return panel;
+  }
+
+  private panelFor(chartKey: string): ChartPanel {
+    let panel = this.panels.get(chartKey);
+    if (!panel) {
+      panel = new ChartPanel(
+        this.context,
+        () => this.panels.delete(chartKey),
+        () => this.onSelectData?.(chartKey)
+      );
+      this.panels.set(chartKey, panel);
+    }
+    return panel;
   }
 }

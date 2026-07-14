@@ -506,6 +506,7 @@ tabBodyEl?.addEventListener('click', (event) => {
 // --- Top toolbar: volume / go-to-date / CSV --------------------------------
 // Elements are absent in standalone test harnesses; every access is guarded.
 
+const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbVolumeEl = document.getElementById('tb-volume');
 const tbGotoEl = document.getElementById('tb-goto');
 const tbGotoBoxEl = document.getElementById('tb-goto-box');
@@ -514,9 +515,17 @@ const tbGotoDoEl = document.getElementById('tb-goto-do');
 const tbCsvPlotEl = document.getElementById('tb-csv-plot') as HTMLButtonElement | null;
 const tbCsvTradesEl = document.getElementById('tb-csv-trades') as HTMLButtonElement | null;
 
-/** Reflect current run state onto the toolbar (volume, CSV). */
+/** The data name shown on the Data button (bare stem of the .ohlcv path). */
+function dataLabel(dataPath?: string): string {
+  if (!dataPath) return 'Data';
+  const base = dataPath.split(/[\\/]/).pop() ?? dataPath;
+  return base.endsWith('.ohlcv') ? base.slice(0, -'.ohlcv'.length) : base;
+}
+
+/** Reflect current run state onto the toolbar (data, volume, CSV). */
 function syncToolbar(): void {
   const st = state;
+  if (tbDataEl) tbDataEl.textContent = dataLabel(st?.start.data);
   tbVolumeEl?.classList.toggle('active', st?.showVolume === true);
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
@@ -525,6 +534,8 @@ function syncToolbar(): void {
     tbCsvTradesEl.disabled = !hasTrades;
   }
 }
+
+tbDataEl?.addEventListener('click', () => vscode.postMessage({ type: 'selectData' }));
 
 tbVolumeEl?.addEventListener('click', () => {
   if (!state) return;

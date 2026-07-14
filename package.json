@@ -91,6 +91,20 @@
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
+        "command": "pyneide.changeRunData",
+        "title": "Select Data…",
+        "category": "PyneIDE",
+        "icon": "$(graph-line)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.openChart",
+        "title": "Open Chart",
+        "category": "PyneIDE",
+        "icon": "$(graph)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
         "command": "pyneide.pauseRun",
         "title": "Pause Run at Next Bar",
         "category": "PyneIDE",
@@ -145,6 +159,16 @@
           "command": "pyneide.debugScript",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.changeRunData",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@3"
+        },
+        {
+          "command": "pyneide.openChart",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@4"
         }
       ],
       "editor/title/run": [
@@ -157,6 +181,13 @@
           "command": "pyneide.debugScript",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "pyneide.openChart",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "navigation@1"
         }
       ],
       "debug/toolBar": [

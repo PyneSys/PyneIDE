@@ -51,13 +51,29 @@ function describeData(dataDir: string, name: string): string | undefined {
 }
 
 /**
+ * The data name remembered for a script (keyed by its source path), or
+ * undefined when nothing is remembered or the remembered `.ohlcv` is gone.
+ * Lets a run reuse the last choice silently instead of prompting every time.
+ */
+export function getRememberedData(
+  context: vscode.ExtensionContext,
+  workdir: string,
+  scriptKey: string
+): string | undefined {
+  const name = context.workspaceState.get<Record<string, string>>(LAST_DATA_KEY, {})[scriptKey];
+  if (!name) return undefined;
+  return fs.existsSync(path.join(workdir, 'data', `${name}.ohlcv`)) ? name : undefined;
+}
+
+/**
  * Pick (or download) the OHLCV data for a run. Returns the data name to pass
- * to the bridge (bare stem, resolved against `<workdir>/data`).
+ * to the bridge (bare stem, resolved against `<workdir>/data`). The choice is
+ * remembered per script (keyed by `scriptKey`, the user's source path).
  */
 export async function pickRunData(
   context: vscode.ExtensionContext,
   workdir: string,
-  scriptPath: string,
+  scriptKey: string,
   pythonBin: string,
   output: vscode.OutputChannel
 ): Promise<string | undefined> {
@@ -65,7 +81,7 @@ export async function pickRunData(
   for (;;) {
     const files = listOhlcv(dataDir);
     const lastMap = context.workspaceState.get<Record<string, string>>(LAST_DATA_KEY, {});
-    const last = lastMap[scriptPath];
+    const last = lastMap[scriptKey];
     files.sort((a, b) => (a.name === last ? -1 : b.name === last ? 1 : 0));
 
     const items: DataPickItem[] = files.map((f) => ({
@@ -90,14 +106,14 @@ export async function pickRunData(
     if (!picked) return undefined;
 
     if (picked.action === 'use' && picked.name) {
-      lastMap[scriptPath] = picked.name;
+      lastMap[scriptKey] = picked.name;
       await context.workspaceState.update(LAST_DATA_KEY, lastMap);
       return picked.name;
     }
 
     const downloaded = await downloadData(context, workdir, pythonBin, output);
     if (downloaded) {
-      lastMap[scriptPath] = downloaded;
+      lastMap[scriptKey] = downloaded;
       await context.workspaceState.update(LAST_DATA_KEY, lastMap);
       return downloaded;
     }
