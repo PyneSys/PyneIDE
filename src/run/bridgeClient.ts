@@ -62,6 +62,7 @@ export interface StartEvent {
 
 export type BridgeEvent =
   | { e: 'hello'; protocol: number; pid: number }
+  | { e: 'debugpy'; host: string; port: number }
   | StartEvent
   | { e: 'bars'; d: BarRow[] }
   | { e: 'plotKeys'; keys: string[] }
@@ -93,6 +94,12 @@ export interface BridgeRunOptions {
   /** Security data mappings, "TIMEFRAME=file" or "SYMBOL:TIMEFRAME=file". */
   security?: string[];
   batchSize?: number;
+  /**
+   * Start a debugpy listener in the bridge and wait for the IDE to attach
+   * before running the script (0 = pick a free port). The actual endpoint
+   * arrives in the `debugpy` event.
+   */
+  debugpyPort?: number;
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -129,6 +136,7 @@ export class BridgeRun {
     if (opts.timeframe) args.push('--timeframe', opts.timeframe);
     for (const sec of opts.security ?? []) args.push('--security', sec);
     if (opts.batchSize) args.push('--batch-size', String(opts.batchSize));
+    if (opts.debugpyPort !== undefined) args.push('--debugpy-port', String(opts.debugpyPort));
 
     const pythonPath = process.env.PYTHONPATH
       ? `${opts.bridgeRoot}${path.delimiter}${process.env.PYTHONPATH}`

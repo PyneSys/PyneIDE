@@ -152,7 +152,7 @@ function rowToBar(row: BarRow): PyneBar {
   };
 }
 
-function startRun(start: StartEvent, showVolume: boolean): void {
+function startRun(start: StartEvent): void {
   if (state) {
     dispose(state.chart);
   }
@@ -180,7 +180,7 @@ function startRun(start: StartEvent, showVolume: boolean): void {
     dirty: false,
     ended: false,
     plotPane: new Map(),
-    showVolume,
+    showVolume: false,
   };
   renderTables();
   const st = state;
@@ -201,7 +201,7 @@ function startRun(start: StartEvent, showVolume: boolean): void {
   chart.subscribeAction('onVisibleRangeChange', (data) =>
     updateRealtimeButton(data as VisibleRange)
   );
-  applyVolume(state, showVolume);
+  applyVolume(state, false);
   syncToolbar();
   updateRealtimeButton();
 }
@@ -514,7 +514,7 @@ const tbGotoDoEl = document.getElementById('tb-goto-do');
 const tbCsvPlotEl = document.getElementById('tb-csv-plot') as HTMLButtonElement | null;
 const tbCsvTradesEl = document.getElementById('tb-csv-trades') as HTMLButtonElement | null;
 
-/** Reflect current run state onto the toolbar (volume active, CSV availability). */
+/** Reflect current run state onto the toolbar (volume, CSV). */
 function syncToolbar(): void {
   const st = state;
   tbVolumeEl?.classList.toggle('active', st?.showVolume === true);
@@ -530,7 +530,6 @@ tbVolumeEl?.addEventListener('click', () => {
   if (!state) return;
   applyVolume(state, !state.showVolume);
   syncToolbar();
-  vscode.postMessage({ type: 'setShowVolume', value: state.showVolume });
 });
 
 tbGotoEl?.addEventListener('click', () => {
@@ -571,7 +570,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case 'reset':
-      startRun(msg.start, msg.showVolume);
+      startRun(msg.start);
       break;
     case 'bars': {
       if (!state) break;

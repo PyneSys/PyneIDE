@@ -12,8 +12,196 @@ import { execChecked } from '../../src/env/exec';
 import { venvPythonPath, managedVenvDir, pyneBinPath } from '../../src/env/uv';
 import { findWorkdir, resolveWorkdir, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { BridgeRun, type BridgeEvent } from '../../src/run/bridgeClient';
+import { DapClient } from './dapClient';
 
 const log = (msg: string): void => console.log(msg);
+
+function waitFor(check: () => boolean, what: string, timeoutMs = 60000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = (): void => {
+      if (check()) return resolve();
+      if (Date.now() - started > timeoutMs) return reject(new Error(`timeout: ${what}`));
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
+/** Pyne script with persistent + series state for the debug smoke test. */
+const DBGVARS_SCRIPT = `"""
+@pyne
+Debug variables smoke script
+"""
+from pynecore import Persistent, Series
+from pynecore.lib import script, close, plot
+
+
+@script.indicator(title="Debug Vars", overlay=True)
+def main():
+    counter: Persistent[int] = 0
+    counter += 1
+    smooth: Series[float] = close
+    avg = (smooth[0] + smooth[1]) / 2 if counter > 1 else close
+    plot(avg, title="avg")
+`;
+
+/**
+ * Debug round-trip: bridge with a debugpy listener + a raw DAP client.
+ * Covers the import-hook line-preservation contract (the breakpoint is set on
+ * a source line of the heavily AST-transformed script and must bind and stop
+ * exactly there, with locals visible) and the Pine state introspection the
+ * IDE-side DAP proxy uses: pyneide_bridge.debug_inspect.pine_slots must
+ * resolve the persistent/series slot names, and a slot evaluate must render
+ * through the SeriesImpl presentation plugin.
+ */
+async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string): Promise<void> {
+  const scriptPath = path.join(workdir, 'scripts', 'dbgvars.py');
+  fs.writeFileSync(scriptPath, DBGVARS_SCRIPT);
+  const scriptLines = DBGVARS_SCRIPT.split('\n');
+  // The breakpoint sits on the `avg = ...` line: by then the persistent
+  // increment and the series add of THIS bar ran, so `smooth` must be a
+  // visible local. (Known pynecore transform issue: the rewritten series-add
+  // statement itself carries fix_missing_locations fallback positions, so a
+  // breakpoint on the LAST source line fires early, mid-assignment — the
+  // plain statement lines used here are mapped correctly.)
+  const bpLine = scriptLines.findIndex((l) => l.includes('avg =')) + 1;
+  if (bpLine <= 0) throw new Error('debug: breakpoint anchor not found in dbgvars.py');
+
+  let endpoint: { host: string; port: number } | undefined;
+  const events: BridgeEvent[] = [];
+  const run = BridgeRun.start({
+    pythonBin,
+    bridgeRoot,
+    script: 'dbgvars',
+    data: 'demo',
+    workdir,
+    batchSize: 1,
+    debugpyPort: 0,
+    onEvent: (ev) => {
+      events.push(ev);
+      if (ev.e === 'debugpy') endpoint = ev;
+    },
+    onLog: (line) => log(`[debug-bridge] ${line}`),
+  });
+  await waitFor(() => endpoint !== undefined, 'debugpy endpoint from the bridge');
+
+  const dap = await DapClient.connect(endpoint!.host, endpoint!.port);
+  try {
+    await dap.request('initialize', {
+      adapterID: 'pyne',
+      pathFormat: 'path',
+      linesStartAt1: true,
+      columnsStartAt1: true,
+    });
+    // pydevd rejects an EMPTY arguments object on attach; VSCode always sends
+    // the resolved launch config here, so mirror that shape.
+    const attachDone = dap.request('attach', { justMyCode: false });
+    await dap.waitForEvent('initialized');
+    const setBp = (await dap.request('setBreakpoints', {
+      source: { path: scriptPath },
+      breakpoints: [{ line: bpLine }],
+    })) as { breakpoints: { verified: boolean; line?: number }[] };
+    if (!setBp.breakpoints[0]?.verified) {
+      throw new Error(`debug: breakpoint did not verify: ${JSON.stringify(setBp)}`);
+    }
+    await dap.request('configurationDone', {});
+    await attachDone;
+
+    const stopped = (await dap.waitForEvent('stopped')) as {
+      reason: string;
+      threadId: number;
+    };
+    if (stopped.reason !== 'breakpoint') {
+      throw new Error(`debug: unexpected stop reason: ${stopped.reason}`);
+    }
+    const stack = (await dap.request('stackTrace', { threadId: stopped.threadId })) as {
+      stackFrames: { id: number; line: number; name: string; source?: { path?: string } }[];
+    };
+    const frame = stack.stackFrames[0];
+    if (!frame || frame.line !== bpLine || !frame.source?.path?.endsWith('dbgvars.py')) {
+      throw new Error(
+        `debug: import hook broke line numbers — stopped at ` +
+          `${frame?.source?.path}:${frame?.line}, expected dbgvars.py:${bpLine}`
+      );
+    }
+    const scopes = (await dap.request('scopes', { frameId: frame.id })) as {
+      scopes: { name: string; variablesReference: number }[];
+    };
+    const locals = (await dap.request('variables', {
+      variablesReference: scopes.scopes[0].variablesReference,
+    })) as { variables: { name: string; value: string }[] };
+    const names = locals.variables.map((v) => v.name);
+    if (!names.includes('smooth')) {
+      throw new Error(`debug: 'smooth' local missing from the stopped frame: ${names.join(', ')}`);
+    }
+
+    // Pine state introspection, exactly as the IDE-side DAP proxy does it:
+    // the helper lists the named persistent/series slots of the frame...
+    const slotsEval = (await dap.request('evaluate', {
+      expression:
+        '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_slots"])' +
+        '.pine_slots(locals(), globals(), "main")',
+      frameId: frame.id,
+      context: 'watch',
+    })) as { result: string };
+    const b64 = /^'([A-Za-z0-9+/=]*)'$/.exec(slotsEval.result)?.[1];
+    if (b64 === undefined) {
+      throw new Error(`debug: pine_slots returned no base64 payload: ${slotsEval.result}`);
+    }
+    const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')) as {
+      context: { name: string; value: string; type: string }[];
+      slots: { name: string; param: string; slot: number; kind: string }[];
+    };
+    const counter = payload.slots.find((s) => s.name === 'counter');
+    const smooth = payload.slots.find((s) => s.name === 'smooth');
+    if (counter?.kind !== 'var' || smooth?.kind !== 'series') {
+      throw new Error(`debug: pine_slots missed the state names: ${JSON.stringify(payload)}`);
+    }
+    // The bar context leads the curated Locals: bar_index + OHLCV, read live
+    // off pynecore.lib. bar_index is the first thing a Pine dev looks for.
+    const barIndex = payload.context.find((c) => c.name === 'bar_index');
+    const closeCtx = payload.context.find((c) => c.name === 'close');
+    if (barIndex === undefined || !/^\d+$/.test(barIndex.value) || closeCtx === undefined) {
+      throw new Error(`debug: bar context missing bar_index/close: ${JSON.stringify(payload.context)}`);
+    }
+    // ...and the slots evaluate to live values: the persistent already
+    // incremented on this first bar, the series buffer renders through the
+    // SeriesImpl presentation plugin (pydevd_plugins/).
+    const counterEval = (await dap.request('evaluate', {
+      expression: `${counter.param}[${counter.slot}]`,
+      frameId: frame.id,
+      context: 'watch',
+    })) as { result: string };
+    if (counterEval.result !== '1') {
+      throw new Error(`debug: persistent slot value mismatch: ${counterEval.result}`);
+    }
+    const seriesEval = (await dap.request('evaluate', {
+      expression: `${smooth.param}[${smooth.slot}]`,
+      frameId: frame.id,
+      context: 'watch',
+    })) as { result: string };
+    if (!seriesEval.result.includes('Series(')) {
+      throw new Error(`debug: SeriesImpl presentation plugin inactive: ${seriesEval.result}`);
+    }
+
+    // Clear the (per-bar) breakpoint and let the run finish.
+    await dap.request('setBreakpoints', { source: { path: scriptPath }, breakpoints: [] });
+    await dap.request('continue', { threadId: stopped.threadId });
+  } finally {
+    dap.close();
+  }
+
+  const exitCode = await run.exited;
+  const end = events.find((ev) => ev.e === 'end');
+  if (exitCode !== 0 || !end || end.e !== 'end' || end.bars === 0 || end.cancelled) {
+    throw new Error(`debug: bad run end (exit=${exitCode}, end=${JSON.stringify(end)})`);
+  }
+  log(
+    `Debug smoke OK: breakpoint hit at dbgvars.py:${bpLine}, ` +
+      `bar context + pine slots resolved, ${end.bars} bars completed`
+  );
+}
 
 async function main(): Promise<void> {
   const storageDir =
@@ -89,6 +277,8 @@ async function main(): Promise<void> {
   const errEvent = byType('error')[0];
   if (errEvent) throw new Error(`bridge: error event: ${errEvent.message}`);
   log(`Bridge streamed ${barCount} bars`);
+
+  await debugSmoke(pythonBin, bridgeRoot, ws.workdir);
 
   // Project-root mode: the folder itself is the workdir, marked by setting.
   const rootBase = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-root-'));

@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { AuthService } from './api/auth';
 import { ChartPanelManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
+import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
@@ -59,7 +60,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const runService = new RunService(context, manager, compileService);
   runService.register();
-  runService.listener = new ChartPanelManager(context);
+  registerPyneDebug(context, runService);
+  const chartManager = new ChartPanelManager(context);
+  runService.listener = chartManager;
 
   void initialCheck(context, manager);
 }

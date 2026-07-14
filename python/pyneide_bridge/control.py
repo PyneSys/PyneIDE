@@ -26,6 +26,12 @@ class Control:
         self._paused = False
         self._cancelled = False
         self._step_budget = 0
+        # "Run to bar N": when set, the feed self-pauses once it has processed
+        # this many bars. Checked on the FEED thread (note_bar), so — unlike an
+        # stdin pause, which the reader thread cannot deliver while pydevd has
+        # every thread suspended at a breakpoint — it is race-free: the debugger
+        # sets it via an `evaluate` before releasing the run (see request_runto).
+        self._runto: int | None = None
         # True whenever the main loop must leave the hot path.
         self.idle = False
         self._on_state = on_state
@@ -34,8 +40,27 @@ class Control:
         self.idle = self._paused or self._cancelled
         self._cond.notify_all()
 
+    def set_runto(self, bar: int | None) -> None:
+        with self._cond:
+            self._runto = bar
+
+    def note_bar(self, bars_done: int) -> None:
+        """Feed-thread hook, called after each processed bar. Self-pauses the
+        run once the run-to-bar target is reached — race-free because it runs on
+        the feed thread, not via stdin."""
+        with self._cond:
+            if self._runto is not None and bars_done >= self._runto:
+                self._runto = None
+                if not self._paused:
+                    self._paused = True
+                    self._step_budget = 0
+                    self._wake()
+                    if self._on_state:
+                        self._on_state("paused")
+
     def pause(self) -> None:
         with self._cond:
+            self._runto = None
             if not self._paused:
                 self._paused = True
                 self._step_budget = 0
@@ -45,6 +70,7 @@ class Control:
 
     def resume(self) -> None:
         with self._cond:
+            self._runto = None
             if self._paused:
                 self._paused = False
                 self._step_budget = 0
@@ -54,12 +80,14 @@ class Control:
 
     def step(self, bars: int) -> None:
         with self._cond:
+            self._runto = None
             if self._paused and bars > 0:
                 self._step_budget = bars
                 self._cond.notify_all()
 
     def cancel(self) -> None:
         with self._cond:
+            self._runto = None
             self._cancelled = True
             self._wake()
 
@@ -83,6 +111,21 @@ class Control:
                     self._step_budget -= 1
                     return True
                 self._cond.wait()
+
+
+# The live Control of the current run, published so the IDE-side debug proxy can
+# reach it with an `evaluate` while the debuggee is suspended at a breakpoint
+# (stdin is dead then — pydevd has every thread frozen). request_runto is the
+# race-free way to arm "run to bar N": it runs in-process, on the debuggee.
+ACTIVE_CONTROL: Control | None = None
+
+
+def request_runto(bar: int) -> bool:
+    """Arm the active run's run-to-bar target. Returns True if a run is live."""
+    if ACTIVE_CONTROL is None:
+        return False
+    ACTIVE_CONTROL.set_runto(bar)
+    return True
 
 
 def start_stdin_reader(control: Control) -> threading.Thread:

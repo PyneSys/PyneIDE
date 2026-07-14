@@ -25,6 +25,7 @@ def main() -> int:
     proto_stream = _hijack_stdout()
 
     from . import PROTOCOL_VERSION
+    from . import control as control_module
     from .control import Control, start_stdin_reader
     from .protocol import Emitter
 
@@ -45,12 +46,17 @@ def main() -> int:
                         help='Security data mapping: "TIMEFRAME=file" or "SYMBOL:TIMEFRAME=file"')
     parser.add_argument("--batch-size", type=int, default=500,
                         help="Bars per NDJSON flush")
+    parser.add_argument("--debugpy-port", type=int, default=None,
+                        help="Start a debugpy listener on this port (0 = pick a free "
+                             "one) and wait for the IDE to attach before running")
     args = parser.parse_args()
 
     emitter = Emitter(proto_stream)
     emitter.emit({"e": "hello", "protocol": PROTOCOL_VERSION, "pid": os.getpid()})
 
     control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
+    # Publish for the debug proxy's run-to-bar evaluate (see control.request_runto).
+    control_module.ACTIVE_CONTROL = control
     start_stdin_reader(control)
 
     # SIGTERM/SIGINT stop the run at the next bar boundary so the runner's
@@ -64,6 +70,17 @@ def main() -> int:
     # PYNE_WORK_DIR keeps pynecore-internal workdir discovery consistent with
     # the IDE's resolved workdir, whatever the folder is named.
     os.environ.setdefault("PYNE_WORK_DIR", args.workdir)
+
+    if args.debugpy_port is not None:
+        # Listen + wait BEFORE the user script is imported (the import hook
+        # transform runs at import), so breakpoints set during the DAP
+        # handshake bind before any user code executes. Safe after the fd
+        # hijack: the adapter subprocess inherits fd 1 already pointing at
+        # stderr, so it cannot corrupt the NDJSON stream.
+        import debugpy
+        host, port = debugpy.listen(("127.0.0.1", args.debugpy_port))
+        emitter.emit({"e": "debugpy", "host": host, "port": port})
+        debugpy.wait_for_client()
 
     from .runner import run
     try:

@@ -23,7 +23,7 @@ export class ChartPanelManager implements RunListener {
       case 'start':
         this.lastStart = event;
         this.show(event.scriptTitle ?? undefined);
-        this.post({ type: 'reset', start: event, showVolume: this.showVolume() });
+        this.post({ type: 'reset', start: event });
         break;
       case 'bars':
         this.post({ type: 'bars', rows: event.d });
@@ -52,10 +52,6 @@ export class ChartPanelManager implements RunListener {
     // The 'end' event already closed out the chart state.
   }
 
-  private showVolume(): boolean {
-    return vscode.workspace.getConfiguration('pyneide').get<boolean>('chart.showVolume', false);
-  }
-
   private handleOutMessage(msg: ChartOutMessage): void {
     switch (msg.type) {
       case 'ready':
@@ -68,16 +64,6 @@ export class ChartPanelManager implements RunListener {
       case 'openCsv': {
         const file = msg.which === 'plot' ? this.lastStart?.outputs.plot : this.lastStart?.outputs.trades;
         if (file) void vscode.window.showTextDocument(vscode.Uri.file(file));
-        break;
-      }
-      case 'setShowVolume': {
-        // Persist the toolbar toggle so the next run keeps the choice.
-        const target = vscode.workspace.workspaceFolders?.length
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global;
-        void vscode.workspace
-          .getConfiguration('pyneide')
-          .update('chart.showVolume', msg.value, target);
         break;
       }
     }

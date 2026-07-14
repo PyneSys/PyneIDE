@@ -6,7 +6,7 @@
 import type { BarRow, StartEvent, TradeRecord } from '../run/bridgeClient';
 
 export type ChartInMessage =
-  | { type: 'reset'; start: StartEvent; showVolume: boolean }
+  | { type: 'reset'; start: StartEvent }
   | { type: 'bars'; rows: BarRow[] }
   | { type: 'plotKeys'; keys: string[] }
   | { type: 'trades'; trades: TradeRecord[] }
@@ -16,5 +16,4 @@ export type ChartInMessage =
 
 export type ChartOutMessage =
   | { type: 'ready' }
-  | { type: 'openCsv'; which: 'plot' | 'trades' }
-  | { type: 'setShowVolume'; value: boolean };
+  | { type: 'openCsv'; which: 'plot' | 'trades' };

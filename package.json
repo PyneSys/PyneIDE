@@ -30,7 +30,8 @@
   "activationEvents": [
     "onStartupFinished",
     "onLanguage:python",
-    "onLanguage:pine"
+    "onLanguage:pine",
+    "onDebugDynamicConfigurations:pyne"
   ],
   "contributes": {
     "commands": [
@@ -81,6 +82,51 @@
         "category": "PyneIDE",
         "icon": "$(play)",
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.debugScript",
+        "title": "Debug Script",
+        "category": "PyneIDE",
+        "icon": "$(debug-alt)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.pauseRun",
+        "title": "Pause Run at Next Bar",
+        "category": "PyneIDE",
+        "enablement": "pyneide.runActive && !pyneide.runPaused"
+      },
+      {
+        "command": "pyneide.resumeRun",
+        "title": "Resume Run",
+        "category": "PyneIDE",
+        "enablement": "pyneide.runPaused"
+      },
+      {
+        "command": "pyneide.stepBar",
+        "title": "Next Bar",
+        "category": "PyneIDE",
+        "icon": "$(triangle-right)",
+        "enablement": "pyneide.runActive"
+      },
+      {
+        "command": "pyneide.runToBar",
+        "title": "Run to Bar…",
+        "category": "PyneIDE",
+        "icon": "$(run-below)",
+        "enablement": "pyneide.runActive"
+      },
+      {
+        "command": "pyneide.cancelRun",
+        "title": "Cancel Run",
+        "category": "PyneIDE",
+        "enablement": "pyneide.runActive"
+      },
+      {
+        "command": "pyneide.runControlMenu",
+        "title": "Run Controls",
+        "category": "PyneIDE",
+        "enablement": "pyneide.runActive"
       }
     ],
     "menus": {
@@ -94,6 +140,11 @@
           "command": "pyneide.runScript",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "pyneide@0"
+        },
+        {
+          "command": "pyneide.debugScript",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@2"
         }
       ],
       "editor/title/run": [
@@ -101,9 +152,101 @@
           "command": "pyneide.runScript",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.debugScript",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "navigation@2"
+        }
+      ],
+      "debug/toolBar": [
+        {
+          "command": "pyneide.stepBar",
+          "when": "debugType == pyne && pyneide.runActive",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.runToBar",
+          "when": "debugType == pyne && pyneide.runActive",
+          "group": "navigation@2"
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "python"
+      },
+      {
+        "language": "pine"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "pyne",
+        "label": "Pyne",
+        "languages": [
+          "python",
+          "pine"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "script": {
+                "type": "string",
+                "description": "Pyne (.py) or Pine (.pine) script to debug. Defaults to the active editor.",
+                "default": "${file}"
+              },
+              "data": {
+                "type": "string",
+                "description": "OHLCV data file (bare name resolves in <workdir>/data). When omitted, the data picker opens."
+              },
+              "justMyCode": {
+                "type": "boolean",
+                "description": "Restrict debugging to the script's own code (PyneCore internals are stepped over). Overrides the pyneide.debug.justMyCode setting."
+              },
+              "variablePresentation": {
+                "type": "object",
+                "description": "debugpy variable presentation (all/special/function/class/protected -> group | inline | hide). PyneIDE defaults to grouping everything but the script's own values."
+              }
+            }
+          },
+          "attach": {
+            "properties": {
+              "connect": {
+                "type": "object",
+                "description": "debugpy endpoint of an already running bridge (host, port). Normally filled in automatically by PyneIDE.",
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "number"
+                  }
+                }
+              },
+              "justMyCode": {
+                "type": "boolean"
+              },
+              "variablePresentation": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "Pyne: Debug Script",
+            "description": "Debug the current Pyne/Pine script with the PyneIDE runner",
+            "body": {
+              "type": "pyne",
+              "request": "launch",
+              "name": "Debug Pyne Script",
+              "script": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "PyneIDE",
       "properties": {
@@ -143,11 +286,11 @@
           "scope": "resource",
           "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
         },
-        "pyneide.chart.showVolume": {
+        "pyneide.debug.justMyCode": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "scope": "resource",
-          "markdownDescription": "Show a volume pane on the chart. Off by default: PyneIDE is an indicator/strategy development tool, not a trading terminal, so the chart stays focused on price and the script's own plots. When enabled, volume is drawn as a plain histogram without moving-average lines."
+          "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
         }
       }
     },

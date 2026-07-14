@@ -247,6 +247,9 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
             candle = item[0]
             plot_data = item[1]
             bars_done += 1
+            # Race-free run-to-bar: self-pause on the feed thread once the target
+            # is reached (armed by the debug proxy via control.request_runto).
+            control.note_bar(bars_done)
 
             # lib.* holds the mintick-rounded values of the current bar
             # (raw .ohlcv floats carry float32 storage dust).

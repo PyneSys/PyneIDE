@@ -4,10 +4,13 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F3 kész** — runner-bridge (NDJSON + vezérlés), Run
-parancs/CodeLens, KLineChart webview (plotok, trade-markerek, equity,
-trade/stats táblák), adatválasztó + download; élő EDH-teszt OK (2026-07-12).
-Következő: F4 (Pyne debugger).
+**Aktuális fázis: F4 v2 (EDH-visszajelzések bedolgozva)** — `pyne` debug type
+(debugpy, ms-python nélkül) + DAP-proxy: nevesített Persistent/Series
+változók a Locals tetején, belső zaj csoportokba rejtve
+(variablePresentation), bar-vezérlés a debug toolbaron és breakpointon állva
+is működik, progress-notification törölve (2026-07-13). Ismert blokkoló:
+PyneCore transzformer sorszám-hiba (lásd F4 megjegyzés). Következő:
+felhasználói EDH-újrateszt, PyneCore-javítás, aztán F5.
 
 ---
 
@@ -173,10 +176,50 @@ pynecore `_PYNE_HEAD_RE`-hez igazítva (`\s*` a nyitó idézőjel után).
 
 ## F4 — Pyne debugger (M)
 
-- [ ] debugpy launch-konfiguráció (venv, workdir, adatforrás)
-- [ ] Import-hook sorszám-megőrzés smoke-teszt
-- [ ] Bar-szintű vezérlés v1 ("Run to next bar" / "Run to bar N")
-- [ ] Series/Persistent változó-megjelenítés a Variables panelben
+- [x] debugpy launch-konfiguráció (implementálva 2026-07-13): saját `pyne`
+      debug type, ms-python függőség NÉLKÜL — a bridge `--debugpy-port`-tal
+      debugpy listenert indít és megvárja a csatlakozást a script importja
+      előtt; az extension `DebugAdapterServer`-rel közvetlenül a listenerre
+      köt (a debugpy maga a DAP-szerver). Launch.json támogatás (`script`,
+      `data`, `justMyCode` propertyk) + Debug CodeLens/editor-title gomb;
+      "Run Without Debugging" sima runra esik vissza. `pyneide.debug.justMyCode`
+      beállítás; a bridge-csomag `rules` kizárással kimarad a step-útvonalból.
+- [x] Import-hook sorszám-megőrzés smoke-teszt (2026-07-13, v2): headless
+      DAP-kliens a `test:env`-ben — saját `dbgvars.py` (Persistent + Series),
+      breakpoint az `avg = ...` soron, megállás pont ott, `smooth` local
+      látható, pine_slots névfeloldás + slot-evaluate OK, futás végigmegy.
+- [x] Bar-szintű vezérlés v2 (2026-07-13, EDH-visszajelzés után): Next Bar /
+      Run to Bar… a DEBUG TOOLBARON (`debug/toolBar` menü, debugType == pyne);
+      breakpointon állva is működnek (feed-pause felhúzás + DAP continue;
+      run-to-bar közben a közbülső breakpoint-megállások auto-continue-t
+      kapnak a célbarig). Chart-toolbar Pause/Next bar gombok TÖRÖLVE (nem
+      chart-funkció), a folyamatosan pörgő progress-notification TÖRÖLVE
+      (status bar elem marad: bar-számláló + vezérlőmenü). Debug módban
+      baronkénti flush (batchSize=1).
+- [x] Változó-megjelenítés v2 (2026-07-13): DAP-proxy
+      (`src/debug/dapProxy.ts`, DebugAdapterInlineImplementation) a VSCode és
+      a debugpy közé — a Locals scope-ba beinjektálja a NEVESÍTETT
+      Persistent/Series változókat (a `pyneide_bridge/debug_inspect.py`
+      `pine_slots` helper a stopped frame-ben, `__pyne_slot_layout__` names
+      alapján oldja fel a slotokat; evaluate-tel jön az érték + expand-ref).
+      `variablePresentation: {all: group}` alapértelmezés: function/class/
+      dunder zaj összecsukott csoportokba. A pydevd SeriesImpl-plugin
+      (`python/pydevd_plugins/`) marad a bufferek renderelésére.
+- [x] ! PyneCore transzformer sorszám-hiba JAVÍTVA (2026-07-13, KÜLSŐ repo:
+      pynecore, commit még nincs): két megnyilvánulása volt. (1) A hely
+      nélkül épített node-okra a `fix_missing_locations` a szülő FunctionDef
+      teljes tartományát örökítette -> a prológus bytecode egy része az
+      UTOLSÓ sorra képződött le (utolsó sori breakpoint minden bar elején,
+      korábban állt meg). (2) A `FunctionIsolationTransformer._copy_callee`
+      `ast.parse`-szal épített callee-másolata `lineno=1`-et hordozott -> a
+      lazy `__resolve_slot__` ág (csak bar 0!) közepén line-1 esemény:
+      dupla breakpoint-találat + nemlétező sorra ugró Step Over.
+      Javítás: `_copy_callee` `ast.copy_location`-nel bélyegez + új
+      `transformers/locations.py` `fix_locations()` (pont-horgonyos
+      fix_missing_locations-csere az import_hookban és a két pipeline-
+      közbeni hívónál). A managed venv 6.5.7-je kézzel bepatchelve a
+      teszthez — pynecore release után törölhető a patch.
+      Diagnózis: `PYNE_AST_DEBUG_RAW=1` + `dis.get_instructions(main.__code__)`.
 
 ## F5 — Sourcemap a PyneComp-ban + API-kiterjesztés (M, külső repo)
 
