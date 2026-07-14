@@ -231,12 +231,23 @@ export class RunService {
         { path: '**/pyneide_bridge/**', include: false },
         { path: '**/pynecore/**', include: false },
       ],
-      // No variablePresentation: the DAP proxy drops the Globals scope and
-      // filters Locals itself, so pydevd's flat list is exactly what the
-      // curation wants (grouping is only honored if a launch.json sets it).
-      ...(config.variablePresentation
-        ? { variablePresentation: config.variablePresentation }
-        : {}),
+      // Methods and class-valued attributes are noise when expanding a value, so
+      // pydevd hides them globally. `special` (dunders) and `protected` (`_name`)
+      // are INLINE, not hidden: PyneComp emits meaningful dunder locals
+      // (`__block_result__`, `__switch__`, ...) and `_name`-renamed params
+      // (`_type`), all of which the developer needs — the DAP proxy curates the
+      // frame (drops only the `__state__` plumbing) and strips dunder noise from
+      // object expansions itself, which a single global flag can't separate.
+      // NB: debugpy defaults every unset key to `all` ("group"), not pydevd's
+      // per-key default, so protected/special MUST be set explicitly. launch.json
+      // can override any group.
+      variablePresentation: {
+        special: 'inline',
+        protected: 'inline',
+        function: 'hide',
+        class: 'hide',
+        ...((config.variablePresentation as Record<string, unknown> | undefined) ?? {}),
+      },
     };
   }
 

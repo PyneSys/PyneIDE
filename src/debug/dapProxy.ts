@@ -313,6 +313,28 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       return; // never forwarded to the client
     }
 
+    // Pine-style NA presentation on everything headed for the client: the
+    // parametrized repr moves into the type column, the value reads `na`, the
+    // node is not expandable (its children would be CPython internals).
+    if (msg.type === 'response' && msg.success && msg.body) {
+      if (msg.command === 'variables' && Array.isArray(msg.body.variables)) {
+        // Object expansions (everything but the Locals scope, which enrichLocals
+        // curates) drop CPython dunder attributes — `special:'inline'` surfaces
+        // them so the frame's PyneComp `__block_result__` locals show, but on an
+        // expanded value they are just noise.
+        const isLocalsScope =
+          typeof msg.request_seq === 'number' && this.pendingLocals.has(msg.request_seq);
+        if (!isLocalsScope) {
+          msg.body.variables = (msg.body.variables as Record<string, unknown>[]).filter(
+            (v) => typeof v.name !== 'string' || !isDunder(v.name)
+          );
+        }
+        normalizeNaVariables(msg.body.variables as Record<string, unknown>[]);
+      } else if (msg.command === 'evaluate') {
+        normalizeNaEvaluate(msg.body);
+      }
+    }
+
     if (msg.type === 'response' && typeof msg.request_seq === 'number') {
       const seq = msg.request_seq;
       if (this.pendingStackTrace.delete(seq) && msg.success) {
@@ -481,46 +503,74 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     } catch {
       entries = [];
     }
+    const variables = entries.map((e) => ({
+      name: e.name,
+      value: e.value,
+      type: e.type,
+      variablesReference: 0,
+      presentationHint: { kind: 'data' },
+    }));
+    normalizeNaVariables(variables);
     this.emit({
       seq: this.syntheticSeq++,
       type: 'response',
       request_seq: requestSeq,
       success: true,
       command: 'variables',
-      body: {
-        variables: entries.map((e) => ({
-          name: e.name,
-          value: e.value,
-          type: e.type,
-          variablesReference: 0,
-          presentationHint: { kind: 'data' },
-        })),
-      },
+      body: { variables },
     });
   }
 
   private async enrichLocals(frameId: number, msg: DapMessage): Promise<void> {
     const body = msg.body as { variables: Record<string, unknown>[] };
-    // Curate the raw Locals: hide the transform's hidden state params and
-    // dunders (`__state__`, `__state·main__`, `__builtins__`, ...) and any
-    // pydevd group pseudo-nodes ("special variables" — a space no identifier
-    // can have). What remains is the script's own plain locals.
+    // Curate the raw Locals: hide the transform's hidden state param
+    // (`__state__`, `__state·main__`) and any pydevd group pseudo-nodes
+    // ("special variables" — a space no identifier can have). What remains is
+    // the script's own locals, including PyneComp's `__block_result__` etc.
     const userLocals = body.variables.filter(
       (v) => typeof v.name === 'string' && !isJunkLocal(v.name)
     );
     try {
       // The scope's named persistent/series state leads, then the real locals.
+      // A state slot whose name is also a real local of this frame (a series
+      // assignment keeps the current value in the variable's own name) is ONE
+      // variable to the user: the plain local's value stays behind the equals
+      // sign, and for a series the entry expands into the slot's history
+      // instead of listing twice.
       const injected = await this.pineSlotVariables(frameId);
-      body.variables = [...injected, ...userLocals];
+      const localIndex = new Map<string, number>();
+      userLocals.forEach((v, i) => localIndex.set(String(v.name), i));
+      const merged = new Set<number>();
+      const lead: Record<string, unknown>[] = [];
+      for (const { slot, variable } of injected) {
+        const idx = slot.own ? localIndex.get(slot.name) : undefined;
+        if (idx === undefined) {
+          lead.push(variable);
+          continue;
+        }
+        merged.add(idx);
+        lead.push({
+          ...userLocals[idx],
+          ...(slot.kind === 'series'
+            ? { variablesReference: variable.variablesReference ?? 0 }
+            : {}),
+        });
+      }
+      body.variables = [...lead, ...userLocals.filter((_, i) => !merged.has(i))];
     } catch {
       // Enrichment is best-effort: on failure the filtered Locals still pass.
       body.variables = userLocals;
     }
+    // The injected entries come from own-seq evaluates the client-facing NA
+    // pass never saw.
+    normalizeNaVariables(body.variables);
     this.emit(msg);
   }
 
   /** The frame's named persistent/series state slots as Locals variables. */
-  private async pineSlotVariables(frameId: number): Promise<Record<string, unknown>[]> {
+  private async pineSlotVariables(
+    frameId: number
+  ): Promise<{ slot: PineSlot; variable: Record<string, unknown> }[]> {
     const generation = this.stopGeneration;
     let slotsPromise = this.pineSlotsCache.get(frameId);
     if (!slotsPromise) {
@@ -542,13 +592,16 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           ];
           const suffix = suffixParts.length ? ` (${suffixParts.join(', ')})` : '';
           return {
-            name: `${slot.name}${suffix}`,
-            value: String(body.result ?? ''),
-            type: typeof body.type === 'string' ? body.type : undefined,
-            variablesReference:
-              typeof body.variablesReference === 'number' ? body.variablesReference : 0,
-            evaluateName: expr,
-            presentationHint: { kind: 'data' },
+            slot,
+            variable: {
+              name: `${slot.name}${suffix}`,
+              value: String(body.result ?? ''),
+              type: typeof body.type === 'string' ? body.type : undefined,
+              variablesReference:
+                typeof body.variablesReference === 'number' ? body.variablesReference : 0,
+              evaluateName: expr,
+              presentationHint: { kind: 'data' },
+            },
           };
         } catch {
           return undefined;
@@ -703,10 +756,49 @@ function slotExpression(slot: PineSlot): string {
 
 /**
  * A top-level Locals entry that is Python plumbing rather than script state:
- * the transform's hidden `__state__` params and any dunder, plus pydevd's
- * group pseudo-nodes ("special variables" — the space gives them away, no
- * Python identifier has one).
+ * the transform's hidden state param (`__state__`, or scope-qualified
+ * `__state·main__`) plus pydevd's group pseudo-nodes ("special variables" — the
+ * space gives them away, no Python identifier has one). Everything else stays,
+ * including PyneComp's own dunder-named locals (`__block_result__`, `__switch__`,
+ * `__eval__`, ...) which are meaningful script variables, not plumbing.
  */
 function isJunkLocal(name: string): boolean {
-  return name.startsWith('__') || name.includes(' ');
+  return name === '__state__' || name.startsWith('__state·') || name.includes(' ');
+}
+
+/** A CPython dunder attribute (`__class__`, `__dict__`, `__doc__`, ...). */
+function isDunder(name: string): boolean {
+  return name.startsWith('__') && name.endsWith('__');
+}
+
+/** repr of a pynecore NA sentinel: `NA` or a parametrized `NA[float]`. */
+const NA_REPR = /^NA(\[\w+\])?$/;
+
+/**
+ * Present a pynecore NA the way Pine reads it: the parametrized repr
+ * (`NA[float]`) moves into the type column, the value is a plain `na`, and
+ * the node is not expandable — its children would only be CPython internals
+ * (`_type_cache`, dunders, methods).
+ */
+function normalizeNaVariables(variables: Record<string, unknown>[]): void {
+  for (const v of variables) {
+    if (v.type === 'NA' && typeof v.value === 'string' && NA_REPR.test(v.value)) {
+      v.type = v.value;
+      v.value = 'na';
+      v.variablesReference = 0;
+      delete v.namedVariables;
+      delete v.indexedVariables;
+    }
+  }
+}
+
+/** The same NA presentation for evaluate results (watch, hover, repl). */
+function normalizeNaEvaluate(body: Record<string, unknown>): void {
+  if (body.type === 'NA' && typeof body.result === 'string' && NA_REPR.test(body.result)) {
+    body.type = body.result;
+    body.result = 'na';
+    body.variablesReference = 0;
+    delete body.namedVariables;
+    delete body.indexedVariables;
+  }
 }
