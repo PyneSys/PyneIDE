@@ -67,7 +67,7 @@ export function registerPyneDebug(
         return runService.resolveDebugLaunch(folder, config);
       },
     }),
-    // Dynamic provider: offers "Debug Pyne Script" in the Run and Debug
+    // Dynamic provider: offers "Debug Pyne code" in the Run and Debug
     // dropdown / Quick Pick and lets the green button start a session without
     // ever writing a launch.json.
     vscode.debug.registerDebugConfigurationProvider(
@@ -86,7 +86,7 @@ function initialConfiguration(): vscode.DebugConfiguration {
   return {
     type: 'pyne',
     request: 'launch',
-    name: 'Debug Pyne Script',
+    name: 'Debug Pyne code',
     script: '${file}',
   };
 }

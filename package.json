@@ -78,14 +78,14 @@
       },
       {
         "command": "pyneide.runScript",
-        "title": "Run Script",
+        "title": "Run Pyne code",
         "category": "PyneIDE",
         "icon": "$(play)",
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
         "command": "pyneide.debugScript",
-        "title": "Debug Script",
+        "title": "Debug Pyne code",
         "category": "PyneIDE",
         "icon": "$(debug-alt)",
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
@@ -235,12 +235,12 @@
         },
         "configurationSnippets": [
           {
-            "label": "Pyne: Debug Script",
+            "label": "Pyne: Debug Pyne code",
             "description": "Debug the current Pyne/Pine script with the PyneIDE runner",
             "body": {
               "type": "pyne",
               "request": "launch",
-              "name": "Debug Pyne Script",
+              "name": "Debug Pyne code",
               "script": "^\"\\${file}\""
             }
           }

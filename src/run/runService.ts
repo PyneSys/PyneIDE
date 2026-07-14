@@ -767,7 +767,7 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
       doc.languageId === 'python' &&
       detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined
     ) {
-      title = '$(play) Run Pyne Script';
+      title = '$(play) Run Pyne code';
     }
     if (!title) return [];
     const range = new vscode.Range(0, 0, 0, 0);
