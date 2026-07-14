@@ -7,6 +7,7 @@ job (F2) — this module only runs ``.py`` Pyne scripts against ``.ohlcv`` data.
 
 from __future__ import annotations
 
+import ast
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,47 @@ def _serialize_syminfo(syminfo: Any) -> dict[str, Any]:
         if isinstance(value, (str, bool, int, float)):
             out[slot] = sanitize(value)
     return out
+
+
+def _main_location(runner: Any) -> tuple[str, int] | None:
+    """Source file + line of the first meaningful statement in the script's
+    ``main`` — the anchor for the debugger's hidden "bar stop" breakpoint (stop
+    at the top of every bar, on real code, not the ``def``/decorator line).
+
+    The AST's first non-docstring statement fixes the floor (a Persistent/Series
+    init carries no bytecode of its own, so its line never binds); the first
+    ``co_lines`` entry at or past that floor is the real executable line the
+    breakpoint lands on."""
+    try:
+        code = runner.script_module.main.__code__
+        filename = code.co_filename
+        tree = ast.parse(Path(filename).read_text(encoding="utf-8"), filename)
+        fn = next(
+            (n for n in tree.body
+             if isinstance(n, ast.FunctionDef) and n.name == "main"),
+            None,
+        )
+        if fn is None or not fn.body:
+            return None
+        body = fn.body
+        idx = 0
+        first = body[0]
+        if (isinstance(first, ast.Expr)
+                and isinstance(getattr(first, "value", None), ast.Constant)
+                and isinstance(first.value.value, str)):
+            idx = 1  # skip a leading docstring
+        if idx >= len(body):
+            return None
+        floor = body[idx].lineno
+        exec_lines = sorted({
+            ln for (_s, _e, ln) in code.co_lines()
+            if ln is not None and ln >= floor
+        })
+        if not exec_lines:
+            return None
+        return filename, exec_lines[0]
+    except Exception:
+        return None
 
 
 def _script_type_name(script: Any) -> str:
@@ -203,6 +245,14 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                 "trades": str(trade_path) if is_strategy else None,
             },
         })
+
+        # Debug only: publish main's first executable line so the DAP proxy can
+        # arm its hidden "bar stop" breakpoint there (Next bar / Run to bar land
+        # on the top of every bar without depending on the user's breakpoints).
+        if args.debugpy_port is not None:
+            main_loc = _main_location(runner)
+            if main_loc is not None:
+                emitter.emit({"e": "debugMain", "file": main_loc[0], "line": main_loc[1]})
 
         return _stream_run(runner, emitter, control,
                            total_bars=size,

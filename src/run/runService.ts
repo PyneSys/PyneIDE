@@ -444,12 +444,27 @@ export class RunService {
   /**
    * Abort an in-flight run-to-bar fly: breakpoints were removed for the fast
    * stretch, so they MUST be restored if the user takes manual control (or the
-   * run ends) before the crawl handoff re-arms them.
+   * run ends) before the crawl handoff re-arms them. Disarm the bar stop first
+   * so the restore does not re-add it (manual control means: no bar stop).
    */
   private abortFly(): void {
     if (!this.flyToBar) return;
     this.flyToBar = undefined;
+    this.debugControl?.setBarStopArmed(false);
     void this.debugControl?.restoreBreakpoints();
+  }
+
+  /**
+   * Next bar while stopped in the debugger: arm the hidden bar-stop breakpoint
+   * (top of the next bar) and continue, so one press advances exactly one bar
+   * regardless of the user's breakpoints. Without a known bar-stop location,
+   * fall back to a plain continue (relies on a per-bar user breakpoint).
+   */
+  private async nextBarDebug(): Promise<void> {
+    if (this.debugControl?.canBarStop()) {
+      await this.debugControl.armBarStop();
+    }
+    await this.continueDebugger();
   }
 
   /**
@@ -485,20 +500,22 @@ export class RunService {
     this.debugControl?.setRunToBarTarget(undefined);
     switch (action) {
       case 'pause':
+        void this.debugControl?.disarmBarStop();
         run.pause();
         break;
       case 'resume':
+        void this.debugControl?.disarmBarStop();
         run.resume();
         if (this.debugStopped) void this.continueDebugger();
         break;
       case 'step':
         if (this.debugStopped) {
-          // Stopped at a breakpoint: just continue. The feed is not gated
-          // (the breakpoint is what suspends execution), so continuing runs
-          // exactly one bar forward and the per-bar breakpoint re-fires — one
-          // press, one bar. Arming a feed pause here would instead block the
-          // next bar before its breakpoint could hit (the old two-press bug).
-          void this.continueDebugger();
+          // Stop at the top of the next bar via the hidden bar-stop breakpoint
+          // (one press, one bar) — works with a conditional or no user
+          // breakpoint too. The feed is not gated (the breakpoint suspends
+          // execution); arming a feed pause here would block the next bar before
+          // its breakpoint could hit (the old two-press bug).
+          void this.nextBarDebug();
         } else if (this.paused) {
           run.step(1);
         } else {
@@ -506,6 +523,7 @@ export class RunService {
         }
         break;
       case 'cancel':
+        void this.debugControl?.disarmBarStop();
         run.cancel();
         break;
     }
@@ -539,18 +557,25 @@ export class RunService {
     this.debugControl?.setRunToBarTarget(target);
 
     if (this.debugStopped) {
-      // At a breakpoint: the per-bar breakpoint would otherwise stop (and trace)
+      // At a breakpoint: any active breakpoint would otherwise stop (and trace)
       // every bar on the way — unusably slow. Fast path: remove breakpoints so
       // the debuggee runs untraced, arm a BRIDGE-side run-to target so the feed
       // self-pauses (on its own thread, race-free) a couple bars short of the
       // goal, then restore breakpoints while it is parked and crawl the last few
-      // bars on the per-bar breakpoint to land exactly on `target`.
+      // bars to land exactly on `target`. The crawl lands on the hidden bar-stop
+      // breakpoint (top of each bar) — so run-to-bar no longer needs a user
+      // breakpoint at all; it falls back to a per-bar user breakpoint only when
+      // the bar-stop location is unknown.
+      const control = this.debugControl;
+      const canBarStop = control?.canBarStop() ?? false;
+      const canLand = canBarStop || (control?.hasBreakpoints() ?? false);
       const crawl = RunService.RUN_TO_BAR_CRAWL;
       const runto = target - crawl; // bridge parks the feed here (bars_done)
-      // Only fly a real distance and only when there is a breakpoint to land on.
-      if (runto > currentBar && this.debugControl?.hasBreakpoints()) {
+      if (control && runto > currentBar && canLand) {
         this.flyToBar = { target };
-        const control = this.debugControl;
+        // Arm the bar stop for the crawl: the restore that precedes the last
+        // bars re-sends it, so the target bar suspends even without a user bp.
+        if (canBarStop) control.setBarStopArmed(true);
         // Suppress bp (untraced fly) and arm the bridge run-to BEFORE releasing
         // the debugger — both must land while the debuggee is still suspended.
         void (async () => {
@@ -561,8 +586,9 @@ export class RunService {
             armed = true;
           } catch {
             // Could not arm the fast path: fall back to a plain continue; the
-            // proxy still lands the crawl at target on the per-bar breakpoint.
+            // proxy still lands the crawl at target on the bar-stop breakpoint.
             this.flyToBar = undefined;
+            control.setBarStopArmed(false);
             await control.restoreBreakpoints().catch(() => {});
           }
           // A manual control while we were arming aborts the fly — don't release.
@@ -571,8 +597,10 @@ export class RunService {
         })();
         return;
       }
-      // Target is within the crawl window: just continue; the per-bar
-      // breakpoint + proxy auto-continue land on the target directly.
+      // Target is within the crawl window (or nothing to fly): arm the bar stop
+      // and crawl straight to the target; the proxy auto-continues intermediate
+      // bars and lands on `target`.
+      if (canBarStop) await control!.armBarStop();
       void this.continueDebugger();
     } else if (this.paused) {
       // Feed paused at a bar boundary: budget covers bars currentBar+1 .. target.
@@ -674,6 +702,12 @@ export class RunService {
         switch (event.e) {
           case 'debugpy':
             opts.debug?.onEndpoint(event.host, event.port);
+            break;
+          case 'debugMain':
+            // Where the debugger's hidden "bar stop" breakpoint lands (main's
+            // first executable line) — drives Next bar / Run to bar regardless
+            // of the user's breakpoints.
+            this.debugControl?.setBarStopLocation(event.file, event.line);
             break;
           case 'trades':
             trades.push(...event.d);

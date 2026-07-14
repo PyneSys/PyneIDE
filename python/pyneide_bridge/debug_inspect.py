@@ -31,6 +31,7 @@ import base64
 import importlib
 import json
 import os
+import sys
 import types
 from typing import Any
 
@@ -154,6 +155,83 @@ def pine_bar() -> str:
             if dt is not None:
                 out.append({"name": "datetime", "value": dt, "type": "str"})
     return base64.b64encode(json.dumps(out).encode("utf-8")).decode("ascii")
+
+
+def _bar_values() -> dict[str, Any]:
+    """Current bar builtins as live values (``bar_index`` + OHLCV + derived +
+    ``time``), read straight off ``pynecore.lib``.
+
+    Unlike :func:`pine_bar` these are the real Python objects, not formatted
+    strings: they seed the namespace a conditional breakpoint is evaluated in
+    (see :func:`cond`). Unresolved ``Source`` sentinels (a source absent from
+    this feed) are skipped so a comparison never trips over a placeholder.
+    """
+    lib = _lib()
+    values: dict[str, Any] = {}
+    if lib is None:
+        return values
+    for name in _BAR_NAMES:
+        try:
+            value = _resolve(getattr(lib, name))
+        except Exception:
+            continue
+        if _is_source_sentinel(value):
+            continue
+        values[name] = value
+    return values
+
+
+# Distinct conditions already logged as unevaluable, so a broken condition logs
+# once instead of once per bar it is checked on.
+_logged_cond_errors: set[str] = set()
+
+
+def cond(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any]) -> bool:
+    """Evaluate a conditional-breakpoint expression with Pine builtins live.
+
+    The ``ImportNormalizer`` transform rewrites every bare ``bar_index`` /
+    ``close`` / ... to ``lib.<name>`` and strips the import, so a natural
+    condition like ``bar_index == 10`` is a ``NameError`` at runtime — which
+    pydevd surfaces by STOPPING on every bar (``handle_breakpoint_condition``
+    returns ``True`` on any condition exception). The proxy wraps each user
+    condition in a call to this helper, which evaluates the ORIGINAL expression
+    in a namespace where:
+
+    * the bar builtins hold the CURRENT bar's live values (fresh every call,
+      read off ``pynecore.lib`` — overriding any stale copy ``bind_sources``
+      left in the module globals),
+    * ``lib`` and ``pynecore`` are reachable, so ``lib.bar_index`` and the
+      fully-qualified ``pynecore.lib.bar_index`` work as well as the bare name,
+    * the frame's real locals and the module globals still resolve and shadow
+      the builtins (a genuine local ``close`` wins, matching Python scoping).
+
+    An unevaluable condition returns ``False`` (do NOT stop) instead of pydevd's
+    stop-on-every-bar, with a one-time log so a real typo is still visible.
+
+    :param expr: The user's original condition text.
+    :param frame_globals: The stopped frame's ``globals()``.
+    :param frame_locals: The stopped frame's ``locals()``.
+    :return: Whether the breakpoint should suspend on this bar.
+    """
+    namespace: dict[str, Any] = dict(frame_globals)
+    namespace.update(_bar_values())
+    lib = _lib()
+    if lib is not None:
+        namespace["lib"] = lib
+        try:
+            namespace["pynecore"] = importlib.import_module("pynecore")
+        except Exception:
+            pass
+    namespace.update(frame_locals)
+    try:
+        return bool(eval(expr, namespace, namespace))  # noqa: S307
+    except Exception as exc:
+        if expr not in _logged_cond_errors:
+            _logged_cond_errors.add(expr)
+            print(f"[pyne debug] conditional breakpoint condition {expr!r} could not be "
+                  f"evaluated ({type(exc).__name__}: {exc}); treating as False",
+                  file=sys.stderr)
+        return False
 
 
 def _imported_sources(path: str) -> dict[str, str]:

@@ -261,6 +261,109 @@ async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string
   );
 }
 
+/**
+ * The IDE-side proxy (PyneDapProxy) forwards this exact wrapped condition so a
+ * bare Pine builtin resolves live. Kept in lockstep with `wrapCondition` in
+ * src/debug/dapProxy.ts; the smoke uses a raw DAP client, so it mirrors the
+ * wrapping the proxy would otherwise apply.
+ */
+function wrapConditionForSmoke(expr: string): string {
+  return `__import__("pyneide_bridge.debug_inspect",fromlist=["cond"]).cond(${JSON.stringify(
+    expr
+  )},globals(),locals())`;
+}
+
+/**
+ * Conditional breakpoints: a bare Pine name in a condition (`bar_index == 3`)
+ * is a NameError at runtime — the transform rewrote it to `lib.bar_index` and
+ * dropped the import — which pydevd surfaces by suspending on EVERY bar. The
+ * proxy wraps each condition in `debug_inspect.cond(...)` so the builtins
+ * resolve live. This asserts the breakpoint suspends ONLY at the target bar:
+ * had the wrapping failed (or the condition errored), the first stop would land
+ * on bar 0, not the target.
+ */
+async function conditionalBreakpointSmoke(
+  pythonBin: string,
+  bridgeRoot: string,
+  workdir: string
+): Promise<void> {
+  const scriptPath = path.join(workdir, 'scripts', 'dbgvars.py');
+  fs.writeFileSync(scriptPath, DBGVARS_SCRIPT);
+  const scriptLines = DBGVARS_SCRIPT.split('\n');
+  const bpLine = scriptLines.findIndex((l) => l.includes('avg =')) + 1;
+  if (bpLine <= 0) throw new Error('cond-debug: breakpoint anchor not found in dbgvars.py');
+  const target = 3;
+
+  let endpoint: { host: string; port: number } | undefined;
+  const events: BridgeEvent[] = [];
+  const run = BridgeRun.start({
+    pythonBin,
+    bridgeRoot,
+    script: 'dbgvars',
+    data: 'demo',
+    workdir,
+    batchSize: 1,
+    debugpyPort: 0,
+    onEvent: (ev) => {
+      events.push(ev);
+      if (ev.e === 'debugpy') endpoint = ev;
+    },
+    onLog: (line) => log(`[cond-debug-bridge] ${line}`),
+  });
+  await waitFor(() => endpoint !== undefined, 'debugpy endpoint from the bridge');
+
+  const dap = await DapClient.connect(endpoint!.host, endpoint!.port);
+  try {
+    await dap.request('initialize', {
+      adapterID: 'pyne',
+      pathFormat: 'path',
+      linesStartAt1: true,
+      columnsStartAt1: true,
+    });
+    const attachDone = dap.request('attach', { justMyCode: false });
+    await dap.waitForEvent('initialized');
+    const setBp = (await dap.request('setBreakpoints', {
+      source: { path: scriptPath },
+      breakpoints: [{ line: bpLine, condition: wrapConditionForSmoke(`bar_index == ${target}`) }],
+    })) as { breakpoints: { verified: boolean }[] };
+    if (!setBp.breakpoints[0]?.verified) {
+      throw new Error(`cond-debug: conditional breakpoint did not verify: ${JSON.stringify(setBp)}`);
+    }
+    await dap.request('configurationDone', {});
+    await attachDone;
+
+    const stopped = (await dap.waitForEvent('stopped')) as { reason: string; threadId: number };
+    if (stopped.reason !== 'breakpoint') {
+      throw new Error(`cond-debug: unexpected stop reason: ${stopped.reason}`);
+    }
+    const stack = (await dap.request('stackTrace', { threadId: stopped.threadId })) as {
+      stackFrames: { id: number }[];
+    };
+    const frame = stack.stackFrames[0];
+    const bar = await evalPineHelper(dap, frame.id, 'pine_bar', 'pine_bar()');
+    const barIndex = bar.find((c) => c.name === 'bar_index');
+    if (barIndex?.value !== String(target)) {
+      throw new Error(
+        `cond-debug: conditional breakpoint stopped at the wrong bar — ` +
+          `bar_index=${barIndex?.value}, expected ${target} (a bare-name NameError would ` +
+          `stop on every bar, landing on bar 0)`
+      );
+    }
+
+    await dap.request('setBreakpoints', { source: { path: scriptPath }, breakpoints: [] });
+    await dap.request('continue', { threadId: stopped.threadId });
+  } finally {
+    dap.close();
+  }
+
+  const exitCode = await run.exited;
+  const end = events.find((ev) => ev.e === 'end');
+  if (exitCode !== 0 || !end || end.e !== 'end' || end.bars === 0 || end.cancelled) {
+    throw new Error(`cond-debug: bad run end (exit=${exitCode}, end=${JSON.stringify(end)})`);
+  }
+  log(`Conditional breakpoint smoke OK: suspended only at bar_index==${target}`);
+}
+
 async function main(): Promise<void> {
   const storageDir =
     process.argv[2] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-smoke-'));
@@ -337,6 +440,7 @@ async function main(): Promise<void> {
   log(`Bridge streamed ${barCount} bars`);
 
   await debugSmoke(pythonBin, bridgeRoot, ws.workdir);
+  await conditionalBreakpointSmoke(pythonBin, bridgeRoot, ws.workdir);
 
   // Project-root mode: the folder itself is the workdir, marked by setting.
   const rootBase = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-root-'));

@@ -63,6 +63,7 @@ export interface StartEvent {
 export type BridgeEvent =
   | { e: 'hello'; protocol: number; pid: number }
   | { e: 'debugpy'; host: string; port: number }
+  | { e: 'debugMain'; file: string; line: number }
   | StartEvent
   | { e: 'bars'; d: BarRow[] }
   | { e: 'plotKeys'; keys: string[] }

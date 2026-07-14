@@ -22,6 +22,7 @@
  * debugger stops ("Next bar" while stopped = arm a feed pause + continue).
  */
 import * as net from 'node:net';
+import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
@@ -40,6 +41,20 @@ const PINE_BAR_EXPR =
   '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_bar"]).pine_bar()';
 const PINE_GLOBALS_EXPR =
   '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_globals"]).pine_globals(globals())';
+
+/**
+ * Wrap a raw conditional-breakpoint expression so pydevd evaluates it with the
+ * Pine builtins live. `debug_inspect.cond` re-evaluates the ORIGINAL condition
+ * in a namespace where `bar_index`/`close`/... hold the current bar's values
+ * (and `lib`/`pynecore` resolve), so a natural `bar_index == 10` works even
+ * though the transform stripped those imports. The condition text is embedded
+ * as a Python string literal via JSON encoding (Python accepts the same escape
+ * forms JSON emits).
+ */
+const wrapCondition = (expr: string): string =>
+  `__import__("pyneide_bridge.debug_inspect",fromlist=["cond"]).cond(${JSON.stringify(
+    expr
+  )},globals(),locals())`;
 
 interface DapMessage {
   seq: number;
@@ -87,6 +102,30 @@ export interface DebugBreakpointControl {
   hasBreakpoints(): boolean;
   suppressBreakpoints(): Promise<void>;
   restoreBreakpoints(): Promise<void>;
+  /**
+   * Location of the script's `main` first executable line, reported by the
+   * bridge (`debugMain`). Enables the synthetic "bar stop" breakpoint below.
+   */
+  setBarStopLocation(file: string, line: number): void;
+  /** Whether a bar-stop location is known (bridge reported `debugMain`). */
+  canBarStop(): boolean;
+  /**
+   * Arm the hidden "bar stop" breakpoint at `main`'s first line for exactly the
+   * next continue: the debuggee suspends at the top of the following bar,
+   * regardless of the user's breakpoints (a conditional breakpoint no longer
+   * runs the bar controls past their target). The proxy auto-disarms it the
+   * moment it surfaces a stop to the client, so a plain Continue stays free.
+   * Sends the merged (user + synthetic) breakpoint set to the debuggee now.
+   */
+  armBarStop(): Promise<void>;
+  /**
+   * Set the armed flag WITHOUT sending — for the run-to-bar fast path, where
+   * suppress/restore already drive the debuggee's breakpoints and the synthetic
+   * one must ride along on the restore that precedes the final crawl.
+   */
+  setBarStopArmed(armed: boolean): void;
+  /** Disarm the bar-stop breakpoint and re-send the user's breakpoints only. */
+  disarmBarStop(): Promise<void>;
   /**
    * "Run to bar N": arm (number) or disarm (undefined) the target bar. While
    * armed, the proxy swallows every per-bar breakpoint stop until the debuggee
@@ -149,6 +188,13 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 
   // "Run to bar N": set while a run-to-bar is in flight (see setRunToBarTarget).
   private runToBarTarget: number | undefined;
+
+  // Hidden "bar stop" breakpoint at main's first executable line (bridge's
+  // `debugMain`). Armed for exactly one continue by the bar controls, then
+  // auto-disarmed on the surfaced stop; VSCode's breakpoint view never sees it.
+  private barStopFile: string | undefined;
+  private barStopLine: number | undefined;
+  private barStopArmed = false;
 
   // Valid for the current stop only; cleared on every stopped event.
   private stopGeneration = 0;
@@ -268,6 +314,11 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     const args = msg.arguments ?? {};
     switch (msg.command) {
       case 'setBreakpoints': {
+        // Rewrite each condition so bare Pine builtins resolve live (see
+        // wrapBreakpointConditions). Mutated in place BEFORE the args are
+        // stored + forwarded, so the run-to-bar restore replays the wrapped
+        // form too and the debuggee only ever sees Pyne-aware conditions.
+        wrapBreakpointConditions(args);
         const source = args.source as { path?: string; name?: string } | undefined;
         const key = source?.path ?? source?.name;
         if (key) this.clientBreakpoints.set(key, args);
@@ -395,10 +446,37 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         return;
       } else if (msg.event === 'continued') {
         this.hooks.onExecState(false);
+      } else if (msg.event === 'breakpoint' && this.isSyntheticBreakpointEvent(msg)) {
+        // A `changed`/`new` event for the hidden bar-stop breakpoint would draw a
+        // phantom gutter marker at main's first line; the client never asked for
+        // it, so never tell it about it.
+        return;
       }
     }
 
     this.emit(msg);
+  }
+
+  /**
+   * True if a `breakpoint` event describes the synthetic bar-stop breakpoint:
+   * it sits on `barStopLine` of the main file and the user has no breakpoint of
+   * their own on that exact line (theirs must always be surfaced).
+   */
+  private isSyntheticBreakpointEvent(msg: DapMessage): boolean {
+    if (this.barStopLine === undefined) return false;
+    const bp = msg.body?.breakpoint as
+      | { line?: number; source?: { path?: string } }
+      | undefined;
+    if (!bp || bp.line !== this.barStopLine) return false;
+    const source = bp.source?.path;
+    if (source !== undefined && !this.isMainFileKey(source)) return false;
+    const clientBps = this.mainFileClientArgs()?.breakpoints;
+    if (Array.isArray(clientBps)) {
+      for (const cb of clientBps as { line?: number }[]) {
+        if (cb.line === this.barStopLine) return false; // the user owns this line
+      }
+    }
+    return true;
   }
 
   /**
@@ -432,6 +510,13 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         return; // swallow: no stopped event, no exec-state change
       }
       this.runToBarTarget = undefined; // reached the target bar: land here
+    }
+    // Surfacing a real stop: the bar-stop breakpoint (if armed for this hop) has
+    // done its job — disarm it so a plain Continue runs free to the next user
+    // breakpoint instead of stopping on every bar.
+    if (this.barStopArmed) {
+      this.barStopArmed = false;
+      await this.sendMainFileBreakpoints(false);
     }
     this.stopGeneration++;
     this.frameNames.clear();
@@ -685,8 +770,24 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   /** Remove all breakpoints from the debuggee (VSCode's view is untouched). */
   async suppressBreakpoints(): Promise<void> {
     const reqs: Promise<unknown>[] = [];
-    for (const args of this.clientBreakpoints.values()) {
+    let mainCovered = false;
+    for (const [key, args] of this.clientBreakpoints) {
       reqs.push(this.request('setBreakpoints', { ...args, breakpoints: [] }).catch(() => {}));
+      if (this.isMainFileKey(key)) mainCovered = true;
+    }
+    // The synthetic bar-stop breakpoint may live in the main file even when the
+    // user set no breakpoints there — clear it too so the fly runs untraced.
+    if (this.barStopFile !== undefined && !mainCovered) {
+      reqs.push(
+        this
+          .request('setBreakpoints', {
+            source: { path: this.barStopFile },
+            breakpoints: [],
+            lines: [],
+            sourceModified: false,
+          })
+          .catch(() => {})
+      );
     }
     if (this.clientExceptionBreakpoints) {
       reqs.push(
@@ -698,11 +799,23 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     await Promise.all(reqs);
   }
 
-  /** Re-arm the breakpoints exactly as the client last set them. */
+  /** Re-arm the breakpoints exactly as the client last set them (plus the
+   * bar-stop breakpoint when it is armed, so the run-to-bar crawl lands). */
   async restoreBreakpoints(): Promise<void> {
     const reqs: Promise<unknown>[] = [];
-    for (const args of this.clientBreakpoints.values()) {
-      reqs.push(this.request('setBreakpoints', args).catch(() => {}));
+    let mainCovered = false;
+    for (const [key, args] of this.clientBreakpoints) {
+      if (this.isMainFileKey(key)) {
+        reqs.push(
+          this.request('setBreakpoints', this.mainFileBreakpoints(this.barStopArmed)).catch(() => {})
+        );
+        mainCovered = true;
+      } else {
+        reqs.push(this.request('setBreakpoints', args).catch(() => {}));
+      }
+    }
+    if (this.barStopArmed && this.barStopFile !== undefined && !mainCovered) {
+      reqs.push(this.request('setBreakpoints', this.mainFileBreakpoints(true)).catch(() => {}));
     }
     if (this.clientExceptionBreakpoints) {
       reqs.push(
@@ -710,6 +823,74 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       );
     }
     await Promise.all(reqs);
+  }
+
+  // --- bar-stop breakpoint (Next bar / Run to bar) -----------------------------
+
+  setBarStopLocation(file: string, line: number): void {
+    this.barStopFile = file;
+    this.barStopLine = line;
+  }
+
+  canBarStop(): boolean {
+    return this.barStopFile !== undefined && this.barStopLine !== undefined;
+  }
+
+  setBarStopArmed(armed: boolean): void {
+    this.barStopArmed = armed;
+  }
+
+  async armBarStop(): Promise<void> {
+    if (!this.canBarStop()) return;
+    this.barStopArmed = true;
+    await this.sendMainFileBreakpoints(true);
+  }
+
+  async disarmBarStop(): Promise<void> {
+    if (!this.barStopArmed) return;
+    this.barStopArmed = false;
+    await this.sendMainFileBreakpoints(false);
+  }
+
+  /** True if `key` (a client source path) is the script's main file. */
+  private isMainFileKey(key: string): boolean {
+    if (this.barStopFile === undefined) return false;
+    return path.resolve(key).toLowerCase() === path.resolve(this.barStopFile).toLowerCase();
+  }
+
+  /** The client's stored setBreakpoints args for the main file, if any. */
+  private mainFileClientArgs(): Record<string, unknown> | undefined {
+    for (const [key, args] of this.clientBreakpoints) {
+      if (this.isMainFileKey(key)) return args;
+    }
+    return undefined;
+  }
+
+  /**
+   * setBreakpoints args for the main file: the user's own breakpoints plus,
+   * when `withSynthetic`, the hidden bar-stop breakpoint at main's first line.
+   * Reuses the client's `source` object so pydevd keys the same file.
+   */
+  private mainFileBreakpoints(withSynthetic: boolean): Record<string, unknown> {
+    const clientArgs = this.mainFileClientArgs();
+    const clientBps = Array.isArray(clientArgs?.breakpoints)
+      ? (clientArgs.breakpoints as Record<string, unknown>[])
+      : [];
+    const breakpoints = withSynthetic
+      ? [...clientBps, { line: this.barStopLine }]
+      : [...clientBps];
+    return {
+      source: clientArgs?.source ?? { path: this.barStopFile },
+      breakpoints,
+      lines: breakpoints.map((b) => b.line),
+      sourceModified: false,
+    };
+  }
+
+  /** Own-seq setBreakpoints for the main file (with/without the bar stop). */
+  private async sendMainFileBreakpoints(withSynthetic: boolean): Promise<void> {
+    if (this.barStopFile === undefined || this.barStopLine === undefined) return;
+    await this.request('setBreakpoints', this.mainFileBreakpoints(withSynthetic)).catch(() => {});
   }
 
   private evaluate(expression: string, frameId: number): Promise<Record<string, unknown>> {
@@ -752,6 +933,21 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 function slotExpression(slot: PineSlot): string {
   if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(slot.param)) return `${slot.param}[${slot.slot}]`;
   return `locals()[${JSON.stringify(slot.param)}][${slot.slot}]`;
+}
+
+/**
+ * Rewrite every non-empty `condition` of a `setBreakpoints` request in place so
+ * bare Pine builtins resolve at evaluation time (see {@link wrapCondition}).
+ * `hitCondition` (a pydevd-counted numeric) and `logMessage` are left untouched.
+ */
+function wrapBreakpointConditions(args: Record<string, unknown>): void {
+  const breakpoints = args.breakpoints;
+  if (!Array.isArray(breakpoints)) return;
+  for (const bp of breakpoints as Record<string, unknown>[]) {
+    if (typeof bp.condition === 'string' && bp.condition.trim() !== '') {
+      bp.condition = wrapCondition(bp.condition);
+    }
+  }
 }
 
 /**
