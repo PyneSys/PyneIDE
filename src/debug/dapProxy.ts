@@ -266,6 +266,9 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     number,
     { pinePath: string; pineLine: number; frameName: string }
   >();
+  // Consecutive step stops swallowed inside main's def/prologue region (see
+  // skipMainPrologue). Reset the moment a real stop is surfaced.
+  private prologueSkips = 0;
 
   // Valid for the current stop only; cleared on every stopped event.
   private stopGeneration = 0;
@@ -827,6 +830,49 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       }
       this.runToBarTarget = undefined; // reached the target bar: land here
     }
+    // main def/prologue skip: stepping past the last statement of one bar wraps
+    // into the next bar's main(), whose leading lines are the nested helper
+    // `def`s (def ma / def deviation) and the transform-injected per-bar slot
+    // setup — all attributed to the `def main` line. The user sees the step
+    // bounce main -> ma -> main -> deviation -> main before reaching the first
+    // real statement. Swallow every step stop that lands in the main frame
+    // BELOW the bar-stop line (= first real per-bar statement) and step again,
+    // so the step surfaces directly on real code. Works with or without a
+    // sourcemap (the .pine has the same prologue); gated on the frame being
+    // `main` so a Step Into a helper (its body sits below the bar-stop line too)
+    // is never swallowed.
+    if (
+      reason === 'step' &&
+      threadId !== undefined &&
+      this.barStopFile !== undefined &&
+      this.barStopLine !== undefined &&
+      this.prologueSkips < MAX_AUTO_STEPS
+    ) {
+      let inPrologue = false;
+      try {
+        const top = await this.readTopFrame(threadId);
+        inPrologue =
+          top?.name === 'main' &&
+          top.line !== undefined &&
+          top.line < this.barStopLine &&
+          top.path !== undefined &&
+          path.resolve(top.path).toLowerCase() ===
+            path.resolve(this.barStopFile).toLowerCase();
+      } catch {
+        inPrologue = false; // can't tell: surface the stop, never spin
+      }
+      if (inPrologue) {
+        this.prologueSkips++;
+        this.write({
+          seq: this.internalSeq++,
+          type: 'request',
+          command: 'next',
+          arguments: { threadId },
+        });
+        return; // swallow: the client never sees the prologue stop
+      }
+    }
+    this.prologueSkips = 0;
     // Pine-statement stepping: a user step that landed on another Python
     // statement of the SAME Pine statement (same .pine line, same function) is
     // not progress the user can see — swallow the stop and step again. The
