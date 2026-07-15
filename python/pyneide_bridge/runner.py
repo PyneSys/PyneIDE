@@ -60,10 +60,14 @@ def _main_location(runner: Any) -> tuple[str, int] | None:
     ``main`` — the anchor for the debugger's hidden "bar stop" breakpoint (stop
     at the top of every bar, on real code, not the ``def``/decorator line).
 
-    The AST's first non-docstring statement fixes the floor (a Persistent/Series
+    The AST's first meaningful statement fixes the floor (a Persistent/Series
     init carries no bytecode of its own, so its line never binds); the first
     ``co_lines`` entry at or past that floor is the real executable line the
-    breakpoint lands on."""
+    breakpoint lands on. A leading docstring and any leading nested helper
+    ``def``/``class`` statements are skipped: a bar-stop on a nested ``def``
+    line would surface the helper's definition (and the transform-injected slot
+    setup interleaved between the defs, attributed to the ``def main`` line)
+    instead of the first per-bar computation."""
     try:
         code = runner.script_module.main.__code__
         filename = code.co_filename
@@ -82,6 +86,10 @@ def _main_location(runner: Any) -> tuple[str, int] | None:
                 and isinstance(getattr(first, "value", None), ast.Constant)
                 and isinstance(first.value.value, str)):
             idx = 1  # skip a leading docstring
+        while (idx < len(body)
+               and isinstance(body[idx], (ast.FunctionDef,
+                                          ast.AsyncFunctionDef, ast.ClassDef))):
+            idx += 1  # skip leading nested helper defs
         if idx >= len(body):
             return None
         floor = body[idx].lineno

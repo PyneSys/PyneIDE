@@ -4,12 +4,11 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F6 (implementálva 2026-07-15, EDH-ellenőrzés hátravan)** —
+**Aktuális fázis: F6 kész (2026-07-15, EDH-ben ellenőrizve)** —
 Pine debugger a sourcemapre építve: breakpoint/stackTrace/stepping közvetlenül
 a `.pine`-ban (DAP-proxy fordítás), Pine-statement granularitású lépkedés,
-fordítói átnevezések visszafejtése a Variables/Watch-ban. Ellenőrizve: IDE
-tsc+build+test:env (mapper/demangle unit + bridge + debug smoke). Hátravan:
-EDH-ellenőrzés (F5 élő PyneAPI-teszt is). Következő: F7 vagy publikálási
+fordítói átnevezések visszafejtése a Variables/Watch-ban. Élőben ellenőrizve
+strict és normál fordítással, v5-konverzióval is. Következő: F7 vagy publikálási
 előkészület — a hangos launch a PLAN szerint az F6-hoz időzítve.
 
 ---
@@ -300,8 +299,11 @@ a fájl maga válik v6-tá, így egyetlen `python <-> v6` leképezés marad,
 - [x] Bar-stepping a közös runner-bridge-en (F4 óta működik; `.pine` módban is
       változatlan — a rejtett bar-stop breakpoint `.py`-térben él, a klienst
       nem érinti).
-- [ ] EDH-ellenőrzés: `.pine` breakpoint + stepping + Variables/Watch +
-      Next bar/Run to bar élőben, strict és normál fordítással is
+- [x] EDH-ellenőrzés: `.pine` breakpoint + stepping + Variables/Watch +
+      Next bar/Run to bar élőben, strict és normál fordítással is (v5-konverzió
+      is). Strict a PyneIDE státuszsor-menüből kapcsolható
+      (`pyneide.toggleStrictCompile`; a cache a strict flagre kulcsol, a
+      következő Run/Debug újrafordít).
 
 ## F7 — Language serverek (L)
 
