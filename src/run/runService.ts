@@ -21,9 +21,11 @@ import * as vscode from 'vscode';
 import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartManager } from '../chart/chartPanel';
 import type { CompileService } from '../compile/service';
+import { mapTracebackFrames } from '../compile/sourcemap';
 import type { DebugBreakpointControl } from '../debug/dapProxy';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
+import { detectPineVersion } from '../pineVersion';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
 import { getRememberedData, pickRunData } from './dataSelect';
@@ -53,6 +55,8 @@ interface PreparedRun {
 
 export class RunService {
   private readonly output = vscode.window.createOutputChannel('PyneIDE Run');
+  /** Runtime errors mapped back to the Pine source via the .py.map sourcemap. */
+  private readonly runtimeDiagnostics = vscode.languages.createDiagnosticCollection('pyne-runtime');
   private readonly statusItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
     90
@@ -111,6 +115,7 @@ export class RunService {
     this.context.subscriptions.push(
       this.output,
       this.statusItem,
+      this.runtimeDiagnostics,
       vscode.commands.registerCommand('pyneide.runScript', (uri?: vscode.Uri) =>
         this.runFromCommand(uri)
       ),
@@ -345,6 +350,24 @@ export class RunService {
     if (config.noDebug) {
       void this.runDocument(doc);
       return null;
+    }
+
+    // Debugging needs a truthful sourcemap, which only exists for v6 (a v4/v5
+    // source is compiled through an internal v6 conversion). Offer an in-place
+    // upgrade; plain run stays available for v4/v5 above.
+    if (doc.languageId === 'pine') {
+      const version = detectPineVersion(doc.getText().slice(0, DETECT_HEAD_BYTES));
+      if (version === undefined || version < 6) {
+        const label = version === undefined ? '(unversioned)' : `v${version}`;
+        const choice = await vscode.window.showWarningMessage(
+          `PyneIDE: debugging requires Pine v6. This script is Pine ${label}. ` +
+            'Convert it to v6 now? (in-place; you can Undo)',
+          { modal: true },
+          'Convert to v6'
+        );
+        if (choice !== 'Convert to v6') return null;
+        if (!(await this.compile.convertActiveToV6(doc))) return null;
+      }
     }
 
     const prepared = await this.prepareRun(doc, {
@@ -838,9 +861,13 @@ export class RunService {
 
     let stats: Record<string, number | null> | undefined;
     let errorMessage: string | undefined;
+    let errorPineLocation: { pinePath: string; pineLine: number } | undefined;
     const trades: TradeRecord[] = [];
     let endBars = 0;
     let cancelled = false;
+
+    // A fresh run invalidates previous runtime-error markers.
+    this.runtimeDiagnostics.clear();
 
     this.activeScriptName = scriptName;
     this.barsDone = 0;
@@ -897,6 +924,23 @@ export class RunService {
           case 'error':
             errorMessage = event.message;
             this.output.appendLine(event.traceback);
+            // Map traceback frames back to the Pine source (needs the
+            // .py.map written at compile time); the deepest mapped frame
+            // is where the user should look.
+            try {
+              const frames = mapTracebackFrames(event.traceback);
+              const deepest = frames[frames.length - 1];
+              if (deepest) {
+                errorPineLocation = deepest;
+                for (const f of frames) {
+                  this.output.appendLine(
+                    `  -> ${path.basename(f.pinePath)}:${f.pineLine} (${path.basename(f.pyPath)}:${f.pyLine})`
+                  );
+                }
+              }
+            } catch {
+              // Mapping is best-effort; the raw traceback is already logged.
+            }
             break;
           case 'log':
             this.output.appendLine(`[${event.level}] ${event.message}`);
@@ -931,8 +975,27 @@ export class RunService {
     }
 
     if (errorMessage) {
+      let location = '';
+      if (errorPineLocation) {
+        // Surface the mapped Pine line in the Problems panel too.
+        const { pinePath, pineLine } = errorPineLocation;
+        try {
+          const pineDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pinePath));
+          const line = Math.max(0, Math.min(pineLine - 1, pineDoc.lineCount - 1));
+          const diagnostic = new vscode.Diagnostic(
+            pineDoc.lineAt(line).range,
+            errorMessage,
+            vscode.DiagnosticSeverity.Error
+          );
+          diagnostic.source = 'Pyne runtime';
+          this.runtimeDiagnostics.set(pineDoc.uri, [diagnostic]);
+        } catch {
+          // The .pine may have vanished meanwhile; the log still has the mapping.
+        }
+        location = ` (${path.basename(pinePath)}:${pineLine})`;
+      }
       const choice = await vscode.window.showErrorMessage(
-        `PyneIDE: run failed: ${errorMessage}`,
+        `PyneIDE: run failed: ${errorMessage}${location}`,
         'Show Log'
       );
       if (choice === 'Show Log') this.output.show();

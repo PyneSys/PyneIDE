@@ -20,14 +20,29 @@ export interface CompileErrorDetail {
   file?: string;
 }
 
+/**
+ * Line-level sourcemap from PyneComp: sparse `[python_line, pine_line]`
+ * pairs (1-indexed, sorted by python line), one per statement's first
+ * emitted line — intermediate lines belong to the previous pair.
+ */
+export interface PineSourcemap {
+  version: number;
+  pine_version?: number | null;
+  mappings: [number, number][];
+}
+
 export type CompileResult =
-  | { ok: true; code: string }
+  | { ok: true; code: string; sourcemap?: PineSourcemap }
   | {
       ok: false;
       status: number;
       detail: CompileErrorDetail;
       retryAfterSeconds?: number;
     };
+
+export type ConvertResult =
+  | { ok: true; code: string }
+  | { ok: false; status: number; detail: CompileErrorDetail };
 
 export interface UsagePeriod {
   limit: number;
@@ -151,14 +166,28 @@ export class PyneApiClient {
     return { error: text.trim() || `HTTP ${status} error` };
   }
 
-  async compile(script: string, strict: boolean): Promise<CompileResult> {
-    const body = new URLSearchParams({ script, strict: String(strict) }).toString();
+  async compile(script: string, strict: boolean, sourcemap = false): Promise<CompileResult> {
+    const params: Record<string, string> = { script, strict: String(strict) };
+    if (sourcemap) params.sourcemap = 'true';
+    const body = new URLSearchParams(params).toString();
     const res = await this.request('POST', '/compiler/compile', {
       body,
       contentType: 'application/x-www-form-urlencoded',
       timeoutMs: 60000,
     });
     if (res.status === 200) {
+      if (sourcemap) {
+        // JSON {code, sourcemap} — but an older server that does not know the
+        // flag ignores it and answers with the plain-text code as before.
+        try {
+          const data = JSON.parse(res.text) as { code?: string; sourcemap?: PineSourcemap };
+          if (typeof data.code === 'string') {
+            return { ok: true, code: data.code, sourcemap: data.sourcemap };
+          }
+        } catch {
+          // Plain-text response — fall through
+        }
+      }
       return { ok: true, code: res.text };
     }
     const retryAfter = res.headers['retry-after'];
@@ -167,6 +196,37 @@ export class PyneApiClient {
       status: res.status,
       detail: PyneApiClient.parseErrorDetail(res.text, res.status),
       retryAfterSeconds: retryAfter ? parseInt(String(retryAfter), 10) || undefined : undefined,
+    };
+  }
+
+  /**
+   * Upgrade a Pine v4/v5 script to v6 by chaining the API's converter
+   * endpoints. Conversion is quota-free (it consumes no compile limit, credits
+   * or script history). `fromVersion` must be 4 or 5; a v4 script is routed
+   * through v5 first. On any step's failure the chain stops with that error.
+   */
+  async convertToV6(script: string, fromVersion: number): Promise<ConvertResult> {
+    let current = script;
+    if (fromVersion <= 4) {
+      const v5 = await this.convertStep('/compiler/v4tov5', current);
+      if (!v5.ok) return v5;
+      current = v5.code;
+    }
+    return this.convertStep('/compiler/v5tov6', current);
+  }
+
+  private async convertStep(path: string, script: string): Promise<ConvertResult> {
+    const body = new URLSearchParams({ script }).toString();
+    const res = await this.request('POST', path, {
+      body,
+      contentType: 'application/x-www-form-urlencoded',
+      timeoutMs: 60000,
+    });
+    if (res.status === 200) return { ok: true, code: res.text };
+    return {
+      ok: false,
+      status: res.status,
+      detail: PyneApiClient.parseErrorDetail(res.text, res.status),
     };
   }
 

@@ -4,13 +4,15 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F4 v2 (EDH-visszajelzések bedolgozva)** — `pyne` debug type
-(debugpy, ms-python nélkül) + DAP-proxy: nevesített Persistent/Series
-változók a Locals tetején, belső zaj csoportokba rejtve
-(variablePresentation), bar-vezérlés a debug toolbaron és breakpointon állva
-is működik, progress-notification törölve (2026-07-13). Ismert blokkoló:
-PyneCore transzformer sorszám-hiba (lásd F4 megjegyzés). Következő:
-felhasználói EDH-újrateszt, PyneCore-javítás, aztán F5.
+**Aktuális fázis: F5 (implementálva 2026-07-15, EDH/élő teszt hátravan)** —
+sorszintű sourcemap a PyneComp emitterben (inline marker + kinyerés a végső
+összeállítás után, bájtazonos kimenettel), `pynecomp compile --sourcemap` ->
+`<stem>.py.map`, PyneAPI `sourcemap=true` -> `{code, sourcemap}` JSON, IDE:
+fordításkor `.py.map` mentés (py-hash-sztemplivel érvénytelenítve kézi .py
+szerkesztéskor), futásidejű traceback -> Pine sor (Run log + Problems panel +
+hibaüzenet). Ellenőrizve: pynecomp pytest (7 új teszt + korpusz-identitás),
+IDE tsc+build+test:env. Hátravan: PyneAPI élő végpont-teszt (pyneapi-dev) és
+EDH-ellenőrzés. Következő: F6 (Pine debugger a sourcemapre építve).
 
 ---
 
@@ -223,11 +225,54 @@ pynecore `_PYNE_HEAD_RE`-hez igazítva (`\s*` a nyitó idézőjel után).
 
 ## F5 — Sourcemap a PyneComp-ban + API-kiterjesztés (M, külső repo)
 
-- [ ] Emitter instrumentálás: `(kimeneti_sor, stmt.lineno)` rögzítés
-- [ ] Blank-line collapse mapping-korrekció
-- [ ] `pynecomp compile --sourcemap` -> `<stem>.py.map`
-- [ ] API: `sourcemap=true` param, `{code, sourcemap}` JSON válasz
-- [ ] Runtime traceback -> Pine sor visszafordítás
+- [x] Emitter instrumentálás (implementálva 2026-07-15, PyneComp repo): NEM
+      offszet-könyveléssel, hanem inline marker kommenttel — minden statement
+      első kimeneti sorának végére `#__pyne=N__` kerül, amit a végső
+      összeállítás UTÁN nyerünk ki és sztrippelünk. Így a marker a sorával
+      együtt utazik minden bufferen és utófeldolgozáson át; a kimenet
+      bájtazonos a sima fordítással (korpusz-teszt garantálja).
+      Új API: `Compiler.compile_str_with_sourcemap()` -> `(code, map)`.
+- [x] Blank-line collapse mapping-korrekció: a marker-megközelítéssel
+      magától adódik (a markerek sorvégiek, nem változtatnak sorszerkezetet;
+      a kinyerés a collapse-ok után fut)
+- [x] `pynecomp compile --sourcemap` (`-m`) -> `<stem>.py.map`
+      (JSON: `{"version":1,"pine_version":N,"mappings":[[py,pine],...]}`,
+      1-indexelt, statementenként az első sor; köztes sorok = forward-fill).
+      Csak fájl-kimenettel; pytest: `pynecomp/tests/test_sourcemap.py`.
+      Korlát: v4/v5 forrásnál a pine-sorok a KONVERTÁLT v6 forrásra mutatnak.
+- [x] API: `sourcemap=true` form-param a `POST /compiler/compile`-on ->
+      `{code, sourcemap}` JSON (nélküle plain-text, változatlan). DB-cache
+      találatnál helyi újrafordítás adja a konzisztens (code, map) párost.
+      Élő végpont-teszt (pyneapi-dev) még hátravan.
+- [x] Runtime traceback -> Pine sor visszafordítás (PyneIDE): fordításkor a
+      `.py.map` a `.py` mellé kerül (py_sha256-tal; kézzel szerkesztett .py
+      érvényteleníti), a bridge error-traceback frame-jei Pine sorra
+      fordulnak a Run logban, a legmélyebb frame a Problems panelre és a
+      hibaüzenetbe is kerül (`src/compile/sourcemap.ts`). EDH-teszt hátravan.
+
+## F5b — v4/v5 -> v6 konverzió az IDE-ben (S) — az F5 v4/v5 korlát feloldása
+
+Az F5 sourcemap-korlátja (v4/v5-nél a pine-sorok a konvertált v6-ra
+mutatnak) nem az API-térkép-szerződésben oldódik meg, hanem IDE oldalon:
+a fájl maga válik v6-tá, így egyetlen `python <-> v6` leképezés marad,
+és az a v6 az, amit a felhasználó szerkeszt és debugol. Implementálva
+2026-07-15 (EDH/élő teszt hátravan; `npm run check` + build zöld):
+
+- [x] In-place konverzió (`CompileService.convertActiveToV6`): a `.pine`
+      felülírása v6-tal `WorkspaceEdit`-tel (full-range replace + save), így a
+      szerkesztő Undo visszaadja. Nincs külön `*.v6.pine`. Verzió-parser:
+      `src/pineVersion.ts` (`//@version=N`). <4 / verzió nélkül: hibaüzenet,
+      nincs auto-konverzió (a lánc csak v4/v5-öt tud).
+- [x] Kapuzás CSAK a debugon: `runService.resolveDebugLaunch` a `noDebug` ág
+      után modalt mutat (Convert to v6 / Cancel), Cancel/elutasítás -> a debug
+      megszakad. A sima futtatás/fordítás v4/v5-re változatlanul megy.
+- [x] Konverzió az API `POST /compiler/v4tov5` + `/compiler/v5tov6` láncán
+      (`PyneApiClient.convertToV6`; kvótát NEM fogyaszt). Sikeres v4/v5
+      fordítás után nem-blokkoló info-hint „Convert to v6 is free" gombbal.
+      Önálló parancs: `pyneide.convertToV6`.
+- [x] `converted_source: true` a `.py.map`-ben v4/v5 forrásnál
+      (`StoredSourcemap`); `loadSourcemapFor` ilyenkor `undefined`-et ad ->
+      nincs félrevezető traceback-visszafordítás az eredeti fájlra.
 
 ## F6 — Pine debugger (M-L)
 

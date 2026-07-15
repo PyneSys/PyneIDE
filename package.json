@@ -73,6 +73,12 @@
         "enablement": "editorLangId == pine"
       },
       {
+        "command": "pyneide.convertToV6",
+        "title": "Convert Pine to v6",
+        "category": "PyneIDE",
+        "enablement": "editorLangId == pine"
+      },
+      {
         "command": "pyneide.showUsage",
         "title": "Show API Usage",
         "category": "PyneIDE"
@@ -148,6 +154,11 @@
       "editor/context": [
         {
           "command": "pyneide.compilePine",
+          "when": "resourceLangId == pine",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.convertToV6",
           "when": "resourceLangId == pine",
           "group": "pyneide@1"
         },
