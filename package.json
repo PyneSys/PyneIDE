@@ -84,6 +84,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.toggleStrictCompile",
+        "title": "Toggle Strict Compilation",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.runScript",
         "title": "Run Pyne code",
         "category": "PyneIDE",

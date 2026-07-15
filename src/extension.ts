@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { AuthService } from './api/auth';
 import { ChartManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
+import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager } from './env/manager';
@@ -60,6 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const compileService = new CompileService(context, auth, compileOutput);
   compileService.register();
+  registerStrictCompileToggle(context);
 
   const runService = new RunService(context, manager, compileService);
   runService.register();

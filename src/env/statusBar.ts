@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
+import { isStrictCompile } from '../compile/strictCompile';
 import type { EnvManager, EnvState } from './manager';
 
 /** Status bar item reflecting the environment state, with a quickpick menu. */
@@ -91,6 +92,20 @@ export class EnvStatusBar {
         label: '$(settings-gear) Open PyneIDE Settings',
         action: () =>
           void vscode.commands.executeCommand('workbench.action.openSettings', 'pyneide'),
+      }
+    );
+
+    const strict = isStrictCompile(vscode.window.activeTextEditor?.document.uri);
+    items.push(
+      { label: 'Compilation', kind: vscode.QuickPickItemKind.Separator },
+      {
+        label: strict
+          ? '$(check) Strict compilation: On'
+          : '$(circle-large-outline) Strict compilation: Off',
+        description: strict
+          ? 'Pine-exact block scoping (every variable renamed)'
+          : 'Readable output (surgical renames only)',
+        action: () => void vscode.commands.executeCommand('pyneide.toggleStrictCompile'),
       }
     );
 
