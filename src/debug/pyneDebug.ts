@@ -19,6 +19,7 @@ import * as vscode from 'vscode';
 
 import type { RunService } from '../run/runService';
 import { PyneDapProxy } from './dapProxy';
+import { PineSourceMapper } from './sourceMapper';
 
 export function registerPyneDebug(
   context: vscode.ExtensionContext,
@@ -36,9 +37,30 @@ export function registerPyneDebug(
             'PyneIDE: the pyne debug session has no debugpy endpoint (use a launch config).'
           );
         }
-        const proxy = new PyneDapProxy(ep.host, ep.port, {
-          onExecState: (stopped, threadId) => runService.onDebugExecState(stopped, threadId),
-        });
+        // A .pine launch debugs at the Pine level: breakpoints, frames and
+        // stepping are translated through the compile-time sourcemap. When the
+        // map is missing or stale (e.g. the compiled .py was hand-edited), the
+        // session still runs — as a plain Python-level debug of the .py.
+        let mapper: PineSourceMapper | undefined;
+        const pineSource = session.configuration.pineSource;
+        if (typeof pineSource === 'string') {
+          mapper = new PineSourceMapper();
+          if (!mapper.hasPineMapping(pineSource)) {
+            mapper = undefined;
+            void vscode.window.showWarningMessage(
+              'PyneIDE: no valid sourcemap for this Pine script — debugging the compiled ' +
+                'Python instead. Recompile the .pine to restore Pine-level debugging.'
+            );
+          }
+        }
+        const proxy = new PyneDapProxy(
+          ep.host,
+          ep.port,
+          {
+            onExecState: (stopped, threadId) => runService.onDebugExecState(stopped, threadId),
+          },
+          mapper
+        );
         // The proxy owns the debuggee's breakpoints, so the run-to-bar fast
         // path drives suppress/restore through it.
         runService.setDebugControl(proxy);

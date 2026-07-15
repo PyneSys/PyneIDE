@@ -7,6 +7,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { sha256 } from '../../src/compile/sourcemap';
+import { demangleName, demangleVariables } from '../../src/debug/demangle';
+import { PineSourceMapper } from '../../src/debug/sourceMapper';
 import { bootstrapManagedEnv } from '../../src/env/bootstrap';
 import { execChecked } from '../../src/env/exec';
 import { venvPythonPath, managedVenvDir, pyneBinPath } from '../../src/env/uv';
@@ -364,7 +367,95 @@ async function conditionalBreakpointSmoke(
   log(`Conditional breakpoint smoke OK: suspended only at bar_index==${target}`);
 }
 
+/**
+ * Pure-Node checks of the F6 Pine-debug building blocks (no Python env):
+ * PineSourceMapper direction/snap/staleness semantics and the rename
+ * demangler. Runs first so a regression fails fast, before the env bootstrap.
+ */
+function sourcemapUnitTests(): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-map-'));
+  const pinePath = path.join(dir, 'foo.pine');
+  const pyPath = path.join(dir, 'foo.py');
+  fs.writeFileSync(pinePath, '//@version=6\n');
+  const pyText = 'print("compiled stand-in")\n';
+  fs.writeFileSync(pyPath, pyText);
+  // Statements at pine lines 3, 5 (two py statements), 9 — header before py 10.
+  const mappings = [
+    [10, 3],
+    [12, 5],
+    [13, 5],
+    [17, 9],
+  ];
+  fs.writeFileSync(
+    `${pyPath}.map`,
+    JSON.stringify({ version: 1, pine_version: 6, mappings, py_sha256: sha256(pyText) })
+  );
+
+  const mapper = new PineSourceMapper();
+  if (!mapper.hasPineMapping(pinePath)) throw new Error('mapper: pair not resolved');
+  const expect = (what: string, got: unknown, want: unknown): void => {
+    if (JSON.stringify(got) !== JSON.stringify(want)) {
+      throw new Error(`mapper: ${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    }
+  };
+  expect('pine 3 exact', mapper.pineToPy(pinePath, 3), { path: pyPath, line: 10 });
+  expect('pine 5 first py line', mapper.pineToPy(pinePath, 5), { path: pyPath, line: 12 });
+  expect('pine 4 snaps forward', mapper.pineToPy(pinePath, 4), { path: pyPath, line: 12 });
+  expect('pine 10 past end', mapper.pineToPy(pinePath, 10), undefined);
+  expect('py 10 back', mapper.pyToPine(pyPath, 10), { path: pinePath, line: 3 });
+  expect('py 11 forward-fill', mapper.pyToPine(pyPath, 11), { path: pinePath, line: 3 });
+  expect('py 13 same pine stmt', mapper.pyToPine(pyPath, 13), { path: pinePath, line: 5 });
+  expect('py 9 header unmapped', mapper.pyToPine(pyPath, 9), undefined);
+  expect('breakpointable lines', mapper.mappedPineLines(pinePath, 4, 9), [5, 9]);
+
+  // A stale map (the .py was edited after compile) must not translate.
+  fs.writeFileSync(pyPath, 'print("edited")\n');
+  if (new PineSourceMapper().hasPineMapping(pinePath)) {
+    throw new Error('mapper: stale py_sha256 accepted');
+  }
+  // A map without its .pine source must not translate either.
+  fs.writeFileSync(pyPath, pyText);
+  fs.rmSync(pinePath);
+  if (new PineSourceMapper().hasPineMapping(pinePath)) {
+    throw new Error('mapper: missing .pine accepted');
+  }
+
+  const demangleCases: [string, string | undefined][] = [
+    ['basis__global__', 'basis'],
+    ['close__0000002a__', 'close'],
+    ['x__global___', 'x'], // collision-dodging extra underscore
+    ['field__ren__', 'field'],
+    ['member__ren___', 'member'], // class-body variant
+    ['plain', undefined],
+    ['__state__', undefined],
+    ['__block_result__', undefined],
+    ['x__DEADBEEF__', undefined], // block ids are lowercase hex
+  ];
+  for (const [name, want] of demangleCases) {
+    const got = demangleName(name);
+    if (got !== want) throw new Error(`demangle ${name}: got ${got}, want ${want}`);
+  }
+  const vars: Record<string, unknown>[] = [
+    { name: 'basis__global__', value: '1' },
+    { name: 'taken__global__', value: '2' },
+    { name: 'taken', value: '3' },
+    { name: 'twin__11111111__', value: '4' },
+    { name: 'twin__22222222__', value: '5' },
+  ];
+  demangleVariables(vars);
+  const shown = vars.map((v) => v.name);
+  const wantShown = ['basis', 'taken__global__', 'taken', 'twin__11111111__', 'twin__22222222__'];
+  if (JSON.stringify(shown) !== JSON.stringify(wantShown)) {
+    throw new Error(`demangleVariables: got ${JSON.stringify(shown)}`);
+  }
+  if (vars[0].evaluateName !== 'basis__global__') {
+    throw new Error('demangleVariables: evaluateName must address the runtime name');
+  }
+  log('Sourcemap + demangle unit tests OK');
+}
+
 async function main(): Promise<void> {
+  sourcemapUnitTests();
   const storageDir =
     process.argv[2] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-smoke-'));
   log(`Storage dir: ${storageDir}`);

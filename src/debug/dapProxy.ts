@@ -20,17 +20,34 @@
  * The proxy also reports execution state (stopped at a breakpoint / resumed,
  * plus the thread id) so the RunService can compose bar-level controls with
  * debugger stops ("Next bar" while stopped = arm a feed pause + continue).
+ *
+ * For a session launched from a `.pine` (a PineSourceMapper is present) the
+ * proxy additionally IS the Pine debugger: breakpoints set in the .pine are
+ * forwarded against the compiled sibling .py through the line-level sourcemap,
+ * stack frames / breakpoint verifications come back mapped to Pine lines,
+ * stepping is repeated invisibly while the top frame stays on the same Pine
+ * statement, and compiler-renamed identifiers are shown demangled.
  */
 import * as net from 'node:net';
 import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { demangleVariables } from './demangle';
+import type { PineSourceMapper } from './sourceMapper';
+
 /** Own requests use this seq range so they never collide with the client's. */
 const INTERNAL_SEQ_BASE = 1 << 30;
 const INTERNAL_TIMEOUT_MS = 5000;
 /** Upper bound on injected variables — a runaway layout must not stall the UI. */
 const MAX_PINE_SLOTS = 100;
+/**
+ * Upper bound on the hidden re-steps of one user step (Pine-statement
+ * stepping): one Pine statement compiles to a handful of Python statements,
+ * so the cap is never reached legitimately — it only stops a runaway if the
+ * same-line heuristic ever misfires.
+ */
+const MAX_AUTO_STEPS = 50;
 /** variablesReference range for the proxy's own synthetic scopes (Pyne). */
 const SYNTHETIC_REF_BASE = 1_500_000_000;
 /** seq range for responses the proxy sends the client without a server round-trip. */
@@ -190,10 +207,23 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   >();
 
   // Client request bookkeeping (seq -> what the response means).
-  private readonly pendingStackTrace = new Set<number>();
+  private readonly pendingStackTrace = new Map<
+    number,
+    { threadId: number | undefined; topFrame: boolean }
+  >();
   private readonly pendingScopes = new Map<number, number>(); // seq -> frameId
   private readonly pendingLocals = new Map<number, number>(); // seq -> frameId
   private readonly pendingResumes = new Set<number>();
+  // setBreakpoints requests translated from a .pine source: how to rebuild the
+  // client-facing response (original per-breakpoint order, dropped entries
+  // re-inserted unverified; the debuggee only saw the mappable ones).
+  private readonly pendingPineBreakpoints = new Map<
+    number,
+    { pyPath: string; requested: boolean[] }
+  >();
+  // gotoTargets requests translated pine -> py; the response's target lines
+  // must come back py -> pine.
+  private readonly pendingGotoTargets = new Map<number, string>(); // seq -> pyPath
 
   // Synthetic-scope allocation: the Pyne scope's variablesReference and the
   // seq the proxy stamps on responses it answers itself (both in their own
@@ -216,6 +246,27 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   private barStopLine: number | undefined;
   private barStopArmed = false;
 
+  // Pine-statement stepping: while a user step is being auto-repeated (the
+  // top frame still maps to the SAME .pine line — one Pine statement spans
+  // several Python statements), intermediate stops are swallowed and the same
+  // step command re-issued. Cleared the moment any stop is surfaced.
+  private stepContext:
+    | {
+        threadId: number;
+        command: string;
+        pinePath: string;
+        pineLine: number;
+        frameName: string;
+        autoSteps: number;
+      }
+    | undefined;
+  // Last surfaced top frame per thread, in Pine terms (only set when it maps):
+  // the reference location a step command measures progress against.
+  private readonly lastTopFrame = new Map<
+    number,
+    { pinePath: string; pineLine: number; frameName: string }
+  >();
+
   // Valid for the current stop only; cleared on every stopped event.
   private stopGeneration = 0;
   private readonly frameNames = new Map<number, string>();
@@ -229,7 +280,14 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   constructor(
     host: string,
     port: number,
-    private readonly hooks: PyneDapProxyHooks
+    private readonly hooks: PyneDapProxyHooks,
+    /**
+     * Present when the session was launched from a `.pine`: every source
+     * reference is translated through it (breakpoints pine -> py, frames and
+     * verifications py -> pine) and compiler-renamed identifiers are shown
+     * demangled. Absent for plain Pyne (.py) sessions — zero behavior change.
+     */
+    private readonly mapper?: PineSourceMapper
   ) {
     const socket = net.createConnection({ host, port });
     this.socket = socket;
@@ -264,6 +322,31 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
             void this.answerSyntheticScope(msg.seq, PINE_GLOBALS_EXPR, globalsFrame);
             return;
           }
+        }
+      }
+      // breakpointLocations for a mapped .pine is answered from the sourcemap
+      // itself — the mapped pine lines ARE the breakpointable lines; the
+      // debuggee only knows the generated .py, so forwarding would need a
+      // lossy line-range translation for an answer the map already holds.
+      if (msg.command === 'breakpointLocations' && this.mapper) {
+        const args = msg.arguments ?? {};
+        const source = args.source as { path?: string } | undefined;
+        const line = typeof args.line === 'number' ? args.line : undefined;
+        if (source?.path && line !== undefined && this.mapper.hasPineMapping(source.path)) {
+          const endLine = typeof args.endLine === 'number' ? args.endLine : line;
+          this.emit({
+            seq: this.syntheticSeq++,
+            type: 'response',
+            request_seq: msg.seq,
+            success: true,
+            command: 'breakpointLocations',
+            body: {
+              breakpoints: this.mapper
+                .mappedPineLines(source.path, line, endLine)
+                .map((l) => ({ line: l })),
+            },
+          });
+          return;
         }
       }
       // Route watch/hover expressions through the Pine-aware `watch` helper so
@@ -350,6 +433,11 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     const args = msg.arguments ?? {};
     switch (msg.command) {
       case 'setBreakpoints': {
+        // Breakpoints set in a mapped .pine are the debuggee's .py breakpoints:
+        // translate source + lines in place FIRST, so everything downstream
+        // (condition wrapping, the stored replay args, the bar-stop merge)
+        // uniformly sees the .py form.
+        this.translatePineBreakpoints(msg);
         // Rewrite each condition so bare Pine builtins resolve live (see
         // wrapBreakpointConditions). Mutated in place BEFORE the args are
         // stored + forwarded, so the run-to-bar restore replays the wrapped
@@ -364,8 +452,30 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         this.clientExceptionBreakpoints = args;
         break;
       case 'stackTrace':
-        this.pendingStackTrace.add(msg.seq);
+        this.pendingStackTrace.set(msg.seq, {
+          threadId: typeof args.threadId === 'number' ? args.threadId : undefined,
+          topFrame: !args.startFrame,
+        });
         break;
+      case 'gotoTargets': {
+        // Jump-to-cursor in a mapped .pine: the target location must be the
+        // generated .py line; the response's candidate lines come back mapped.
+        const source = args.source as { path?: string; name?: string } | undefined;
+        if (
+          this.mapper &&
+          source?.path &&
+          typeof args.line === 'number' &&
+          this.mapper.hasPineMapping(source.path)
+        ) {
+          const mapped = this.mapper.pineToPy(source.path, args.line);
+          if (mapped) {
+            args.source = { name: path.basename(mapped.path), path: mapped.path };
+            args.line = mapped.line;
+            this.pendingGotoTargets.set(msg.seq, mapped.path);
+          }
+        }
+        break;
+      }
       case 'scopes':
         if (typeof args.frameId === 'number') this.pendingScopes.set(msg.seq, args.frameId);
         break;
@@ -385,8 +495,70 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         break;
       }
       default:
-        if (msg.command && RESUME_COMMANDS.has(msg.command)) this.pendingResumes.add(msg.seq);
+        if (msg.command && RESUME_COMMANDS.has(msg.command)) {
+          this.pendingResumes.add(msg.seq);
+          this.armStepContext(msg.command, args);
+        }
     }
+  }
+
+  /**
+   * Pine-statement stepping: remember where a step command departs from (the
+   * thread's last surfaced top frame, in Pine terms). While the top frame
+   * still maps to this same .pine line, the resulting stops are swallowed and
+   * the step repeated — one user step, one Pine statement (see handleStopped).
+   * Any non-step resume clears the context; a step from an unmapped location
+   * steps plain Python, exactly as before.
+   */
+  private armStepContext(command: string, args: Record<string, unknown>): void {
+    this.stepContext = undefined;
+    if (!this.mapper) return;
+    if (command !== 'next' && command !== 'stepIn' && command !== 'stepOut') return;
+    const threadId = args.threadId;
+    if (typeof threadId !== 'number') return;
+    const top = this.lastTopFrame.get(threadId);
+    if (!top) return;
+    this.stepContext = { threadId, command, ...top, autoSteps: 0 };
+  }
+
+  /**
+   * Rewrite a setBreakpoints request for a mapped .pine in place: the source
+   * becomes the compiled .py and every line the first generated line of its
+   * Pine statement (snapping forward over non-emitting lines). A line past the
+   * last mapped statement has no image — it is withheld from the debuggee and
+   * re-inserted unverified into the response, which must answer the client's
+   * breakpoints one-to-one, in order (see the pendingPineBreakpoints replay in
+   * onServerMessage). An empty request (clearing the file's breakpoints) still
+   * translates, so the clear reaches the .py.
+   */
+  private translatePineBreakpoints(msg: DapMessage): void {
+    const args = msg.arguments ?? {};
+    const source = args.source as { path?: string; name?: string } | undefined;
+    const pinePath = source?.path;
+    if (!this.mapper || !pinePath || !this.mapper.hasPineMapping(pinePath)) return;
+    const bps = Array.isArray(args.breakpoints)
+      ? (args.breakpoints as Record<string, unknown>[])
+      : [];
+    const forwarded: Record<string, unknown>[] = [];
+    const requested: boolean[] = [];
+    let pyPath: string | undefined;
+    for (const bp of bps) {
+      const mapped =
+        typeof bp.line === 'number' ? this.mapper.pineToPy(pinePath, bp.line) : undefined;
+      requested.push(mapped !== undefined);
+      if (mapped) {
+        pyPath = mapped.path;
+        forwarded.push({ ...bp, line: mapped.line });
+      }
+    }
+    // No mappable breakpoint (or none at all): the .py path still comes from
+    // the map, so a clear / all-unmappable set reaches the right file.
+    pyPath ??= this.mapper.pineToPy(pinePath, 1)?.path;
+    if (!pyPath) return;
+    args.source = { name: path.basename(pyPath), path: pyPath };
+    args.breakpoints = forwarded;
+    args.lines = forwarded.map((bp) => bp.line);
+    this.pendingPineBreakpoints.set(msg.seq, { pyPath, requested });
   }
 
   private onServerMessage(msg: DapMessage): void {
@@ -415,6 +587,12 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           msg.body.variables = (msg.body.variables as Record<string, unknown>[]).filter(
             (v) => typeof v.name !== 'string' || !isDunder(v.name)
           );
+          // Compiler-renamed names read as their Pine originals (UDT fields
+          // carry the canonical `__ren__` suffix). The Locals scope gets the
+          // same pass in enrichLocals, after the state-slot merge.
+          if (this.mapper) {
+            demangleVariables(msg.body.variables as Record<string, unknown>[]);
+          }
         }
         normalizeNaVariables(msg.body.variables as Record<string, unknown>[]);
       } else if (msg.command === 'evaluate') {
@@ -424,9 +602,83 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 
     if (msg.type === 'response' && typeof msg.request_seq === 'number') {
       const seq = msg.request_seq;
-      if (this.pendingStackTrace.delete(seq) && msg.success) {
-        const frames = (msg.body?.stackFrames ?? []) as { id: number; name: string }[];
-        for (const frame of frames) this.frameNames.set(frame.id, frame.name);
+      const stackMeta = this.pendingStackTrace.get(seq);
+      if (stackMeta !== undefined) {
+        this.pendingStackTrace.delete(seq);
+        if (msg.success) {
+          const frames = (msg.body?.stackFrames ?? []) as {
+            id: number;
+            name: string;
+            line?: number;
+            column?: number;
+            source?: { path?: string; name?: string };
+          }[];
+          for (const frame of frames) this.frameNames.set(frame.id, frame.name);
+          if (this.mapper) {
+            // Present the stack in Pine terms: any frame whose .py maps back
+            // to a .pine (main script or a compiled Pine library) is shown at
+            // its Pine source line. Unmapped frames (generated header, plain
+            // Python) stay as they are.
+            for (const frame of frames) {
+              if (!frame.source?.path || typeof frame.line !== 'number') continue;
+              const pine = this.mapper.pyToPine(frame.source.path, frame.line);
+              if (!pine) continue;
+              frame.source = { ...frame.source, name: path.basename(pine.path), path: pine.path };
+              frame.line = pine.line;
+              // Column positions belong to the generated Python; on the (often
+              // shorter) Pine line they would point mid-air.
+              frame.column = 1;
+            }
+            // The step reference location for this thread: where the user
+            // sees execution standing (only a mapped top frame can anchor
+            // Pine-statement stepping).
+            const top = frames[0];
+            if (stackMeta.topFrame && stackMeta.threadId !== undefined && top) {
+              const pinePath = top.source?.path;
+              if (pinePath && pinePath.toLowerCase().endsWith('.pine') && top.line !== undefined) {
+                this.lastTopFrame.set(stackMeta.threadId, {
+                  pinePath,
+                  pineLine: top.line,
+                  frameName: top.name,
+                });
+              } else {
+                this.lastTopFrame.delete(stackMeta.threadId);
+              }
+            }
+          }
+        }
+      }
+      const pineBps = this.pendingPineBreakpoints.get(seq);
+      if (pineBps !== undefined) {
+        this.pendingPineBreakpoints.delete(seq);
+        if (msg.success && msg.body) {
+          // Answer the client's original breakpoint list one-to-one, in order:
+          // the debuggee's verifications (mapped back to Pine lines) for the
+          // forwarded ones, an unverified placeholder for the withheld ones.
+          const serverBps = Array.isArray(msg.body.breakpoints)
+            ? (msg.body.breakpoints as Record<string, unknown>[])
+            : [];
+          let next = 0;
+          msg.body.breakpoints = pineBps.requested.map((wasForwarded) => {
+            if (!wasForwarded) {
+              return { verified: false, message: 'No executable Pine line here.' };
+            }
+            const bp = serverBps[next++] ?? { verified: false };
+            this.translateBreakpointToPine(bp, pineBps.pyPath);
+            return bp;
+          });
+        }
+      }
+      const gotoPyPath = this.pendingGotoTargets.get(seq);
+      if (gotoPyPath !== undefined) {
+        this.pendingGotoTargets.delete(seq);
+        if (msg.success && Array.isArray(msg.body?.targets) && this.mapper) {
+          for (const target of msg.body.targets as Record<string, unknown>[]) {
+            if (typeof target.line !== 'number') continue;
+            const pine = this.mapper.pyToPine(gotoPyPath, target.line);
+            if (pine) target.line = pine.line;
+          }
+        }
       }
       const scopesFrame = this.pendingScopes.get(seq);
       if (scopesFrame !== undefined) {
@@ -482,15 +734,43 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         return;
       } else if (msg.event === 'continued') {
         this.hooks.onExecState(false);
-      } else if (msg.event === 'breakpoint' && this.isSyntheticBreakpointEvent(msg)) {
-        // A `changed`/`new` event for the hidden bar-stop breakpoint would draw a
-        // phantom gutter marker at main's first line; the client never asked for
-        // it, so never tell it about it.
-        return;
+      } else if (msg.event === 'breakpoint') {
+        if (this.isSyntheticBreakpointEvent(msg)) {
+          // A `changed`/`new` event for the hidden bar-stop breakpoint would draw a
+          // phantom gutter marker at main's first line; the client never asked for
+          // it, so never tell it about it.
+          return;
+        }
+        // A verification/relocation event for a user breakpoint arrives in .py
+        // terms; the client's breakpoint lives in the .pine.
+        const bp = msg.body?.breakpoint as
+          | { line?: number; source?: { path?: string; name?: string } }
+          | undefined;
+        if (bp?.source?.path) this.translateBreakpointToPine(bp, bp.source.path);
       }
     }
 
     this.emit(msg);
+  }
+
+  /**
+   * Map a debuggee-reported breakpoint (a setBreakpoints verification or a
+   * `breakpoint` event) back to Pine terms, in place. `pyPath` locates the
+   * sourcemap when the breakpoint carries no source of its own.
+   */
+  private translateBreakpointToPine(
+    bp: { line?: number; endLine?: number; source?: { path?: string; name?: string } },
+    pyPath: string
+  ): void {
+    if (!this.mapper || typeof bp.line !== 'number') return;
+    const sourcePath = bp.source?.path ?? pyPath;
+    const pine = this.mapper.pyToPine(sourcePath, bp.line);
+    if (!pine) return;
+    bp.line = pine.line;
+    if (typeof bp.endLine === 'number') {
+      bp.endLine = this.mapper.pyToPine(sourcePath, bp.endLine)?.line ?? pine.line;
+    }
+    bp.source = { name: path.basename(pine.path), path: pine.path };
   }
 
   /**
@@ -547,6 +827,41 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       }
       this.runToBarTarget = undefined; // reached the target bar: land here
     }
+    // Pine-statement stepping: a user step that landed on another Python
+    // statement of the SAME Pine statement (same .pine line, same function) is
+    // not progress the user can see — swallow the stop and step again. The
+    // moment the top frame maps to a different Pine line (or enters another
+    // function, or stops for any other reason), the stop surfaces.
+    if (reason === 'step' && threadId !== undefined && this.stepContext?.threadId === threadId) {
+      const ctx = this.stepContext;
+      if (ctx.autoSteps < MAX_AUTO_STEPS) {
+        let samePineStatement = false;
+        try {
+          const top = await this.readTopFrame(threadId);
+          if (top?.path !== undefined && top.line !== undefined) {
+            const pine = this.mapper?.pyToPine(top.path, top.line);
+            samePineStatement =
+              pine !== undefined &&
+              pine.path === ctx.pinePath &&
+              pine.line === ctx.pineLine &&
+              top.name === ctx.frameName;
+          }
+        } catch {
+          samePineStatement = false; // can't tell: surface the stop, never spin
+        }
+        if (samePineStatement) {
+          ctx.autoSteps++;
+          this.write({
+            seq: this.internalSeq++,
+            type: 'request',
+            command: ctx.command,
+            arguments: { threadId },
+          });
+          return; // swallow: the client never sees the intermediate stop
+        }
+      }
+    }
+    this.stepContext = undefined;
     // Surfacing a real stop: the bar-stop breakpoint (if armed for this hop) has
     // done its job — disarm it so a plain Continue runs free to the next user
     // breakpoint instead of stopping on every bar.
@@ -587,6 +902,19 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       '__import__("pyneide_bridge.debug_inspect", fromlist=["bind_sources"]).bind_sources(globals())',
       frameId
     );
+  }
+
+  /** Top stack frame of a suspended thread (own-seq; raw .py terms). */
+  private async readTopFrame(
+    threadId: number
+  ): Promise<{ path?: string; line?: number; name?: string } | undefined> {
+    const stack = await this.request('stackTrace', { threadId, levels: 1 });
+    const frames = stack.stackFrames as
+      | { name?: string; line?: number; source?: { path?: string } }[]
+      | undefined;
+    const top = frames?.[0];
+    if (!top) return undefined;
+    return { path: top.source?.path, line: top.line, name: top.name };
   }
 
   /** Live `bar_index` of the suspended debuggee (pynecore.lib, module scope). */
@@ -692,6 +1020,9 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     // The injected entries come from own-seq evaluates the client-facing NA
     // pass never saw.
     normalizeNaVariables(body.variables);
+    // Compiler-renamed locals/state read as their Pine originals; a name that
+    // would collide (two block-scoped Pine `x`s in one frame) stays mangled.
+    if (this.mapper) demangleVariables(body.variables);
     this.emit(msg);
   }
 

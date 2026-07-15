@@ -4,15 +4,13 @@
 `[-]` kihagyva/elhalasztva. Az aktuális fázis részletes; a későbbiek csak
 mérföldkő-szinten vannak felbontva, a fázis megkezdésekor bontjuk ki őket.
 
-**Aktuális fázis: F5 (implementálva 2026-07-15, EDH/élő teszt hátravan)** —
-sorszintű sourcemap a PyneComp emitterben (inline marker + kinyerés a végső
-összeállítás után, bájtazonos kimenettel), `pynecomp compile --sourcemap` ->
-`<stem>.py.map`, PyneAPI `sourcemap=true` -> `{code, sourcemap}` JSON, IDE:
-fordításkor `.py.map` mentés (py-hash-sztemplivel érvénytelenítve kézi .py
-szerkesztéskor), futásidejű traceback -> Pine sor (Run log + Problems panel +
-hibaüzenet). Ellenőrizve: pynecomp pytest (7 új teszt + korpusz-identitás),
-IDE tsc+build+test:env. Hátravan: PyneAPI élő végpont-teszt (pyneapi-dev) és
-EDH-ellenőrzés. Következő: F6 (Pine debugger a sourcemapre építve).
+**Aktuális fázis: F6 (implementálva 2026-07-15, EDH-ellenőrzés hátravan)** —
+Pine debugger a sourcemapre építve: breakpoint/stackTrace/stepping közvetlenül
+a `.pine`-ban (DAP-proxy fordítás), Pine-statement granularitású lépkedés,
+fordítói átnevezések visszafejtése a Variables/Watch-ban. Ellenőrizve: IDE
+tsc+build+test:env (mapper/demangle unit + bridge + debug smoke). Hátravan:
+EDH-ellenőrzés (F5 élő PyneAPI-teszt is). Következő: F7 vagy publikálási
+előkészület — a hangos launch a PLAN szerint az F6-hoz időzítve.
 
 ---
 
@@ -276,9 +274,34 @@ a fájl maga válik v6-tá, így egyetlen `python <-> v6` leképezés marad,
 
 ## F6 — Pine debugger (M-L)
 
-- [ ] DAP-proxy (`pine` debug type, sourcemap-fordítás oda-vissza)
-- [ ] Név-tábla a fordítói átnevezésekhez (Variables panel)
-- [ ] Bar-stepping a közös runner-bridge-en
+- [x] Sourcemap-fordítás a DAP-proxyban (nem külön `pine` debug type: a meglévő
+      `pyne` session kap `pineSource`-t, ha `.pine`-ból indul; a factory ebből
+      épít `PineSourceMapper`-t — `src/debug/sourceMapper.ts`). Irányok:
+      setBreakpoints `.pine` -> `.py` (nem-emittáló sorról előre-snappelés; nem
+      leképezhető breakpoint unverified-ként megy vissza, a DAP sorrend tartva),
+      stackTrace frame-ek / breakpoint eventek / gotoTargets `py -> pine`,
+      breakpointLocations szintetikus válasz a mapből (a mappelt Pine-sorok a
+      breakpointolható sorok). Hiányzó/stale map (py_sha256 eltérés) ->
+      figyelmeztetés + `.py`-szintű debug fallback.
+- [x] Pine-statement stepping: step (next/stepIn/stepOut) után amíg a top frame
+      ugyanarra a `.pine` sorra és frame-névre képződik le, a proxy elnyeli a
+      stopot és own-seq újralép (cap: 50); breakpoint-stop azonnal felszínre
+      kerül. Így egy lépés = egy Pine statement, több generált Python sor sosem
+      látszik.
+- [x] Fordítói átnevezések a Variables/Watch-ban — név-tábla NÉLKÜL: a pynecomp
+      suffixek ABI-stabilak és determinisztikusak (`__global__` /
+      `__<8hex>__` + ütközés-kerülő `_`-ok, `__ren__` / `__ren___`), így a
+      Pine-név mintaillesztéssel visszanyerhető (`src/debug/demangle.ts`).
+      TS: Variables/state-slot/objektum-mező nevek demangelve (listán belüli
+      ütközésnél marad a mangled; `evaluateName` az igazi futásidejű név).
+      Bridge: `watch`/`cond` alias-bind (a valódi név árnyékol) + series/
+      persistent state Pine néven is. Fordító-oldali név-tábla későbbre, ha a
+      minta-alapú visszafejtés valahol kevésnek bizonyul.
+- [x] Bar-stepping a közös runner-bridge-en (F4 óta működik; `.pine` módban is
+      változatlan — a rejtett bar-stop breakpoint `.py`-térben él, a klienst
+      nem érinti).
+- [ ] EDH-ellenőrzés: `.pine` breakpoint + stepping + Variables/Watch +
+      Next bar/Run to bar élőben, strict és normál fordítással is
 
 ## F7 — Language serverek (L)
 

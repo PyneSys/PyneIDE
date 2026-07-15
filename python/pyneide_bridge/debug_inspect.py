@@ -31,11 +31,41 @@ import base64
 import importlib
 import json
 import os
+import re
 import sys
 import types
 from typing import Any
 
 _STATE_PREFIX = "__state·"  # scope-qualified hidden param: __state·main__
+
+# PyneComp renames a user identifier only by APPENDING a suffix, and the suffix
+# shapes are part of its stable ABI (see pynecomp renames.py): a block-scope
+# suffix (``x__global__`` / ``x__0000002a__``, extra trailing underscores dodge
+# same-named source identifiers) for variables colliding with a function/
+# import/module name (every variable in --strict mode), and the canonical
+# ``__ren__`` (class-body ``__ren___``) for exported functions, UDT fields and
+# keyword-shaped names. The Pine original is recoverable from the name alone.
+_MANGLE_SCOPE_RE = re.compile(r"(.+?)__(?:global|[0-9a-f]{8})__+")
+_MANGLE_REN_RE = re.compile(r"(.+?)__ren___?")
+
+
+def _demangle(name: str) -> str | None:
+    """The Pine name behind a compiler-renamed identifier, or None."""
+    m = _MANGLE_SCOPE_RE.fullmatch(name) or _MANGLE_REN_RE.fullmatch(name)
+    return m.group(1) if m else None
+
+
+def _bind_demangled(ns: dict[str, Any]) -> None:
+    """Alias compiler-renamed names in an eval namespace to their Pine originals.
+
+    A watch/condition is written in Pine terms (``basis``), while the runtime
+    binding may be the renamed ``basis__global__``. ``setdefault`` keeps a real
+    binding of the bare name authoritative (it shadows the alias).
+    """
+    for name in list(ns.keys()):
+        base = _demangle(name)
+        if base:
+            ns.setdefault(base, ns[name])
 
 # The Pyne scope: the current bar's essence, read straight off ``pynecore.lib``
 # (the runner sets these per bar as plain scalars). ``bar_index`` leads because
@@ -266,6 +296,7 @@ def cond(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any])
         except Exception:
             pass
     namespace.update(frame_locals)
+    _bind_demangled(namespace)
     try:
         return bool(eval(expr, namespace, namespace))  # noqa: S307
     except Exception as exc:
@@ -529,11 +560,19 @@ def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
                     series.setdefault(name[len("__lib·"):], state[i])
                 else:
                     series.setdefault(name, state[i])
+                    base = _demangle(name)
+                    if base:
+                        # A renamed series binds under its Pine name too, so a
+                        # watch subscript written in Pine terms hits the buffer.
+                        series.setdefault(base, state[i])
             elif "·" not in name and not name.startswith("__"):
                 # A persistent variable's current scalar (var slot); companion
                 # flag/kahan slots and children carry the middle dot, so they
                 # never bind a bare name.
                 ns.setdefault(name, state[i])
+                base = _demangle(name)
+                if base:
+                    ns.setdefault(base, state[i])
 
 
 class _SeriesSubscript(ast.NodeTransformer):
@@ -606,6 +645,7 @@ def watch(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any]
     # Real locals resolve last so a genuine local shadows a bound builtin/state,
     # matching Python scoping (and the transform's own name resolution).
     ns.update(frame_locals)
+    _bind_demangled(ns)
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:

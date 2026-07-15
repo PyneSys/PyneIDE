@@ -393,6 +393,10 @@ export class RunService {
       request: 'attach',
       connect: { host: ep.host, port: ep.port },
       pyneManaged: true,
+      // A .pine launch debugs at the Pine level: the adapter factory builds a
+      // sourcemap translator from this (see debug/pyneDebug.ts). Survives a
+      // restart along with the rest of the resolved config.
+      ...(doc.languageId === 'pine' ? { pineSource: doc.uri.fsPath } : {}),
       // Freeze the resolved data so a restart reuses it instead of re-prompting.
       data: prepared.data,
       justMyCode,
