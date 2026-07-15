@@ -31,7 +31,8 @@
     "onStartupFinished",
     "onLanguage:python",
     "onLanguage:pine",
-    "onDebugDynamicConfigurations:pyne"
+    "onDebugDynamicConfigurations:pyne",
+    "onCustomEditor:pyneide.ohlcvTable"
   ],
   "contributes": {
     "commands": [
@@ -371,6 +372,18 @@
         "language": "toml",
         "scopeName": "source.toml",
         "path": "./syntaxes/toml.tmLanguage.json"
+      }
+    ],
+    "customEditors": [
+      {
+        "viewType": "pyneide.ohlcvTable",
+        "displayName": "OHLCV Table",
+        "selector": [
+          {
+            "filenamePattern": "*.ohlcv"
+          }
+        ],
+        "priority": "default"
       }
     ]
   },

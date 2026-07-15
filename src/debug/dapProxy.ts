@@ -56,6 +56,24 @@ const wrapCondition = (expr: string): string =>
     expr
   )},globals(),locals())`;
 
+/** Evaluate contexts routed through the Pine-aware `watch` helper (see below). */
+const WATCH_CONTEXTS = new Set(['watch', 'hover', 'clipboard']);
+
+/**
+ * Wrap a watch/hover expression so Pine series and persistent state resolve.
+ * `debug_inspect.watch` re-evaluates the ORIGINAL expression in a namespace
+ * where `basis[5]`/`close[1]` index the series' history buffer (a bare `basis`
+ * is only the current scalar and not subscriptable) and a persistent `p` — kept
+ * in a hidden state slot, not a local — binds by name. The result object is
+ * returned unchanged, so pydevd still renders it with full type/expansion.
+ * `frameName` scopes the state lookup; the empty string is a safe fallback
+ * (bare builtins still resolve, only the series/state rewrite is skipped).
+ */
+const wrapWatch = (expr: string, frameName: string): string =>
+  `__import__("pyneide_bridge.debug_inspect",fromlist=["watch"]).watch(${JSON.stringify(
+    expr
+  )},globals(),locals(),${JSON.stringify(frameName)})`;
+
 interface DapMessage {
   seq: number;
   type: 'request' | 'response' | 'event';
@@ -73,6 +91,8 @@ interface PineSlot {
   param: string;
   slot: number;
   kind: 'var' | 'series';
+  /** Source-level type label (`Series[float]`, `Persistent[int]`). */
+  type: string;
   owner: string;
   own: boolean;
 }
@@ -244,6 +264,22 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
             void this.answerSyntheticScope(msg.seq, PINE_GLOBALS_EXPR, globalsFrame);
             return;
           }
+        }
+      }
+      // Route watch/hover expressions through the Pine-aware `watch` helper so
+      // series history (`basis[5]`) and persistent state resolve. Left as a
+      // plain forward for the Debug Console (`repl`), which may carry statements
+      // the wrapper's expression context could not hold.
+      if (msg.command === 'evaluate') {
+        const args = msg.arguments ?? {};
+        const context = args.context;
+        if (
+          typeof args.expression === 'string' &&
+          typeof args.frameId === 'number' &&
+          typeof context === 'string' &&
+          WATCH_CONTEXTS.has(context)
+        ) {
+          args.expression = wrapWatch(args.expression, this.frameNames.get(args.frameId) ?? '');
         }
       }
       this.trackClientRequest(msg);
@@ -633,12 +669,19 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           lead.push(variable);
           continue;
         }
+        // The plain local keeps the current scalar behind the equals sign, but
+        // takes the slot's source type (`Series[float]`) and — for a series —
+        // the buffer's variablesReference so it expands into history. The scalar
+        // may itself be NA (shown `na`); the series buffer still expands.
         merged.add(idx);
+        const localVar = userLocals[idx];
         lead.push({
-          ...userLocals[idx],
+          ...localVar,
+          type: slot.type,
+          value: localVar.type === 'NA' ? 'na' : localVar.value,
           ...(slot.kind === 'series'
             ? { variablesReference: variable.variablesReference ?? 0 }
-            : {}),
+            : { variablesReference: localVar.type === 'NA' ? 0 : localVar.variablesReference }),
         });
       }
       body.variables = [...lead, ...userLocals.filter((_, i) => !merged.has(i))];
@@ -671,19 +714,21 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         try {
           const body = await this.evaluate(expr, frameId);
           if (generation !== this.stopGeneration) return undefined;
-          const suffixParts = [
-            ...(slot.kind === 'series' ? ['series'] : []),
-            ...(slot.own ? [] : [slot.owner]),
-          ];
-          const suffix = suffixParts.length ? ` (${suffixParts.join(', ')})` : '';
+          // Pine state reads apart from plain locals through its source-level
+          // TYPE, not a name tag: `Series[float]` / `Persistent[int]` (the
+          // SeriesImpl repr / raw scalar type would hide what it is). An NA slot
+          // shows a plain `na` and does not expand (its children are internals).
+          const isNa = body.type === 'NA';
           return {
             slot,
             variable: {
-              name: `${slot.name}${suffix}`,
-              value: String(body.result ?? ''),
-              type: typeof body.type === 'string' ? body.type : undefined,
+              name: slot.name,
+              value: isNa ? 'na' : String(body.result ?? ''),
+              type: slot.type,
               variablesReference:
-                typeof body.variablesReference === 'number' ? body.variablesReference : 0,
+                !isNa && typeof body.variablesReference === 'number'
+                  ? body.variablesReference
+                  : 0,
               evaluateName: expr,
               presentationHint: { kind: 'data' },
             },
@@ -966,11 +1011,14 @@ const ISOLATION_TEMP = /^(__st__|__b__|__i__|__cnt_\d+__|__chl_\d+__)$/;
  * away, no Python identifier has one). Everything else stays, including
  * PyneComp's own dunder-named locals (`__block_result__`, `__switch__`,
  * `__eval__`, ...) which are meaningful script variables, not plumbing.
+ * `__lib·close` is the hidden buffer a builtin source grows for `close[1]`
+ * history — its live value already shows in the Pyne scope, so drop it here.
  */
 function isJunkLocal(name: string): boolean {
   return (
     name === '__state__' ||
     name.startsWith('__state·') ||
+    name.startsWith('__lib·') ||
     ISOLATION_TEMP.test(name) ||
     name.includes(' ')
   );

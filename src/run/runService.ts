@@ -18,6 +18,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartManager } from '../chart/chartPanel';
 import type { CompileService } from '../compile/service';
 import type { DebugBreakpointControl } from '../debug/dapProxy';
@@ -185,6 +186,15 @@ export class RunService {
   attachChart(chartManager: ChartManager): void {
     this.listener = chartManager;
     this.chartManager = chartManager;
+    chartManager.isPinned = (chartKey) => this.isChartPinned(chartKey);
+  }
+
+  /** A chart is pinned (kept alive even with no open source tab) while a run,
+   * debug session or data-only preview is streaming to it — the source tab
+   * reopens itself on the next debugger step, so a momentary close must not
+   * discard the chart. */
+  private isChartPinned(chartKey: string): boolean {
+    return this.activeChartKey === chartKey || this.previewRuns.has(chartKey);
   }
 
   /** Resolve the pieces every chart/data action needs: the script doc, its
@@ -216,7 +226,7 @@ export class RunService {
   async changeRunData(uri?: vscode.Uri): Promise<string | undefined> {
     const ctx = await this.resolveChartContext(uri);
     if (!ctx) return undefined;
-    const chartKey = ctx.doc.uri.fsPath;
+    const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
     const data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
     if (data && this.activeChartKey !== chartKey) {
       this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
@@ -232,13 +242,21 @@ export class RunService {
   async openChart(uri?: vscode.Uri): Promise<void> {
     const ctx = await this.resolveChartContext(uri);
     if (!ctx) return;
-    const chartKey = ctx.doc.uri.fsPath;
+    const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
+    // An existing chart (dormant after a close, or already visible) just replays
+    // its snapshot — that IS the persistence: reopening shows what was there,
+    // never a fresh preview that would wipe a finished run's result.
+    if (this.chartManager?.hasChart(chartKey)) {
+      this.chartManager.reveal(chartKey);
+      return;
+    }
+    // Fresh chart: load the bound data as a raw-candle preview.
     let data = getRememberedData(this.context, ctx.workdir, chartKey);
     if (!data) {
       data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
     }
     if (!data) return;
-    this.chartManager?.reveal(chartKey, path.basename(chartKey));
+    this.chartManager?.reveal(chartKey);
     // A run already streaming to this chart owns it — don't fight it with a
     // preview; the new data still takes effect on the next run.
     if (this.activeChartKey !== chartKey) {
@@ -277,7 +295,11 @@ export class RunService {
     });
     this.previewRuns.set(chartKey, run);
     void run.exited.then(() => {
-      if (this.previewRuns.get(chartKey) === run) this.previewRuns.delete(chartKey);
+      if (this.previewRuns.get(chartKey) === run) {
+        this.previewRuns.delete(chartKey);
+        // Preview no longer pins the chart: retire it if its source tab is gone.
+        this.chartManager?.reconcile();
+      }
     });
   }
 
@@ -518,9 +540,10 @@ export class RunService {
       return undefined;
     }
 
-    // Data is bound to the user's source file (the .pine, not the compiled .py),
-    // so it stays stable across recompiles and matches the chart's key (Part B).
-    const sourceKey = doc.uri.fsPath;
+    // Data is bound to the user's source file, folded onto the canonical chart
+    // key (a .pine and its compiled .py share one chart + one data binding), so
+    // it stays stable across recompiles and matches the chart's key (Part B).
+    const sourceKey = canonicalChartKey(doc.uri.fsPath);
     let data = overrides?.data ?? getRememberedData(this.context, workdir, sourceKey);
     if (!data) {
       this.output.appendLine(`Workdir resolved: ${workdir} — opening data picker.`);
@@ -896,6 +919,9 @@ export class RunService {
     this.flyToBar = undefined;
     this.setRunActive(false);
     this.listener?.onFinished(chartKey);
+    // The run no longer pins this chart: if its source tab was closed while it
+    // ran (kept alive only by the run), retire it now.
+    this.chartManager?.reconcile();
     // The debuggee is gone; close the debug session with it.
     if (this.debugSession) {
       void vscode.debug.stopDebugging(this.debugSession);

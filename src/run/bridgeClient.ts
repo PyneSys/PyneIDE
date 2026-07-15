@@ -50,7 +50,6 @@ export interface TradeRecord {
 export interface StartEvent {
   e: 'start';
   script: string;
-  scriptTitle: string | null;
   scriptType: 'indicator' | 'strategy' | 'library';
   /** Script-level `overlay=` from indicator()/strategy(): plots default to the price pane. */
   overlay: boolean;

@@ -233,7 +233,6 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         emitter.emit({
             "e": "start",
             "script": str(script),
-            "scriptTitle": sanitize(getattr(runner.script, "title", None)),
             "scriptType": _script_type_name(runner.script),
             "overlay": bool(getattr(runner.script, "overlay", False)),
             "syminfo": _serialize_syminfo(syminfo),
@@ -284,7 +283,6 @@ def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
         emitter.emit({
             "e": "start",
             "script": "",
-            "scriptTitle": None,
             "scriptType": "indicator",
             "overlay": True,
             "dataOnly": True,

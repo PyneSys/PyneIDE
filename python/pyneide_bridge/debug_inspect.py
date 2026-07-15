@@ -76,6 +76,49 @@ def _is_source_sentinel(value: Any) -> bool:
     return isinstance(value, Source)
 
 
+# Python scalar type names that read differently in Pine (Python ``str`` is
+# Pine's ``string``); everything else keeps its Python name (``int``, ``float``,
+# ``bool``, or a user class).
+_PINE_TYPE_ALIAS = {"str": "string"}
+
+
+def _pine_elem_type(value: Any) -> str:
+    """Pine element-type name of a runtime value (for ``Series[...]`` labels).
+
+    ``NA`` sentinels carry their element type in ``.type`` (``NA[float]`` ->
+    ``float``); the inf/nan valued-NA markers behave as ``float``. A live scalar
+    reports its Python type name, aliased where Pine differs (``str`` ->
+    ``string``).
+    """
+    try:
+        from pynecore.types.na import NA
+    except Exception:
+        NA = None  # type: ignore[assignment]
+    if NA is not None and isinstance(value, NA):
+        t = value.type
+        if t is None or hasattr(t, "_na_value"):
+            return "float"
+        return getattr(t, "__name__", None) or "float"
+    name = type(value).__name__
+    return _PINE_TYPE_ALIAS.get(name, name)
+
+
+def _slot_type_label(value: Any, is_series: bool) -> str:
+    """Source-level type of a state slot: ``Series[float]`` / ``Persistent[int]``.
+
+    The element type is read from the live value — the current bar's scalar for a
+    persistent variable, the newest buffered value for a series (both match what
+    the developer declared, e.g. ``basis: Series[float]``).
+    """
+    if is_series:
+        try:
+            elem = _pine_elem_type(value[0]) if len(value) > 0 else "float"
+        except Exception:
+            elem = "float"
+        return f"Series[{elem}]"
+    return f"Persistent[{_pine_elem_type(value)}]"
+
+
 def _lib():
     try:
         return importlib.import_module("pynecore.lib")
@@ -386,6 +429,20 @@ def _match_layout(layouts: dict[str, Any], owner: str, state: list) -> dict[str,
     return None
 
 
+def _is_internal_slot_name(name: str) -> bool:
+    """True for a slot name that is compiler plumbing, not a source variable.
+
+    ``__lib·close`` is the hidden history buffer a builtin source grows when the
+    script reads ``close[1]`` (see ``lib_series.py``) — its live value already
+    shows in the Pyne scope, so listing the buffer as a Locals entry is noise.
+    ``p·flag`` / ``p·kahan`` are the lazy-init flag and Kahan-sum companions of a
+    persistent variable (see ``slot_layout.py``): the base slot holds the value.
+    """
+    return (name.startswith("__lib·")
+            or name.endswith("·flag")
+            or name.endswith("·kahan"))
+
+
 def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
                frame_name: str) -> str:
     """List the named Pine state slots reachable from a stopped frame.
@@ -393,7 +450,7 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
     :param frame_locals: The frame's ``locals()`` (pydevd evaluate context).
     :param frame_globals: The frame's ``globals()``.
     :param frame_name: The frame's function name (from the DAP stack trace).
-    :return: base64 of ``[{name, param, slot, kind, owner, own}]``.
+    :return: base64 of ``[{name, param, slot, kind, type, owner, own}]``.
     """
     layouts = frame_globals.get("__pyne_slot_layout__") or {}
     slots: list[dict[str, Any]] = []
@@ -415,15 +472,145 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
             name = names[i] if i < len(names) else None
             # A name repeating after its first slot is a companion slot
             # (lazy-init flag, kahan sum); the first slot holds the value.
-            if not name or i in child_slots or name in seen:
+            if not name or i in child_slots or name in seen or _is_internal_slot_name(name):
                 continue
             seen.add(name)
+            is_series = i in series_slots
             slots.append({
                 "name": name,
                 "param": param,
                 "slot": i,
-                "kind": "series" if i in series_slots else "var",
+                "kind": "series" if is_series else "var",
+                "type": _slot_type_label(state[i], is_series),
                 "owner": owner,
                 "own": owner == frame_name,
             })
     return base64.b64encode(json.dumps(slots).encode("utf-8")).decode("ascii")
+
+
+def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
+                   frame_name: str, ns: dict[str, Any], series: dict[str, Any]) -> None:
+    """Bind a frame's named Pine state into a watch-evaluation namespace.
+
+    Walks the same hidden ``__state__`` vectors + ``__pyne_slot_layout__`` as
+    :func:`pine_slots`, but keeps the live runtime objects instead of a rendered
+    listing:
+
+    * a series slot's ``SeriesImpl`` is put in ``series`` under its source name,
+      so a subscript like ``basis[5]`` can be redirected onto the buffer (the
+      frame's ``basis`` local is only the current scalar). Builtin-source history
+      buffers (``__lib·close``) are bound under the bare source name (``close``)
+      so ``close[1]`` resolves too;
+    * a persistent variable's current scalar is bound by name into ``ns`` — the
+      transform stores it in ``__state__[N]``, not a local, so a bare ``p`` in a
+      watch would otherwise be a ``NameError``.
+
+    Own-scope state wins over closure state of the same name (``setdefault``).
+    """
+    layouts = frame_globals.get("__pyne_slot_layout__") or {}
+    for param, state in frame_locals.items():
+        is_qualified = param.startswith(_STATE_PREFIX) and param.endswith("__")
+        if param != "__state__" and not is_qualified:
+            continue
+        if not isinstance(state, list):
+            continue
+        owner = _owner_of(param, frame_name)
+        layout = _match_layout(layouts, owner, state)
+        if layout is None:
+            continue
+        names = layout.get("names") or ()
+        series_slots = {slot for slot, _mbb in layout.get("series", ())}
+        for i in range(len(state)):
+            name = names[i] if i < len(names) else None
+            if not name:
+                continue
+            if i in series_slots:
+                if name.startswith("__lib·"):
+                    series.setdefault(name[len("__lib·"):], state[i])
+                else:
+                    series.setdefault(name, state[i])
+            elif "·" not in name and not name.startswith("__"):
+                # A persistent variable's current scalar (var slot); companion
+                # flag/kahan slots and children carry the middle dot, so they
+                # never bind a bare name.
+                ns.setdefault(name, state[i])
+
+
+class _SeriesSubscript(ast.NodeTransformer):
+    """Redirect ``name[...]`` onto the frame's series buffer for ``name``.
+
+    A bare ``basis`` is left alone (it resolves to the current scalar, matching
+    Pine's ``basis`` == ``basis[0]``); only a subscript is rewritten to index the
+    ``SeriesImpl`` history. Each buffer is injected under a fresh ``__pyne_series_N__``
+    global so the compiled expression stays a plain subscript pydevd renders with
+    full detail (type + expandable children via the pydevd series plugin).
+    """
+
+    def __init__(self, series: dict[str, Any], ns: dict[str, Any]) -> None:
+        self._series = series
+        self._ns = ns
+        self._count = 0
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+        self.generic_visit(node)
+        value = node.value
+        if isinstance(value, ast.Name) and value.id in self._series:
+            key = f"__pyne_series_{self._count}__"
+            self._count += 1
+            self._ns[key] = self._series[value.id]
+            node.value = ast.copy_location(ast.Name(id=key, ctx=ast.Load()), value)
+        return node
+
+
+def watch(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any],
+          frame_name: str) -> Any:
+    """Evaluate a watch/hover expression with Pine series and state resolved.
+
+    The proxy wraps every watch/hover expression in a call to this so the
+    developer can type Pine-natural expressions the transformed runtime would
+    otherwise reject:
+
+    * ``basis[5]`` / ``close[1]`` — historical series access. In the runtime a
+      series variable's own name holds only the current scalar (a plain float,
+      not subscriptable); the history lives in an anonymous state slot. This
+      rewrites each ``series[...]`` onto that slot's ``SeriesImpl``.
+    * ``p`` — a persistent variable, stored in ``__state__[N]`` rather than a
+      local, is bound by name to its current value.
+
+    Bare builtins (``close``, ``bar_index``, ``time``) resolve as before (bound
+    live off ``pynecore.lib``). The result object is RETURNED as-is so pydevd
+    renders it with full type/expansion detail; a genuine error in the user's
+    expression propagates so the watch shows it, exactly as an unwrapped watch
+    would.
+
+    :param expr: The user's original watch expression.
+    :param frame_globals: The stopped frame's ``globals()``.
+    :param frame_locals: The stopped frame's ``locals()``.
+    :param frame_name: The frame's function name (for state-scope matching).
+    :return: The evaluated value.
+    """
+    ns: dict[str, Any] = dict(frame_globals)
+    ns.update(_bar_values())
+    lib = _lib()
+    if lib is not None:
+        ns["lib"] = lib
+        try:
+            ns["pynecore"] = importlib.import_module("pynecore")
+        except Exception:
+            pass
+    series: dict[str, Any] = {}
+    try:
+        _collect_state(frame_locals, frame_globals, frame_name, ns, series)
+    except Exception:
+        series = {}
+    # Real locals resolve last so a genuine local shadows a bound builtin/state,
+    # matching Python scoping (and the transform's own name resolution).
+    ns.update(frame_locals)
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return eval(expr, ns, ns)  # noqa: S307 — surface the real error
+    if series:
+        _SeriesSubscript(series, ns).visit(tree)
+        ast.fix_missing_locations(tree)
+    return eval(compile(tree, "<pyne-watch>", "eval"), ns, ns)  # noqa: S307

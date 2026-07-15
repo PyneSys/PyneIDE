@@ -54,14 +54,29 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // OHLCV table webview bundle: browser code, no vscode API.
+  const tableCtx = await esbuild.context({
+    ...common,
+    entryPoints: ['src/data/webview/table.ts'],
+    outfile: 'dist/ohlcv-table.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
     await webviewCtx.watch();
+    await tableCtx.watch();
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
     await webviewCtx.rebuild();
+    await tableCtx.rebuild();
     await ctx.dispose();
     await webviewCtx.dispose();
+    await tableCtx.dispose();
   }
 }

@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { AuthService } from './api/auth';
 import { ChartManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
+import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
@@ -19,6 +20,8 @@ const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 
 export function activate(context: vscode.ExtensionContext): void {
   new PyneDecorationProvider().register(context);
+
+  context.subscriptions.push(new OhlcvEditorProvider(context).register());
 
   const output = vscode.window.createOutputChannel('PyneIDE Environment');
   const manager = new EnvManager(context.globalStorageUri.fsPath, output);
@@ -64,6 +67,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const chartManager = new ChartManager(context);
   runService.attachChart(chartManager);
   chartManager.onSelectData = (chartKey) => void runService.reselectChartData(chartKey);
+  // A chart lives as long as its script (the .pine OR its compiled .py) is open
+  // in a tab, or a run/debug is streaming to it. Closing the last such tab
+  // retires the chart; closing only the chart's own tab keeps it dormant so it
+  // can be reopened with its state intact.
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(() => chartManager.reconcile())
+  );
 
   void initialCheck(context, manager);
 }

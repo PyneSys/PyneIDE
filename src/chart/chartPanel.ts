@@ -1,55 +1,104 @@
 /**
- * Chart webview panels: one per script (keyed by the user's source path), so
- * every script can have its own chart open at once. `ChartManager` owns the
- * map and routes the bridge event stream (tagged with a chart key by
- * RunService) to the right panel; `ChartPanel` owns a single WebviewPanel
- * lifecycle and forwards events to its webview (see webview/main.ts for chart
- * logic). Messages are queued until the webview reports ready, so a run can
- * start streaming before the panel finished loading.
+ * Chart webview panels: one per script (keyed by its canonical chart key —
+ * a `.pine` and its compiled `.py` share one), so every script can have its
+ * own chart open at once. `ChartManager` owns the map and routes the bridge
+ * event stream (tagged with a chart key by RunService) to the right panel;
+ * `ChartPanel` owns a single WebviewPanel lifecycle and forwards events to its
+ * webview (see webview/main.ts for chart logic).
+ *
+ * The panel keeps a host-side SNAPSHOT of the whole stream (start + all bars +
+ * plotKeys + trades + stats + end), so it survives the webview being closed:
+ * reopening the chart replays the snapshot and shows exactly what was there,
+ * as if it had never been closed. The panel therefore outlives its webview —
+ * `ChartManager.reconcile` (driven by editor tabs) is what actually retires a
+ * chart, once neither the script nor a run/debug references it anymore.
  */
+import * as path from 'path';
+
 import * as vscode from 'vscode';
 
-import type { BridgeEvent, StartEvent } from '../run/bridgeClient';
+import type { BarRow, BridgeEvent, StartEvent, TradeRecord } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
+import { openChartKeys } from './chartKey';
 import type { ChartInMessage, ChartOutMessage } from './messages';
+
+/**
+ * Everything needed to rebuild a chart's webview from scratch. plotKeys is the
+ * latest full list (the bridge only ever APPENDS keys, so a bar's shorter plot
+ * row still aligns against the final list); trades accumulate; openTrades/stats
+ * are single end-of-run snapshots.
+ */
+interface ChartSnapshot {
+  start: StartEvent;
+  bars: BarRow[];
+  plotKeys: string[];
+  trades: TradeRecord[];
+  openTrades: TradeRecord[];
+  stats: Record<string, number | null> | undefined;
+  ended: { bars: number; cancelled: boolean } | undefined;
+}
 
 /** One chart webview, bound to a single script's chart key. */
 export class ChartPanel {
   private panel: vscode.WebviewPanel | undefined;
   private ready = false;
-  private queue: ChartInMessage[] = [];
-  private lastStart: StartEvent | undefined;
+  /** Host-side stream snapshot; survives the webview being closed so reopening
+   * replays the same chart. Undefined until the first `start` event. */
+  private snap: ChartSnapshot | undefined;
+  /** Stable tab title (`<script> — Chart`); never changes on run/debug so the
+   * tab stays recognizable across previews, runs and debug sessions. */
+  private readonly title: string;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly onDispose: () => void,
+    chartKey: string,
     private readonly onSelectData: () => void
-  ) {}
+  ) {
+    this.title = `${path.basename(chartKey)} — Chart`;
+  }
 
-  /** Route a bridge event (already known to belong to this chart) to the webview. */
+  /**
+   * Route a bridge event (already known to belong to this chart) into both the
+   * host snapshot and the live webview. A `start` resets the snapshot (a new
+   * run/preview replaces whatever was shown before).
+   */
   handleEvent(event: BridgeEvent): void {
     switch (event.e) {
       case 'start':
-        this.lastStart = event;
-        this.reveal(event.scriptTitle ?? undefined);
+        this.snap = {
+          start: event,
+          bars: [],
+          plotKeys: [],
+          trades: [],
+          openTrades: [],
+          stats: undefined,
+          ended: undefined,
+        };
+        this.reveal();
         this.post({ type: 'reset', start: event });
         break;
       case 'bars':
+        if (this.snap) for (const row of event.d) this.snap.bars.push(row);
         this.post({ type: 'bars', rows: event.d });
         break;
       case 'plotKeys':
+        if (this.snap) this.snap.plotKeys = event.keys;
         this.post({ type: 'plotKeys', keys: event.keys });
         break;
       case 'trades':
+        if (this.snap) for (const t of event.d) this.snap.trades.push(t);
         this.post({ type: 'trades', trades: event.d });
         break;
       case 'openTrades':
+        if (this.snap) this.snap.openTrades = event.d;
         this.post({ type: 'openTrades', trades: event.d });
         break;
       case 'stats':
+        if (this.snap) this.snap.stats = event.d;
         this.post({ type: 'stats', stats: event.d });
         break;
       case 'end':
+        if (this.snap) this.snap.ended = { bars: event.bars, cancelled: event.cancelled };
         this.post({ type: 'end', bars: event.bars, cancelled: event.cancelled });
         break;
       default:
@@ -57,17 +106,17 @@ export class ChartPanel {
     }
   }
 
-  /** Create (if needed) and reveal the panel, optionally retitling it. */
-  reveal(title?: string): void {
+  /** Create (if needed) and reveal the panel. The title is fixed at
+   * construction and never changes on run/debug. */
+  reveal(): void {
     if (this.panel) {
-      if (title) this.panel.title = title;
       this.panel.reveal(undefined, true);
       return;
     }
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist');
     this.panel = vscode.window.createWebviewPanel(
       'pyneideChart',
-      title ?? 'Pyne Chart',
+      this.title,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       {
         enableScripts: true,
@@ -78,10 +127,11 @@ export class ChartPanel {
     this.panel.webview.html = this.html(this.panel.webview, distRoot);
     this.panel.webview.onDidReceiveMessage((msg: ChartOutMessage) => this.handleOutMessage(msg));
     this.panel.onDidDispose(() => {
+      // The webview is gone, but the snapshot lives on: this panel stays in the
+      // manager's map (dormant) until reconcile retires it, so reopening the
+      // chart replays the snapshot. Closing the tab is not "delete the chart".
       this.panel = undefined;
       this.ready = false;
-      this.queue = [];
-      this.onDispose();
     });
   }
 
@@ -92,15 +142,16 @@ export class ChartPanel {
   private handleOutMessage(msg: ChartOutMessage): void {
     switch (msg.type) {
       case 'ready':
+        // The webview just (re)loaded: replay the whole snapshot so a freshly
+        // opened panel matches what was there, and an in-flight run's bars so
+        // far land before its live increments continue (post() gates on ready,
+        // so nothing was delivered before this point — no duplicates).
         this.ready = true;
-        for (const queued of this.queue) {
-          void this.panel?.webview.postMessage(queued);
-        }
-        this.queue = [];
+        this.replayFromSnapshot();
         break;
       case 'openCsv': {
         const file =
-          msg.which === 'plot' ? this.lastStart?.outputs.plot : this.lastStart?.outputs.trades;
+          msg.which === 'plot' ? this.snap?.start.outputs.plot : this.snap?.start.outputs.trades;
         if (file) void vscode.window.showTextDocument(vscode.Uri.file(file));
         break;
       }
@@ -110,12 +161,27 @@ export class ChartPanel {
     }
   }
 
-  private post(message: ChartInMessage): void {
-    if (!this.panel) return;
-    if (!this.ready) {
-      this.queue.push(message);
-      return;
+  /** Rebuild the current webview from the host snapshot (reset → keys → bars →
+   * trades → stats → end). Safe to call only once the webview is ready. */
+  private replayFromSnapshot(): void {
+    const s = this.snap;
+    const webview = this.panel?.webview;
+    if (!s || !webview) return;
+    void webview.postMessage({ type: 'reset', start: s.start });
+    if (s.plotKeys.length) void webview.postMessage({ type: 'plotKeys', keys: s.plotKeys });
+    if (s.bars.length) void webview.postMessage({ type: 'bars', rows: s.bars });
+    if (s.trades.length) void webview.postMessage({ type: 'trades', trades: s.trades });
+    if (s.openTrades.length) void webview.postMessage({ type: 'openTrades', trades: s.openTrades });
+    if (s.stats) void webview.postMessage({ type: 'stats', stats: s.stats });
+    if (s.ended) {
+      void webview.postMessage({ type: 'end', bars: s.ended.bars, cancelled: s.ended.cancelled });
     }
+  }
+
+  /** Deliver a live stream message; dropped while no webview is ready (the
+   * snapshot already captured it and will replay on the next open). */
+  private post(message: ChartInMessage): void {
+    if (!this.panel || !this.ready) return;
     void this.panel.webview.postMessage(message);
   }
 
@@ -266,6 +332,9 @@ export class ChartManager implements RunListener {
   /** Set by the host: invoked when a panel's Data button is clicked, with the
    * script's chart key, to re-pick and reload that chart's data. */
   onSelectData: ((chartKey: string) => void) | undefined;
+  /** Set by the host: a chart is pinned (kept alive with no open source tab)
+   * while a run/preview/debug is streaming to it. */
+  isPinned: ((chartKey: string) => boolean) | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -277,21 +346,43 @@ export class ChartManager implements RunListener {
     // The 'end' event already closed out the chart state.
   }
 
+  /** Whether a (possibly dormant) chart exists for this key. */
+  hasChart(chartKey: string): boolean {
+    return this.panels.has(chartKey);
+  }
+
   /** Open (or focus) a script's chart panel on demand — used by "Open chart". */
-  reveal(chartKey: string, title?: string): ChartPanel {
+  reveal(chartKey: string): ChartPanel {
     const panel = this.panelFor(chartKey);
-    panel.reveal(title);
+    panel.reveal();
     return panel;
+  }
+
+  /**
+   * Retire charts whose script is no longer open in ANY editor tab (neither the
+   * `.pine` nor its `.py`) and which no run/debug is streaming to. This is the
+   * true chart-close: closing just the chart's own tab keeps it dormant (so it
+   * can be reopened), but closing the last script tab discards it for good.
+   */
+  reconcile(): void {
+    const live = openChartKeys();
+    for (const key of [...this.panels.keys()]) {
+      if (!live.has(key) && !this.isPinned?.(key)) this.closeChart(key);
+    }
+  }
+
+  /** Dispose a chart's webview (if any) and drop its snapshot. */
+  private closeChart(chartKey: string): void {
+    const panel = this.panels.get(chartKey);
+    if (!panel) return;
+    this.panels.delete(chartKey);
+    panel.dispose();
   }
 
   private panelFor(chartKey: string): ChartPanel {
     let panel = this.panels.get(chartKey);
     if (!panel) {
-      panel = new ChartPanel(
-        this.context,
-        () => this.panels.delete(chartKey),
-        () => this.onSelectData?.(chartKey)
-      );
+      panel = new ChartPanel(this.context, chartKey, () => this.onSelectData?.(chartKey));
       this.panels.set(chartKey, panel);
     }
     return panel;
