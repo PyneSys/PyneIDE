@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
 import { isStrictCompile } from '../compile/strictCompile';
+import type { PineLsService } from '../pinels/service';
 import type { EnvManager, EnvState } from './manager';
 
 /** Status bar item reflecting the environment state, with a quickpick menu. */
@@ -10,7 +11,8 @@ export class EnvStatusBar {
 
   constructor(
     private readonly manager: EnvManager,
-    private readonly auth: AuthService
+    private readonly auth: AuthService,
+    private readonly pineLs: PineLsService
   ) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.name = 'PyneIDE Environment';
@@ -108,6 +110,42 @@ export class EnvStatusBar {
         action: () => void vscode.commands.executeCommand('pyneide.toggleStrictCompile'),
       }
     );
+
+    const ls = this.pineLs.state;
+    items.push({ label: 'Pine Language Server', kind: vscode.QuickPickItemKind.Separator });
+    if (ls.kind === 'ready') {
+      items.push({
+        label: this.pineLs.serverRunning
+          ? `$(check) Pine LS ${ls.version}: running`
+          : `$(circle-large-outline) Pine LS ${ls.version}: installed`,
+        description: ls.source === 'custom' ? ls.executablePath : undefined,
+        action: () => void vscode.commands.executeCommand('pyneide.pineLsRestart'),
+      });
+    }
+    if (ls.kind === 'needs-install' || ls.kind === 'error') {
+      items.push({
+        label: '$(cloud-download) Install Pine Language Server',
+        description: 'Signed native binary for diagnostics, completion and navigation',
+        action: () => void vscode.commands.executeCommand('pyneide.pineLsInstall'),
+      });
+    } else if (ls.kind === 'ready' && ls.source === 'managed') {
+      items.push({
+        label: '$(cloud-download) Check for Pine LS Updates',
+        action: () => void vscode.commands.executeCommand('pyneide.pineLsInstall'),
+      });
+    }
+    if (this.pineLs.canRollback()) {
+      items.push({
+        label: '$(history) Roll Back Pine LS to Previous Version',
+        action: () => void this.pineLs.rollback(),
+      });
+    }
+    if (ls.kind !== 'disabled' && ls.kind !== 'unsupported') {
+      items.push({
+        label: '$(output) Show Pine LS Log',
+        action: () => void vscode.commands.executeCommand('pyneide.pineLsShowLog'),
+      });
+    }
 
     items.push({ label: 'PyneSys Account', kind: vscode.QuickPickItemKind.Separator });
     if (await this.auth.getKey()) {

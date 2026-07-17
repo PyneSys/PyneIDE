@@ -14,6 +14,7 @@ import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
 import { markProjectAsWorkdir, recommendTomlExtension, scaffoldWorkdirWithCli } from './env/workdir';
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
+import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { RunService } from './run/runService';
 
@@ -31,7 +32,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const compileOutput = vscode.window.createOutputChannel('PyneIDE Compiler');
   const auth = new AuthService(context, compileOutput);
 
-  new EnvStatusBar(manager, auth).register(context);
+  const pineLsOutput = vscode.window.createOutputChannel('Pine Language Server');
+  const pineLs = new PineLsService(context, pineLsOutput);
+  context.subscriptions.push(pineLsOutput);
+  pineLs.register();
+
+  new EnvStatusBar(manager, auth, pineLs).register(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.setup()),
@@ -78,6 +84,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   void initialCheck(context, manager);
+  void pineLs.initialize();
 }
 
 async function initialCheck(

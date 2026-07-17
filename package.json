@@ -67,6 +67,21 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.pineLsInstall",
+        "title": "Install / Update Pine Language Server",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.pineLsRestart",
+        "title": "Restart Pine Language Server",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.pineLsShowLog",
+        "title": "Show Pine Language Server Log",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.compilePine",
         "title": "Compile Pine Script",
         "category": "PyneIDE",
@@ -339,6 +354,30 @@
           "default": true,
           "scope": "resource",
           "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
+        },
+        "pyneide.pineLs.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Enable the Pine language server (diagnostics, completion, navigation for `.pine` files). Uses a signed native binary installed into extension storage."
+        },
+        "pyneide.pineLs.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Check for Pine language server updates in the background (at most once a day). Updates install atomically; the previous version is kept for rollback."
+        },
+        "pyneide.pineLs.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path to a Pine language server executable to use instead of the managed install (development override). Signature verification and auto-update are skipped for it."
+        },
+        "pyneide.pineLs.baseUrl": {
+          "type": "string",
+          "default": "https://pine-ls.pynesys.io",
+          "scope": "machine",
+          "markdownDescription": "Base URL of the Pine language server release site. Every download must verify against the Ed25519 release key built into PyneIDE, so this cannot be used to inject binaries."
         }
       }
     },
@@ -416,6 +455,7 @@
     "test:grammar": "vscode-tmgrammar-snap test/grammar/*.pine",
     "test:grammar:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
     "test:env": "node esbuild.mjs --smoke && node dist/env-smoke.js",
+    "test:pinels": "node esbuild.mjs --smoke-pinels && node dist/pinels-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"
@@ -434,6 +474,7 @@
     "keytar@7.9.0": true
   },
   "dependencies": {
-    "klinecharts": "^10.0.0"
+    "klinecharts": "^10.0.0",
+    "vscode-languageclient": "^9.0.1"
   }
 }

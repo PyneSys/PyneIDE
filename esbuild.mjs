@@ -2,6 +2,7 @@ import esbuild from 'esbuild';
 
 const watch = process.argv.includes('--watch');
 const smoke = process.argv.includes('--smoke');
+const smokePinels = process.argv.includes('--smoke-pinels');
 
 const common = {
   bundle: true,
@@ -30,6 +31,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/envSmoke.ts'],
     outfile: 'dist/env-smoke.js',
+    minify: false,
+  });
+} else if (smokePinels) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/pineLsSmoke.ts'],
+    outfile: 'dist/pinels-smoke.js',
     minify: false,
   });
 } else {
