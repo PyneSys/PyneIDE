@@ -9,14 +9,21 @@ import { CompileService } from './compile/service';
 import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { registerPyneDebug } from './debug/pyneDebug';
-import { EnvManager } from './env/manager';
+import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
-import { markProjectAsWorkdir, recommendTomlExtension, scaffoldWorkdirWithCli } from './env/workdir';
+import {
+  ensurePyrightConfig,
+  hideGeneratedFiles,
+  markProjectAsWorkdir,
+  recommendTomlExtension,
+  scaffoldWorkdirWithCli,
+} from './env/workdir';
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { RunService } from './run/runService';
+import { PyrightService } from './typing/pyrightService';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 
@@ -83,6 +90,29 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.tabGroups.onDidChangeTabs(() => chartManager.reconcile())
   );
 
+  // Existing workdirs predating the generated typing config get it on
+  // activation; user-authored configs are never touched.
+  const workdir = resolveWorkspaceWorkdir();
+  if (workdir?.exists) {
+    ensurePyrightConfig(workdir.path);
+    const wsFolder = vscode.workspace.workspaceFolders?.[0];
+    if (wsFolder) hideGeneratedFiles(wsFolder.uri.fsPath);
+  }
+
+  // Once the interpreter is known, teach the generated config where pynecore
+  // lives when it is an editable/dev install — its setuptools import-hook
+  // finder is invisible to type checkers (Pylance/pyright), so imports would
+  // otherwise show as unresolved even though the code runs.
+  context.subscriptions.push(
+    manager.onDidChangeState((state) => reconcilePyrightExtraPaths(state))
+  );
+  reconcilePyrightExtraPaths(manager.state);
+
+  const pyrightOutput = vscode.window.createOutputChannel('Pyne Typing (pyright)');
+  const pyright = new PyrightService(context, manager, pyrightOutput);
+  context.subscriptions.push(pyrightOutput);
+  pyright.register();
+
   void initialCheck(context, manager);
   void pineLs.initialize();
 }
@@ -115,6 +145,22 @@ function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
   } else {
     context.environmentVariableCollection.delete('PYNE_WORK_DIR');
   }
+}
+
+/**
+ * On env-ready, add the pynecore src root to the generated pyrightconfig's
+ * extraPaths — but only for an editable/dev install, whose import-hook finder
+ * type checkers cannot follow. A regular wheel install resolves through the
+ * interpreter (its root is site-packages), so it needs no extraPaths entry and
+ * the config stays clean.
+ */
+function reconcilePyrightExtraPaths(state: EnvState): void {
+  if (state.kind !== 'ready') return;
+  const root = state.verify.pynecoreRoot;
+  const editable = root !== undefined && path.basename(root) !== 'site-packages';
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) return;
+  ensurePyrightConfig(workdir.path, { extraPaths: editable && root ? [root] : [] });
 }
 
 /**
@@ -175,6 +221,12 @@ async function initProjectCommand(
           .getConfiguration('pyneide', folder.uri)
           .update('workdir', '.', vscode.ConfigurationTarget.WorkspaceFolder);
       }
+      if (!choice.root) {
+        // Pylance only reads the config at the workspace root, so the
+        // workdir/ subfolder layout needs it there too.
+        ensurePyrightConfig(folder.uri.fsPath);
+      }
+      hideGeneratedFiles(folder.uri.fsPath);
       recommendTomlExtension(folder.uri.fsPath);
       updateTerminalWorkdirEnv(context);
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
@@ -210,6 +262,7 @@ async function initProjectCommand(
           'set "pyneide.workdir": "." there manually.'
       );
     }
+    hideGeneratedFiles(baseDir);
     recommendTomlExtension(baseDir);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {

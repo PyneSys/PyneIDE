@@ -24,6 +24,13 @@ export interface VerifyResult {
   pythonVersion?: string;
   pynecoreVersion?: string;
   debugpyVersion?: string;
+  /**
+   * Directory that must be on the import path for `pynecore` to resolve, as the
+   * interpreter itself reports it (site-packages for a wheel install, the src
+   * root for an editable/dev install). Type checkers cannot follow setuptools'
+   * import-hook editable finder, so this is fed to pyrightconfig.json extraPaths.
+   */
+  pynecoreRoot?: string;
   error?: string;
 }
 
@@ -36,17 +43,25 @@ export interface BootstrapOptions {
 }
 
 const VERIFY_SCRIPT = [
-  'import json, platform',
+  'import json, os, platform',
   'from importlib import metadata',
   'def ver(name):',
   '    try:',
   '        return metadata.version(name)',
   '    except metadata.PackageNotFoundError:',
   '        return None',
+  'def pynecore_root():',
+  '    try:',
+  '        import pynecore',
+  '    except Exception:',
+  '        return None',
+  '    f = getattr(pynecore, "__file__", None)',
+  '    return os.path.dirname(os.path.dirname(f)) if f else None',
   'print(json.dumps({',
   '    "python": platform.python_version(),',
   '    "pynecore": ver("pynesys-pynecore"),',
   '    "debugpy": ver("debugpy"),',
+  '    "pynecoreRoot": pynecore_root(),',
   '}))',
 ].join('\n');
 
@@ -110,7 +125,9 @@ export async function verifyPython(pythonBin: string, log: Logger): Promise<Veri
       python: string;
       pynecore: string | null;
       debugpy: string | null;
+      pynecoreRoot: string | null;
     };
+    const pynecoreRoot = info.pynecoreRoot ?? undefined;
     if (!info.pynecore) {
       return { ok: false, pythonVersion: info.python, error: 'pynesys-pynecore is not installed' };
     }
@@ -136,6 +153,7 @@ export async function verifyPython(pythonBin: string, log: Logger): Promise<Veri
       pythonVersion: info.python,
       pynecoreVersion: info.pynecore,
       debugpyVersion: info.debugpy,
+      pynecoreRoot,
     };
   } catch (err) {
     return { ok: false, error: String(err) };

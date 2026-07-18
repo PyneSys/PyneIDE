@@ -82,6 +82,16 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.pyrightRestart",
+        "title": "Restart Pyne Typing (pyright)",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.pyrightShowLog",
+        "title": "Show Pyne Typing Log",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.compilePine",
         "title": "Compile Pine Script",
         "category": "PyneIDE",
@@ -355,6 +365,12 @@
           "scope": "resource",
           "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
         },
+        "pyneide.pyright.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Run the bundled pyright language server for Python files in Pyne workspaces (typing diagnostics without Pylance). Automatically stays off when Pylance, Pyright or BasedPyright is installed."
+        },
         "pyneide.pineLs.enabled": {
           "type": "boolean",
           "default": true,
@@ -456,6 +472,7 @@
     "test:grammar:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
     "test:env": "node esbuild.mjs --smoke && node dist/env-smoke.js",
     "test:pinels": "node esbuild.mjs --smoke-pinels && node dist/pinels-smoke.js",
+    "test:pyright": "node esbuild.mjs --smoke-pyright && node dist/pyright-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"
@@ -475,6 +492,7 @@
   },
   "dependencies": {
     "klinecharts": "^10.0.0",
+    "pyright": "1.1.411",
     "vscode-languageclient": "^9.0.1"
   }
 }

@@ -92,7 +92,92 @@ export async function scaffoldWorkdirWithCli(
   }
   args.push('run', '--help');
   await execChecked(pyneBin, args, log, { timeoutMs: 120000 });
+  ensurePyrightConfig(workdir);
   return { workdir, demoScript, created };
+}
+
+/**
+ * The generated pyright/Pylance config for Pyne projects. The pieces are the
+ * outcome of the L5 typing spike (work/SPIKE-L5.md in this repo):
+ * - `defineConstant TYPECHECKER` selects the pyright branch of pynecore's
+ *   `types/type_checker.pyi`; without it the PyCharm branch leaks in and
+ *   produces ~140 false "not assignable to type_checker.float" errors.
+ * - `reportIndexIssue: none` hides the false positives from history-indexing
+ *   scalars (`close[1]`) under the transparent `Series[T] = T` alias — the
+ *   only noise category the stubs cannot fix.
+ * - `basic` mode: Pylance's default is "off"; the cleaned-up pynecore stubs
+ *   make basic-level checking actually usable on @pyne scripts.
+ */
+const PYRIGHT_CONFIG = {
+  typeCheckingMode: 'basic',
+  defineConstant: { TYPECHECKER: 'pyright' },
+  reportIndexIssue: 'none',
+  exclude: ['data', 'output', '**/__pycache__'],
+};
+
+/**
+ * Whether a parsed config carries our generator's fingerprint. Only configs we
+ * wrote get their `extraPaths` reconciled; anything a user authored (or a config
+ * shaped differently) is left untouched.
+ */
+function isGeneratedConfig(config: unknown): boolean {
+  if (!config || typeof config !== 'object') return false;
+  const c = config as Record<string, unknown>;
+  const define = c.defineConstant as Record<string, unknown> | undefined;
+  return (
+    c.typeCheckingMode === 'basic' &&
+    c.reportIndexIssue === 'none' &&
+    define?.TYPECHECKER === 'pyright'
+  );
+}
+
+export interface PyrightConfigOptions {
+  /**
+   * Import roots to place on `extraPaths` so type checkers resolve `pynecore`
+   * even from an editable/dev install (whose setuptools import-hook finder is
+   * invisible to static analysis). Omit when no interpreter is known yet; an
+   * existing generated config keeps whatever extraPaths it already has.
+   */
+  extraPaths?: string[];
+}
+
+/**
+ * Ensure the generated `pyrightconfig.json` in `dir` is present and current.
+ *
+ * A missing config is written from the template. An existing config we
+ * generated has only its `extraPaths` reconciled to `opts.extraPaths` (when
+ * provided). A user-authored config — anything without our fingerprint — is
+ * never touched. Returns true when the file was written or changed.
+ *
+ * Note: Pylance only reads the config at the workspace root, so callers pass
+ * the workspace folder as well when the workdir is a subfolder.
+ */
+export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}): boolean {
+  const configPath = path.join(dir, 'pyrightconfig.json');
+  const extraPaths = opts.extraPaths?.filter((p) => p.length > 0);
+
+  if (fs.existsSync(configPath)) {
+    if (!extraPaths || extraPaths.length === 0) return false;
+    let existing: unknown;
+    try {
+      existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    } catch {
+      return false;
+    }
+    if (!isGeneratedConfig(existing)) return false;
+    const config = existing as Record<string, unknown>;
+    const current = Array.isArray(config.extraPaths) ? (config.extraPaths as unknown[]) : undefined;
+    if (current && JSON.stringify(current) === JSON.stringify(extraPaths)) return false;
+    config.extraPaths = extraPaths;
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    return true;
+  }
+
+  fs.mkdirSync(dir, { recursive: true });
+  const config: Record<string, unknown> = { ...PYRIGHT_CONFIG };
+  if (extraPaths && extraPaths.length > 0) config.extraPaths = extraPaths;
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  return true;
 }
 
 /**
@@ -114,6 +199,49 @@ export function markProjectAsWorkdir(projectDir: string): boolean {
     }
   }
   settings['pyneide.workdir'] = '.';
+  fs.mkdirSync(vscodeDir, { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  return true;
+}
+
+/**
+ * Explorer/search patterns for the generated scaffolding the user should not
+ * edit by hand (pyrightconfig.json feeds the type checker, __pycache__ is
+ * bytecode noise, .vscode holds machine-written settings). Hidden via
+ * `files.exclude`, so the files stay in place and keep working — they are just
+ * not shown. The settings UI still opens .vscode/settings.json as JSON.
+ */
+const HIDDEN_FILE_PATTERNS = ['**/__pycache__', '**/pyrightconfig.json', '.vscode'];
+
+/**
+ * Merge the scaffolding-hiding patterns into `files.exclude` of
+ * `<projectDir>/.vscode/settings.json`. Only missing keys are added — a user
+ * who deliberately set a pattern to `false` (unhid it) is respected. Returns
+ * false when an existing settings.json could not be parsed (left untouched).
+ */
+export function hideGeneratedFiles(projectDir: string): boolean {
+  const vscodeDir = path.join(projectDir, '.vscode');
+  const settingsPath = path.join(vscodeDir, 'settings.json');
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+  }
+  const current = settings['files.exclude'];
+  const exclude: Record<string, unknown> =
+    current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+  let changed = false;
+  for (const pattern of HIDDEN_FILE_PATTERNS) {
+    if (!(pattern in exclude)) {
+      exclude[pattern] = true;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+  settings['files.exclude'] = exclude;
   fs.mkdirSync(vscodeDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   return true;

@@ -13,3 +13,5 @@ MEMORY.md
 **/__pycache__/**
 *.vsix
 dist/env-smoke.js
+dist/pinels-smoke.js
+dist/pyright-smoke.js
