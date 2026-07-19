@@ -17,6 +17,13 @@ const CHECK_DEBOUNCE_MS = 400;
  * source of truth for the rules and their wording; this service only publishes
  * whatever `problems` it returns as diagnostics.
  *
+ * For `@pyne edge` sources the worker additionally runs the fail-closed Edge
+ * linter (F8, `pyne-edge-*` codes): the Pyne Edge profile is a strict
+ * Pine-compatible Python subset defined by the versioned
+ * `python/pyneide_edge_rules.py`. The worker re-detects the `edge` marker
+ * itself, so nothing changes on this side — Edge findings are ordinary
+ * problems in the same array.
+ *
  * Failure contract mirrors L5c (see seriesAnalyzer.ts): the worker collapses
  * every unavailable state — no interpreter, a dead worker, half-typed or
  * unparsable source — into `undefined`. On `undefined` the document's existing

@@ -8,6 +8,7 @@ const smoke = process.argv.includes('--smoke');
 const smokePinels = process.argv.includes('--smoke-pinels');
 const smokePyright = process.argv.includes('--smoke-pyright');
 const smokeChecker = process.argv.includes('--smoke-checker');
+const smokeEdgeCorpus = process.argv.includes('--smoke-edge-corpus');
 
 const common = {
   bundle: true,
@@ -86,6 +87,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/checkerSmoke.ts'],
     outfile: 'dist/checker-smoke.js',
+    minify: false,
+  });
+} else if (smokeEdgeCorpus) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/edgeCorpusSmoke.ts'],
+    outfile: 'dist/edge-corpus-smoke.js',
     minify: false,
   });
 } else {

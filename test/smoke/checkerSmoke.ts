@@ -9,91 +9,9 @@
  * One long-lived worker answers many requests, matched by id. Usage:
  *   node dist/checker-smoke.js
  */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import * as path from 'node:path';
+import { Worker, type WorkerResponse } from './checkerWorker';
 
 const log = (msg: string): void => console.log(msg);
-
-type Span = [number, number, number];
-type Ref = [number, number, number, string];
-type Problem = [number, number, number, string, string];
-
-interface WorkerResponse {
-  id: number;
-  ok: boolean;
-  spans?: Span[];
-  refs?: Ref[];
-  problems?: Problem[];
-  error?: string;
-}
-
-/**
- * A single long-lived worker process. Requests get incrementing ids and are
- * resolved as their matching response line arrives; a global deadline fails any
- * still-pending request so a hung worker cannot wedge the test.
- */
-class Worker {
-  private readonly proc: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, (r: WorkerResponse) => void>();
-  private readonly rejects = new Map<number, (e: Error) => void>();
-  private readonly timer: NodeJS.Timeout;
-  private buffer = '';
-  private nextId = 1;
-  private stderr = '';
-
-  constructor(timeoutMs: number) {
-    const script = path.resolve('python/pyneide_series.py');
-    const python = process.platform === 'win32' ? 'python' : 'python3';
-    this.proc = spawn(python, ['-u', script], { stdio: ['pipe', 'pipe', 'pipe'] });
-    this.timer = setTimeout(() => this.failAll(new Error('checker worker timed out')), timeoutMs);
-    this.proc.stdout.setEncoding('utf8');
-    this.proc.stdout.on('data', (chunk: string) => this.onData(chunk));
-    this.proc.stderr.on('data', (chunk: Buffer) => {
-      this.stderr += chunk.toString();
-    });
-    this.proc.on('error', (e) => this.failAll(new Error(`checker worker could not start (${python}): ${e.message}`)));
-  }
-
-  request(source: string): Promise<WorkerResponse> {
-    const id = this.nextId++;
-    return new Promise<WorkerResponse>((resolve, reject) => {
-      this.pending.set(id, resolve);
-      this.rejects.set(id, reject);
-      this.proc.stdin.write(JSON.stringify({ id, source }) + '\n');
-    });
-  }
-
-  close(): void {
-    clearTimeout(this.timer);
-    this.proc.kill();
-  }
-
-  private onData(chunk: string): void {
-    this.buffer += chunk;
-    let newline: number;
-    while ((newline = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, newline);
-      this.buffer = this.buffer.slice(newline + 1);
-      if (!line.trim()) continue;
-      const response = JSON.parse(line) as WorkerResponse;
-      const resolve = this.pending.get(response.id);
-      if (resolve) {
-        this.pending.delete(response.id);
-        this.rejects.delete(response.id);
-        resolve(response);
-      }
-    }
-  }
-
-  private failAll(error: Error): void {
-    clearTimeout(this.timer);
-    if (this.stderr) error.message += `\n--- worker stderr ---\n${this.stderr}`;
-    for (const reject of this.rejects.values()) reject(error);
-    this.pending.clear();
-    this.rejects.clear();
-    this.proc.kill();
-  }
-}
 
 function assert(cond: boolean, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -284,6 +202,192 @@ async function main(): Promise<void> {
     const recovered = await worker.request(HEAD + 'def helper():\n    pass\n');
     expectCodes(recovered, ['pyne-main-missing'], 'broken-recovery');
     log('broken-source OK (ok:false, worker still answers the next request)');
+
+    // ======================= Pyne Edge profile (F8) =========================
+    // Edge sources run the fail-closed DSL linter on top of the rules above.
+    const EDGE_HEAD = '"""@pyne edge"""\n';
+    const SCAFFOLD =
+      'from pynecore.lib import script\n\n\n' +
+      '@script.indicator(title="T")\n' +
+      'def main():\n' +
+      '    pass\n';
+
+    // --- a full valid Edge script: every allowed construct at once -----------
+    const edgeValid = await worker.request(
+      EDGE_HEAD +
+        'from pynecore import Series\n' +
+        'from pynecore.core.pine_method import method\n' +
+        'from pynecore.core.pine_udt import udt\n' +
+        'from dataclasses import field\n' +
+        'from pynecore.lib import script, close, ta, plot\n' +
+        'from pynecore.standalone import run\n' +
+        'import lib.TradingView.ta.v8\n\n\n' +
+        '@udt\n' +
+        'class Settings:\n' +
+        '    length: int = 14\n' +
+        '    source: float = field(default_factory=lambda: 0.0)\n\n\n' +
+        '@method\n' +
+        'def bump(s: float, n: float) -> float:\n' +
+        '    return s + n\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    s: Series[float] = close\n' +
+        '    prev = s[1]\n' +
+        '    total = 0.0\n' +
+        '    i = 0\n' +
+        '    while i < 3:\n' +
+        '        total += ta.sma(close, 5)\n' +
+        '        i += 1\n' +
+        '        if i == 2:\n' +
+        '            break\n' +
+        '    for k in range(3):\n' +
+        '        total = total + k\n' +
+        '    plot(bump(total, prev))\n\n\n' +
+        'if __name__ == "__main__":\n' +
+        '    run(main)\n'
+    );
+    expectCodes(edgeValid, [], 'edge-valid');
+    assert((edgeValid.spans ?? []).length > 0, 'edge-valid: expected non-empty spans');
+    assert((edgeValid.refs ?? []).length > 0, 'edge-valid: expected non-empty refs');
+    log('edge-valid OK');
+
+    // --- gate + marker variants (guards the PYNE_EDGE_RE port) ---------------
+    const probe = 'import numpy\n' + SCAFFOLD;
+    const gate = await worker.request('"""\n@pyne\n"""\n' + probe);
+    expectCodes(gate, [], 'edge-gate (plain @pyne)');
+    const commented = await worker.request(
+      '# a leading comment\n# /// script\n"""@pyne edge"""\n' + probe
+    );
+    expectCodes(commented, ['pyne-edge-import'], 'edge-marker (leading comments)');
+    const singleQuotes = await worker.request("'''@pyne  edge'''\n" + probe);
+    expectCodes(singleQuotes, ['pyne-edge-import'], 'edge-marker (single quotes, double space)');
+    const glued = await worker.request('"""@pyneedge"""\n' + probe);
+    expectCodes(glued, [], 'edge-marker (@pyneedge is not a marker)');
+    const edgy = await worker.request('"""@pyne edgy"""\n' + probe);
+    expectCodes(edgy, [], 'edge-marker (@pyne edgy is plain pyne)');
+    log('edge-gate + marker variants OK');
+
+    // --- imports: whitelist, and a flagged import does not cascade to uses ---
+    const edgeImports = await worker.request(
+      EDGE_HEAD +
+        'from math import floor\n' +
+        'from pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    x = floor(1.5)\n' +
+        '    print(x)\n'
+    );
+    expectCodes(edgeImports, ['pyne-edge-import'], 'edge-import (no cascade to floor())');
+    log('edge-import OK');
+
+    // --- syntax: one report per disallowed construct, in line order ----------
+    const edgeSyntax = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    xs = [1, 2]\n' +
+        '    s = f"v"\n' +
+        '    y = 1 << 2\n' +
+        '    match y:\n' +
+        '        case 1:\n' +
+        '            pass\n' +
+        '    print(xs, s, y)\n'
+    );
+    expectCodes(
+      edgeSyntax,
+      ['pyne-edge-syntax', 'pyne-edge-syntax', 'pyne-edge-syntax', 'pyne-edge-syntax'],
+      'edge-syntax'
+    );
+    {
+      const msgs = messagesOf(edgeSyntax);
+      for (const needle of ['list literal', 'f-string', "'<<'", "'match'"]) {
+        assert(
+          msgs.some((m) => m.includes(needle)),
+          `edge-syntax: expected a message mentioning ${needle}, got ${JSON.stringify(msgs)}`
+        );
+      }
+    }
+    log('edge-syntax OK');
+
+    // --- async + special parameters ------------------------------------------
+    const edgeAsync = await worker.request(
+      EDGE_HEAD +
+        SCAFFOLD +
+        '\n\nasync def gather():\n    pass\n\n\ndef helper(*args):\n    pass\n'
+    );
+    expectCodes(edgeAsync, ['pyne-edge-syntax', 'pyne-edge-syntax'], 'edge-async-signature');
+    log('edge-async-signature OK');
+
+    // --- decorators: only the built-in set exists -----------------------------
+    const edgeDecorator = await worker.request(
+      EDGE_HEAD +
+        SCAFFOLD +
+        '\n\ndef deco(f):\n    return f\n\n\n@deco\ndef g():\n    return 1\n'
+    );
+    expectCodes(edgeDecorator, ['pyne-edge-decorator'], 'edge-decorator');
+    log('edge-decorator OK');
+
+    // --- classes: undecorated / inherited classes are not UDTs ---------------
+    const edgeClass = await worker.request(
+      EDGE_HEAD + SCAFFOLD + '\n\nclass State:\n    count: int = 0\n'
+    );
+    expectCodes(edgeClass, ['pyne-edge-class'], 'edge-class');
+    log('edge-class OK');
+
+    // --- calls: unknown bare names (and with them every escape hatch) --------
+    const edgeCall = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    exec("1")\n' +
+        '    q = getattr(main, "x")\n' +
+        '    print(q)\n'
+    );
+    expectCodes(edgeCall, ['pyne-edge-call', 'pyne-edge-call'], 'edge-call');
+    log('edge-call OK');
+
+    // --- functions/modules are not objects -----------------------------------
+    const edgeFuncAttr = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nmain.cache = 1\n');
+    expectCodes(edgeFuncAttr, ['pyne-edge-func-attr'], 'edge-func-attr');
+    log('edge-func-attr OK');
+
+    // --- lambda outside a UDT field default ----------------------------------
+    const edgeLambda = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nf2 = lambda: 1\n');
+    expectCodes(edgeLambda, ['pyne-edge-lambda'], 'edge-lambda');
+    log('edge-lambda OK');
+
+    // --- subscript stores (history reads stay allowed) -----------------------
+    const edgeSubscript = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.lib import script, close\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    p = close\n' +
+        '    p[0] = 1.0\n' +
+        '    print(close[1])\n'
+    );
+    expectCodes(edgeSubscript, ['pyne-edge-subscript'], 'edge-subscript');
+    log('edge-subscript OK');
+
+    // --- edge + structure problems coexist in one sorted list ----------------
+    const edgeCoexist = await worker.request(
+      EDGE_HEAD +
+        'import numpy\n' +
+        'from pynecore.lib import script\n\n\n' +
+        'def main():\n' +
+        '    pass\n'
+    );
+    expectCodes(edgeCoexist, ['pyne-edge-import', 'pyne-main-undecorated'], 'edge-coexist');
+    log('edge-coexist OK');
+
+    // --- the internal-test-module gate silences Edge rules too ---------------
+    const edgeInternal = await worker.request(
+      EDGE_HEAD + '__pyne_slot_layout__ = {}\nimport numpy\n\n\ndef main():\n    pass\n'
+    );
+    expectCodes(edgeInternal, [], 'edge-internal-module');
+    log('edge-internal-module OK');
 
     log('CHECKER SMOKE OK');
   } finally {

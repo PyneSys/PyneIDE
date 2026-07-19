@@ -375,7 +375,7 @@
           "type": "boolean",
           "default": true,
           "scope": "machine",
-          "markdownDescription": "Enable the Pyne script checker (structure diagnostics for `@pyne` scripts: `main()` presence, `@script` decorator, Series/Persistent scope rules, request.security constraints)."
+          "markdownDescription": "Enable the Pyne script checker (structure diagnostics for `@pyne` scripts: `main()` presence, `@script` decorator, Series/Persistent scope rules, request.security constraints). For `@pyne edge` scripts it also enforces the strict Pyne Edge profile (import whitelist, allowed language subset)."
         },
         "pyneide.pineLs.enabled": {
           "type": "boolean",
@@ -497,6 +497,7 @@
     "test:pinels": "node esbuild.mjs --smoke-pinels && node dist/pinels-smoke.js",
     "test:pyright": "node esbuild.mjs --smoke-pyright && node dist/pyright-smoke.js",
     "test:checker": "node esbuild.mjs --smoke-checker && node dist/checker-smoke.js",
+    "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

@@ -16,3 +16,5 @@ MEMORY.md
 dist/env-smoke.js
 dist/pinels-smoke.js
 dist/pyright-smoke.js
+dist/checker-smoke.js
+dist/edge-corpus-smoke.js

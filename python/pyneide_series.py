@@ -34,6 +34,14 @@ conservative — when a construct cannot be resolved statically (an unknown
 decorator, an aliased call) the rule stays silent, because a missed error
 surfaces at run time anyway but a false one poisons the whole panel.
 
+Sources whose head docstring reads ``@pyne edge`` additionally run the Edge
+linter (F8): the Pyne Edge profile is a strict Pine-compatible Python subset
+(a DSL) defined by the hand-maintained, versioned ``pyneide_edge_rules``
+module next to this file. Unlike the rules above, the ``pyne-edge-*`` rules
+are FAIL-CLOSED — anything the profile does not explicitly allow is an error,
+because Edge scripts must stay runnable on constrained runtimes (the web/WASM
+executor, a possible future static compiler) with no loopholes.
+
 Protocol: NDJSON on stdin/stdout, one request/response object per line.
 Request  ``{"id": N, "source": "..."}``
 Response ``{"id": N, "ok": true, "spans": [[line, col, endCol], ...],
@@ -54,8 +62,35 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 from typing import Any, Iterable
+
+try:
+    import pyneide_edge_rules as _edge_rules
+except ImportError:  # pragma: no cover - partial deployment
+    # Without the profile definition the Edge rules silently stay off; the
+    # rest of the analyzer must keep working.
+    _edge_rules = None  # type: ignore[assignment]
+
+# Port of PYNE_EDGE_RE in src/pyneDetect.ts — the two must match verbatim,
+# and both look at the first DETECT_HEAD_BYTES of the file only.
+_PYNE_EDGE_RE = re.compile(
+    r'^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*'
+    r'("""|\'\'\'|"|\')\s*@pyne[^\S\r\n]+edge(?:\s|\1|$)')
+
+_DETECT_HEAD_BYTES = 4096
+
+
+def _is_edge(source: str) -> bool:
+    """Whether the module head docstring marks the source ``@pyne edge``.
+
+    The TS side slices the first 4096 *bytes*; slicing bytes here too keeps
+    the two detections aligned even when multi-byte text sits on the
+    boundary.
+    """
+    head = source.encode('utf-8')[:_DETECT_HEAD_BYTES].decode('utf-8', 'ignore')
+    return _PYNE_EDGE_RE.match(head) is not None
 
 # Kept in sync with pynecore.transformers.lib_series.NON_SERIES_LIB_ATTRS.
 NON_SERIES_LIB_ATTRS = frozenset({'extra_fields'})
@@ -607,6 +642,281 @@ class _StructureChecker:
             "@script.strategy(...) or @script.library(...)"))
 
 
+
+_EDGE_NODE_LABELS = {
+    'AsyncFunctionDef': "'async def'", 'AsyncFor': "'async for'",
+    'AsyncWith': "'async with'", 'Await': "'await'",
+    'Try': "'try'", 'TryStar': "'try'", 'Raise': "'raise'",
+    'Assert': "'assert'", 'With': "'with'", 'Delete': "'del'",
+    'Global': "'global'", 'Nonlocal': "'nonlocal'", 'Match': "'match'",
+    'Yield': "'yield'", 'YieldFrom': "'yield from'",
+    'List': 'a list literal', 'Dict': 'a dict literal',
+    'Set': 'a set literal', 'ListComp': 'a list comprehension',
+    'SetComp': 'a set comprehension', 'DictComp': 'a dict comprehension',
+    'GeneratorExp': 'a generator expression', 'JoinedStr': 'an f-string',
+    'NamedExpr': "a ':=' assignment", 'Starred': 'a starred expression',
+    'Slice': 'a slice',
+}
+
+_EDGE_OP_SYMBOLS = {
+    'BitOr': '|', 'BitAnd': '&', 'BitXor': '^', 'LShift': '<<',
+    'RShift': '>>', 'MatMult': '@', 'Invert': '~', 'Is': 'is',
+    'IsNot': 'is not', 'In': 'in', 'NotIn': 'not in',
+}
+
+_EDGE_SUFFIX = 'not allowed in the Pyne Edge profile'
+
+
+class _EdgeChecker:
+    """Fail-closed linter for the Pyne Edge profile (F8).
+
+    Edge (`@pyne edge`) is a strict Pine-compatible Python subset — a DSL
+    bounded by ``pyneide_edge_rules``. In deliberate CONTRAST to the
+    structure rules above, every construct the profile does not explicitly
+    allow is an error: Edge scripts are a portability promise (web/WASM
+    runtime, a possible future static compiler), so an unresolvable
+    construct cannot be given the benefit of the doubt.
+
+    The check is a single recursive walk that stops descending into a
+    disallowed node (one error per construct, not one per child), plus
+    structural rules for nodes that are allowed but constrained:
+    imports (PyneCore API + `lib.*` user libraries + `dataclasses` only),
+    decorators (`@script.*(...)`, `@method`, `@udt`/`@dataclass` only),
+    classes (bases-less field lists), bare-name calls (defined functions,
+    imported names and a small builtin whitelist), function signatures
+    (plain positional parameters), subscript stores, attribute stores on
+    functions/modules, and `lambda` anywhere outside a
+    `field(default_factory=lambda: ...)` UDT field default.
+    """
+
+    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns):
+        self.tree = tree
+        self.lib = lib
+        self.columns = columns
+        self.problems: list[tuple[int, int, int, str, str]] = []
+        # name -> (module, original name) for every `from X import y [as z]`
+        self.from_imports: dict[str, tuple[str, str]] = {}
+        # Every name any import binds (allowed or not — a disallowed import
+        # is already reported once; its uses should not cascade).
+        self.import_bound: set[str] = set()
+        self.def_names: set[str] = set()
+        self.allowed_lambdas: set[int] = set()
+
+    def check(self) -> None:
+        if _edge_rules is None:  # pragma: no cover - partial deployment
+            return
+        self._collect()
+        self._visit(self.tree)
+
+    # --- collection pre-pass ---------------------------------------------
+
+    def _collect(self) -> None:
+        for node in ast.walk(self.tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.def_names.add(node.name)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    self.from_imports[alias.asname or alias.name] = (
+                        node.module or '', alias.name)
+                    self.import_bound.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    self.import_bound.add(alias.asname or alias.name.split('.')[0])
+        # `field(default_factory=lambda: ...)` is the one legitimate lambda
+        # position (UDT field defaults — the emitter produces it too).
+        for node in ast.walk(self.tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                continue
+            if self.from_imports.get(node.func.id) != ('dataclasses', 'field'):
+                continue
+            for kw in node.keywords:
+                value = kw.value
+                if (kw.arg == 'default_factory' and isinstance(value, ast.Lambda)
+                        and not _has_parameters(value.args)):
+                    self.allowed_lambdas.add(id(value))
+
+    # --- recursive walk ---------------------------------------------------
+
+    def _visit(self, node: ast.AST) -> None:
+        kind = type(node).__name__
+        if isinstance(node, (ast.expr_context, ast.boolop, ast.operator,
+                             ast.unaryop, ast.cmpop)):
+            return
+        if kind not in _edge_rules.ALLOWED_NODES and hasattr(node, 'lineno'):
+            label = _EDGE_NODE_LABELS.get(kind, f"'{kind}'")
+            self._problem(node, 'pyne-edge-syntax', f'{label} is {_EDGE_SUFFIX}')
+            return  # children are implied by the construct itself
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            self._check_import(node)
+        elif isinstance(node, ast.FunctionDef):
+            self._check_function(node)
+        elif isinstance(node, ast.ClassDef):
+            self._check_class(node)
+        elif isinstance(node, ast.Call):
+            self._check_call(node)
+        elif isinstance(node, ast.Lambda):
+            if id(node) not in self.allowed_lambdas:
+                self._problem(node, 'pyne-edge-lambda',
+                              f"'lambda' outside a field(default_factory=...) "
+                              f'UDT field default is {_EDGE_SUFFIX}')
+                return
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+            self._problem(node, 'pyne-edge-subscript',
+                          f'subscript assignment is {_EDGE_SUFFIX} — '
+                          f'use array.set()')
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+            self._check_attribute_store(node)
+        elif isinstance(node, (ast.BinOp, ast.AugAssign)):
+            self._check_op(node, node.op, _edge_rules.ALLOWED_BIN_OPS)
+        elif isinstance(node, ast.UnaryOp):
+            self._check_op(node, node.op, _edge_rules.ALLOWED_UNARY_OPS)
+        elif isinstance(node, ast.BoolOp):
+            self._check_op(node, node.op, _edge_rules.ALLOWED_BOOL_OPS)
+        elif isinstance(node, ast.Compare):
+            for op in node.ops:
+                self._check_op(node, op, _edge_rules.ALLOWED_CMP_OPS)
+        for child in ast.iter_child_nodes(node):
+            self._visit(child)
+
+    # --- structural rules -------------------------------------------------
+
+    def _check_import(self, node: ast.Import | ast.ImportFrom) -> None:
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                self._problem(node, 'pyne-edge-import',
+                              f'relative imports are {_EDGE_SUFFIX}')
+                return
+            module = node.module or ''
+            if _has_allowed_prefix(module):
+                return
+            allowed = _edge_rules.ALLOWED_FROM_MODULES.get(module)
+            if allowed is None:
+                self._problem(node, 'pyne-edge-import',
+                              f"import of '{module}' is {_EDGE_SUFFIX} — only "
+                              f'the PyneCore API and lib.* libraries are '
+                              f'available')
+                return
+            for alias in node.names:
+                if alias.name not in allowed:
+                    self._problem(node, 'pyne-edge-import',
+                                  f"'{module}.{alias.name}' is {_EDGE_SUFFIX}")
+            return
+        for alias in node.names:
+            if not _has_allowed_prefix(alias.name):
+                self._problem(node, 'pyne-edge-import',
+                              f"import of '{alias.name}' is {_EDGE_SUFFIX} — "
+                              f'only the PyneCore API and lib.* libraries '
+                              f'are available')
+
+    def _check_function(self, node: ast.FunctionDef) -> None:
+        if _has_special_parameters(node.args):
+            self._problem(node, 'pyne-edge-syntax',
+                          f'*args/**kwargs/keyword-only parameters are '
+                          f'{_EDGE_SUFFIX}')
+        for decorator in node.decorator_list:
+            if not self._decorator_ok(decorator,
+                                      _edge_rules.ALLOWED_FUNC_DECORATORS,
+                                      allow_script=True):
+                self._problem(decorator, 'pyne-edge-decorator',
+                              f'this decorator is {_EDGE_SUFFIX} — only '
+                              f'@script.indicator/strategy/library(...) and '
+                              f'@method exist')
+
+    def _check_class(self, node: ast.ClassDef) -> None:
+        if node.bases or node.keywords:
+            self._problem(node, 'pyne-edge-class',
+                          f'class inheritance and class keywords are '
+                          f'{_EDGE_SUFFIX} — a class is a plain @udt/'
+                          f'@dataclass field list')
+        decorators = node.decorator_list
+        if len(decorators) != 1 or not self._decorator_ok(
+                decorators[0], _edge_rules.ALLOWED_CLASS_DECORATORS):
+            self._problem(node, 'pyne-edge-class',
+                          f'a class must have exactly one @udt or @dataclass '
+                          f'decorator in the Pyne Edge profile')
+        body = node.body
+        if body and _is_docstring(body[0]):
+            body = body[1:]
+        for stmt in body:
+            if not isinstance(stmt, (ast.AnnAssign, ast.Pass)):
+                self._problem(stmt, 'pyne-edge-class',
+                              f'a class body may only contain annotated '
+                              f'fields in the Pyne Edge profile')
+
+    def _check_call(self, node: ast.Call) -> None:
+        func = node.func
+        if not isinstance(func, ast.Name):
+            return
+        name = func.id
+        if (name in self.def_names or name in self.import_bound
+                or name in _edge_rules.ALLOWED_BUILTIN_CALLS):
+            return
+        self._problem(func, 'pyne-edge-call',
+                      f"calling '{name}' is {_EDGE_SUFFIX} — only defined "
+                      f'functions, imported names and '
+                      f'{_builtin_list()} can be called')
+
+    def _check_attribute_store(self, node: ast.Attribute) -> None:
+        chain = _attribute_chain(node)
+        if chain is None:
+            return
+        root = chain[0]
+        if (root in self.def_names or root in self.import_bound
+                or root in self.lib.modules):
+            self._problem(node, 'pyne-edge-func-attr',
+                          f"assigning an attribute on '{root}' is "
+                          f'{_EDGE_SUFFIX} — functions and modules are not '
+                          f'objects')
+
+    def _decorator_ok(self, decorator: ast.expr,
+                      allowed: 'frozenset[tuple[str, str]]',
+                      allow_script: bool = False) -> bool:
+        if allow_script:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            chain = _lib_chain_of(target, self.lib)
+            if (chain is not None and len(chain) == 2 and chain[0] == 'script'
+                    and chain[1] in SCRIPT_DECORATORS):
+                # The un-called form is a script-structure error already
+                # (pyne-main-undecorated) — no second report here.
+                return True
+        if isinstance(decorator, ast.Name):
+            return self.from_imports.get(decorator.id) in allowed
+        return False
+
+    def _check_op(self, node: ast.AST, op: ast.AST, allowed: 'frozenset[str]') -> None:
+        kind = type(op).__name__
+        if kind not in allowed:
+            symbol = _EDGE_OP_SYMBOLS.get(kind, kind)
+            self._problem(node, 'pyne-edge-syntax',
+                          f"the '{symbol}' operator is {_EDGE_SUFFIX}")
+
+    def _problem(self, node: ast.AST, code: str, message: str) -> None:
+        self.problems.append((*_node_span(self.columns, node), code, message))
+
+
+def _has_allowed_prefix(module: str) -> bool:
+    return any(module == prefix or module.startswith(prefix + '.')
+               for prefix in _edge_rules.ALLOWED_IMPORT_PREFIXES)
+
+
+def _has_parameters(args: ast.arguments) -> bool:
+    return bool(args.posonlyargs or args.args or args.kwonlyargs
+                or args.vararg or args.kwarg)
+
+
+def _has_special_parameters(args: ast.arguments) -> bool:
+    return bool(args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg)
+
+
+def _is_docstring(stmt: ast.stmt) -> bool:
+    return (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+            and isinstance(stmt.value.value, str))
+
+
+def _builtin_list() -> str:
+    return ', '.join(sorted(_edge_rules.ALLOWED_BUILTIN_CALLS))
+
+
 def _bound_names(target: ast.expr) -> Iterable[str]:
     if isinstance(target, ast.Name):
         yield target.id
@@ -650,7 +960,12 @@ def analyze(source: str) -> dict[str, Any]:
     else:
         checker = _StructureChecker(tree, analyzer.lib, columns)
         checker.check()
-        problems = sorted(checker.problems + analyzer.problems)
+        problems = checker.problems + analyzer.problems
+        if _edge_rules is not None and _is_edge(source):
+            edge = _EdgeChecker(tree, analyzer.lib, columns)
+            edge.check()
+            problems += edge.problems
+        problems = sorted(problems)
     return {
         'spans': [list(span) for span in analyzer.spans],
         'refs': [list(ref) for ref in analyzer.refs],
