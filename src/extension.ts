@@ -23,7 +23,10 @@ import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { RunService } from './run/runService';
-import { PyrightService } from './typing/pyrightService';
+import { PyneCheckerService } from './typing/pyneChecker';
+import { PyneHoverProvider } from './typing/pyneHover';
+import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
+import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 
@@ -97,21 +100,33 @@ export function activate(context: vscode.ExtensionContext): void {
     ensurePyrightConfig(workdir.path);
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
     if (wsFolder) hideGeneratedFiles(wsFolder.uri.fsPath);
+    void takeOverPythonAnalysis();
   }
 
-  // Once the interpreter is known, teach the generated config where pynecore
-  // lives when it is an editable/dev install — its setuptools import-hook
-  // finder is invisible to type checkers (Pylance/pyright), so imports would
-  // otherwise show as unresolved even though the code runs.
+  // Once the interpreter is known, point the generated config at it: where
+  // pynecore lives for an editable/dev install, and which Python version to
+  // analyze against (see reconcilePyrightConfig).
   context.subscriptions.push(
-    manager.onDidChangeState((state) => reconcilePyrightExtraPaths(state))
+    manager.onDidChangeState((state) => reconcilePyrightConfig(state))
   );
-  reconcilePyrightExtraPaths(manager.state);
+  reconcilePyrightConfig(manager.state);
 
   const pyrightOutput = vscode.window.createOutputChannel('Pyne Typing (pyright)');
-  const pyright = new PyrightService(context, manager, pyrightOutput);
-  context.subscriptions.push(pyrightOutput);
+  // One worker feeds both the pyright index filter (L5c) and the Pyne checker
+  // (L5d); its lifecycle lives here so neither service owns the other.
+  const seriesAnalyzer = new SeriesAnalyzer(
+    context.asAbsolutePath(path.join('python', 'pyneide_series.py')),
+    manager,
+    pyrightOutput
+  );
+  context.subscriptions.push(pyrightOutput, seriesAnalyzer);
+  const pyright = new PyrightService(context, manager, pyrightOutput, seriesAnalyzer);
   pyright.register();
+  const pyneChecker = new PyneCheckerService(context, seriesAnalyzer, pyrightOutput);
+  pyneChecker.register();
+  // Declared-type hovers when Pylance (or another pyright) supersedes the
+  // bundled server — there is no LSP middleware to rewrite through then.
+  new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
 
   void initialCheck(context, manager);
   void pineLs.initialize();
@@ -138,6 +153,36 @@ async function initialCheck(
   }
 }
 
+/**
+ * In a Pyne workspace, Pylance would supersede the bundled pyright, and then
+ * neither the per-access index filter nor the hover rewrite can run — another
+ * extension's output cannot be modified, only stacked next to (which shows two
+ * contradicting types). Pylance honors `python.languageServer`: "None" turns
+ * its server off for this workspace, letting the bundled server take over with
+ * the full Pyne-aware pipeline, while other (non-Pyne) workspaces keep Pylance.
+ *
+ * Written once at workspace scope. An explicit workspace-level value the user
+ * set themselves — including switching back to "Pylance" — is respected and
+ * never overwritten.
+ */
+async function takeOverPythonAnalysis(): Promise<void> {
+  if (!vscode.extensions.getExtension(PYLANCE_EXTENSION)) return;
+  const config = vscode.workspace.getConfiguration('python');
+  if (config.get<string>('languageServer') === 'None') return;
+  if (config.inspect<string>('languageServer')?.workspaceValue !== undefined) return;
+  try {
+    await config.update('languageServer', 'None', vscode.ConfigurationTarget.Workspace);
+  } catch {
+    // No writable workspace (e.g. no folder open) — nothing to take over.
+    return;
+  }
+  void vscode.window.showInformationMessage(
+    'PyneIDE now provides Python analysis in this Pyne workspace instead of Pylance ' +
+      '("python.languageServer": "None" in workspace settings — set it back to ' +
+      '"Default" to undo).'
+  );
+}
+
 function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
   const workdir = resolveWorkspaceWorkdir();
   if (workdir?.exists) {
@@ -148,19 +193,32 @@ function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
 }
 
 /**
- * On env-ready, add the pynecore src root to the generated pyrightconfig's
- * extraPaths — but only for an editable/dev install, whose import-hook finder
- * type checkers cannot follow. A regular wheel install resolves through the
- * interpreter (its root is site-packages), so it needs no extraPaths entry and
- * the config stays clean.
+ * On env-ready, teach the generated pyrightconfig about the interpreter
+ * PyneIDE actually runs scripts with:
+ *
+ * - `extraPaths` gets the pynecore src root, but only for an editable/dev
+ *   install, whose import-hook finder type checkers cannot follow. A regular
+ *   wheel install resolves through the interpreter (its root is
+ *   site-packages), so it needs no entry and the config stays clean.
+ * - `pythonVersion` gets the venv's version. Checkers otherwise infer it from
+ *   the interpreter the editor selected, and the managed venv sits in
+ *   globalStorage where Pylance never sees it — so an old default interpreter
+ *   would silently analyze modern stubs against an ancient stdlib.
+ * - `venvPath`/`venv` point package resolution at that same environment, which
+ *   `pythonVersion` alone does not do: a wheel install gets no `extraPaths`,
+ *   so an editor aimed at another interpreter would not find `pynecore` at all.
  */
-function reconcilePyrightExtraPaths(state: EnvState): void {
+function reconcilePyrightConfig(state: EnvState): void {
   if (state.kind !== 'ready') return;
   const root = state.verify.pynecoreRoot;
   const editable = root !== undefined && path.basename(root) !== 'site-packages';
   const workdir = resolveWorkspaceWorkdir();
   if (!workdir?.exists) return;
-  ensurePyrightConfig(workdir.path, { extraPaths: editable && root ? [root] : [] });
+  ensurePyrightConfig(workdir.path, {
+    extraPaths: editable && root ? [root] : [],
+    pythonVersion: state.verify.pythonVersion,
+    pythonBin: state.pythonBin,
+  });
 }
 
 /**
@@ -229,6 +287,7 @@ async function initProjectCommand(
       hideGeneratedFiles(folder.uri.fsPath);
       recommendTomlExtension(folder.uri.fsPath);
       updateTerminalWorkdirEnv(context);
+      void takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
       await vscode.window.showTextDocument(doc);
       void vscode.window.showInformationMessage(

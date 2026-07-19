@@ -8,21 +8,30 @@ import {
   RevealOutputChannelOn,
   State,
   TransportKind,
+  vsdiag,
   type ServerOptions,
 } from 'vscode-languageclient/node';
 
 import type { EnvManager } from '../env/manager';
+import { ensurePyrightConfig } from '../env/workdir';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
+import { isSeriesAccess, seriesSpanIndex } from './seriesFilter';
+
+/** Pylance's language server is driven by `python.languageServer`. */
+export const PYLANCE_EXTENSION = 'ms-python.vscode-pylance';
 
 /**
  * Extensions that already run a pyright-family language server for Python.
  * Starting a second instance next to them would double every diagnostic, so
  * the bundled server defers to any of these (L5a's generated pyrightconfig
- * covers those setups instead).
+ * covers those setups instead). Pylance only counts while
+ * `python.languageServer` actually routes to it — Pyne workspaces set the
+ * value to "None" so the bundled server can take over (see extension.ts).
  */
 const SUPERSEDING_EXTENSIONS = [
-  'ms-python.vscode-pylance',
+  PYLANCE_EXTENSION,
   'ms-pyright.pyright',
   'detachhead.basedpyright',
 ];
@@ -52,10 +61,14 @@ type PyrightStatus =
  * - workspace/configuration: injects the managed venv interpreter as
  *   python.pythonPath, so pynecore imports resolve without the ms-python
  *   extension; re-pushed whenever the environment state changes.
- * - handleDiagnostics: rule-level filter — reportIndexIssue is dropped in
- *   `@pyne` documents (series history indexing like `close[1]` is valid Pyne;
- *   the transparent `Series[T] = T` alias cannot express it). Non-Pyne Python
- *   files keep the rule. Precise (series-name) filtering is L5c.
+ * - handleDiagnostics: per-access reportIndexIssue filter in `@pyne` documents
+ *   (L5c). `close[1]` is valid Pyne that the transparent `Series[T] = T` alias
+ *   cannot express, so the accesses pynecomp rewrites into series-buffer reads
+ *   are dropped and the rest are kept with a Pyne-specific hint. While no
+ *   analysis is available the whole rule is dropped, as in L5b. Non-Pyne
+ *   Python files keep the rule untouched.
+ * - provideHover: puts the declared `Series[...]` back into hovers, which the
+ *   transparent alias otherwise renders as the bare element type.
  */
 export class PyrightService {
   private client?: LanguageClient;
@@ -64,26 +77,48 @@ export class PyrightService {
   private syncing = false;
   private syncAgain = false;
   private lastPushedPython?: string;
+  private readonly analyzer: SeriesAnalyzer;
+  /** Unfiltered diagnostics per document, for re-publishing after analysis. */
+  private readonly rawDiagnostics = new Map<string, vscode.Diagnostic[]>();
+  private publish?: (uri: vscode.Uri, diagnostics: vscode.Diagnostic[]) => void;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly env: EnvManager,
-    private readonly output: vscode.OutputChannel
+    private readonly output: vscode.OutputChannel,
+    analyzer: SeriesAnalyzer
   ) {
     this.statusItem = vscode.languages.createLanguageStatusItem('pyneide.pyright', {
       language: 'python',
     });
     this.statusItem.name = 'Pyne Typing';
+    this.analyzer = analyzer;
   }
 
   register(): void {
     this.context.subscriptions.push(
       this.statusItem,
-      { dispose: () => void this.stopClient() },
+      {
+        dispose: () => {
+          // Deactivation hands the workspace back to whatever checker the user
+          // has next; our per-access filter is gone, so the rule must be too.
+          this.reconcileIndexRule(false);
+          void this.stopClient();
+        },
+      },
+      vscode.workspace.onDidCloseTextDocument((doc) => {
+        this.analyzer.forget(doc.uri);
+        this.rawDiagnostics.delete(doc.uri.toString());
+      }),
       vscode.commands.registerCommand('pyneide.pyrightRestart', () => this.restart()),
       vscode.commands.registerCommand('pyneide.pyrightShowLog', () => this.output.show()),
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('pyneide.pyright')) void this.sync();
+        if (
+          e.affectsConfiguration('pyneide.pyright') ||
+          e.affectsConfiguration('python.languageServer')
+        ) {
+          void this.sync();
+        }
       }),
       vscode.extensions.onDidChange(() => void this.sync()),
       vscode.workspace.onDidChangeWorkspaceFolders(() => void this.sync()),
@@ -93,7 +128,10 @@ export class PyrightService {
         if (doc.languageId === 'python' && !this.client) void this.sync();
       }),
       this.env.onDidChangeState((state) => {
-        if (state.kind === 'ready' || state.kind === 'error') void this.pushEnvironment();
+        if (state.kind === 'ready' || state.kind === 'error') {
+          this.analyzer.refreshInterpreter();
+          void this.pushEnvironment();
+        }
       })
     );
     void this.sync();
@@ -134,11 +172,22 @@ export class PyrightService {
   }
 
   private supersededBy(): string | undefined {
-    return SUPERSEDING_EXTENSIONS.find((id) => vscode.extensions.getExtension(id));
+    return SUPERSEDING_EXTENSIONS.find((id) => {
+      if (!vscode.extensions.getExtension(id)) return false;
+      // With "None" or "Jedi" Pylance is installed but its server never runs;
+      // the standalone pyright/basedpyright extensions ignore the setting.
+      if (id === PYLANCE_EXTENSION) return pylanceServesHere();
+      return true;
+    });
   }
 
   private jediHostPresent(): boolean {
-    return vscode.extensions.getExtension(JEDI_HOST_EXTENSION) !== undefined;
+    if (!vscode.extensions.getExtension(JEDI_HOST_EXTENSION)) return false;
+    const value = configuredLanguageServer();
+    if (value === 'Jedi') return true;
+    // "Default" falls back to Jedi only when Pylance is not installed
+    // (VSCodium / Open VSX installs); "None" disables Jedi too.
+    return value === 'Default' && !vscode.extensions.getExtension(PYLANCE_EXTENSION);
   }
 
   /**
@@ -181,6 +230,10 @@ export class PyrightService {
       do {
         this.syncAgain = false;
         const decision = this.decide();
+        // The index rule lives in the on-disk config, so it has to be set
+        // before the server reads it (and handed back to the next checker
+        // when we bow out).
+        this.reconcileIndexRule(decision.start);
         if (!decision.start) {
           if (this.client) this.output.appendLine(`Stopping pyright: ${decision.reason}`);
           await this.stopClient();
@@ -191,6 +244,22 @@ export class PyrightService {
       } while (this.syncAgain);
     } finally {
       this.syncing = false;
+    }
+  }
+
+  /**
+   * Restore or re-suppress `reportIndexIssue` in the generated config
+   * depending on whether our filter is the one about to run. Pylance and CLI
+   * runs read the same file, so leaving it open when we are not analyzing
+   * would hand them ~175 series-history false positives per corpus.
+   */
+  private reconcileIndexRule(ours: boolean): void {
+    const workdir = resolveWorkspaceWorkdir();
+    if (!workdir?.exists) return;
+    if (ensurePyrightConfig(workdir.path, { preciseIndexFilter: ours })) {
+      this.output.appendLine(
+        `reportIndexIssue ${ours ? 'restored for the per-access filter' : 'suppressed for other checkers'}`
+      );
     }
   }
 
@@ -214,7 +283,23 @@ export class PyrightService {
           },
         },
         handleDiagnostics: (uri, diagnostics, next) => {
+          this.publish = next;
+          this.rawDiagnostics.set(uri.toString(), diagnostics);
           next(uri, this.filterDiagnostics(uri, diagnostics));
+        },
+        // pyright registers pull diagnostics (textDocument/diagnostic) when
+        // the client is capable — those bypass handleDiagnostics entirely, so
+        // the index filter has to run here too. Pull is a request/response, so
+        // the analysis can simply be awaited; no drop-then-republish dance.
+        provideDiagnostics: async (document, previousResultId, token, next) => {
+          const report = await next(document, previousResultId, token);
+          if (report?.kind !== vsdiag.DocumentDiagnosticReportKind.full) return report;
+          const uri = document instanceof vscode.Uri ? document : document.uri;
+          return { ...report, items: await this.filterPulled(uri, report.items) };
+        },
+        provideHover: async (document, position, token, next) => {
+          const hover = await next(document, position, token);
+          return hover ? this.decorateHover(document, position, hover) : hover;
         },
       },
     });
@@ -260,8 +345,27 @@ export class PyrightService {
   private amendConfiguration(section: string | undefined, value: unknown): unknown {
     const base = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
     if (section === 'python') {
+      let amended = base;
       const pythonBin = this.readyPythonBin();
-      if (pythonBin && !base.pythonPath) return { ...base, pythonPath: pythonBin };
+      if (pythonBin && !amended.pythonPath) amended = { ...amended, pythonPath: pythonBin };
+      // The configless default instance (see `pyright` below) only requests
+      // the `python` section and reads `analysis` nested inside it — this is
+      // where its extraPaths must go so `pynecore` resolves from an editable
+      // install, whose import-hook finder static analysis cannot follow.
+      const root = this.editablePynecoreRoot();
+      const analysis =
+        amended.analysis && typeof amended.analysis === 'object'
+          ? (amended.analysis as Record<string, unknown>)
+          : {};
+      if (root && !hasEntries(analysis.extraPaths)) {
+        amended = { ...amended, analysis: { ...analysis, extraPaths: [root] } };
+      }
+      return amended;
+    }
+    if (section === 'python.analysis') {
+      // Workspace instances request the flat section too; same default.
+      const root = this.editablePynecoreRoot();
+      if (root && !hasEntries(base.extraPaths)) return { ...base, extraPaths: [root] };
       return base;
     }
     if (section === 'pyright') {
@@ -274,6 +378,15 @@ export class PyrightService {
       };
     }
     return value;
+  }
+
+  /** The pynecore source root when it is an editable/dev install; else undefined. */
+  private editablePynecoreRoot(): string | undefined {
+    const state = this.env.state;
+    if (state.kind !== 'ready') return undefined;
+    const root = state.verify.pynecoreRoot;
+    if (!root || path.basename(root) === 'site-packages') return undefined;
+    return root;
   }
 
   /** Env became ready (or changed): make pyright re-pull configuration. */
@@ -290,13 +403,97 @@ export class PyrightService {
     });
   }
 
+  /**
+   * Drop the series-history `reportIndexIssue` noise from `@pyne` documents.
+   *
+   * With an analysis in hand only the accesses pynecomp actually rewrites into
+   * buffer reads are dropped; everything else stays as a genuine error with a
+   * Pyne-specific hint appended. Without one — no interpreter, unparsable
+   * source, analysis still running — the whole rule is dropped, so the fallback
+   * can only ever be quieter than the truth, never noisier.
+   */
   private filterDiagnostics(
     uri: vscode.Uri,
     diagnostics: vscode.Diagnostic[]
   ): vscode.Diagnostic[] {
+    if (this.isForeignSource(uri)) return syntaxOnly(diagnostics);
     if (!diagnostics.some((d) => diagnosticRule(d) === 'reportIndexIssue')) return diagnostics;
     if (!this.isPyneUri(uri)) return diagnostics;
-    return diagnostics.filter((d) => diagnosticRule(d) !== 'reportIndexIssue');
+    const text = SeriesAnalyzer.readText(uri);
+    if (text === undefined) return dropIndexIssues(diagnostics);
+    const analysis = this.analyzer.cached(uri, text);
+    if (analysis) return applySeriesAnalysis(diagnostics, analysis, text);
+    void this.analyzeAndRepublish(uri, text);
+    return dropIndexIssues(diagnostics);
+  }
+
+  /**
+   * Pull-model twin of `filterDiagnostics`: the analysis is awaited (bounded
+   * by the worker's own request timeout), so the returned report is already
+   * precise. Every unavailable-analysis state still falls back to dropping the
+   * whole rule — quieter than the truth, never noisier.
+   */
+  private async filterPulled(
+    uri: vscode.Uri,
+    items: vscode.Diagnostic[]
+  ): Promise<vscode.Diagnostic[]> {
+    if (this.isForeignSource(uri)) return syntaxOnly(items);
+    if (!items.some((d) => diagnosticRule(d) === INDEX_RULE)) return items;
+    if (!this.isPyneUri(uri)) return items;
+    const text = SeriesAnalyzer.readText(uri);
+    if (text === undefined) return dropIndexIssues(items);
+    const analysis = await this.analyzer.analyze(uri, text);
+    if (!analysis) return dropIndexIssues(items);
+    return applySeriesAnalysis(items, analysis, text);
+  }
+
+  /**
+   * Analyze in the background and re-publish once the answer is in. Skipped
+   * when the document moved on in the meantime — that edit produces its own
+   * diagnostics push, which runs this same path again.
+   */
+  private async analyzeAndRepublish(uri: vscode.Uri, text: string): Promise<void> {
+    const analysis = await this.analyzer.analyze(uri, text);
+    if (!analysis || !this.publish) return;
+    const raw = this.rawDiagnostics.get(uri.toString());
+    if (!raw) return;
+    if (SeriesAnalyzer.readText(uri) !== text) return;
+    this.publish(uri, applySeriesAnalysis(raw, analysis, text));
+  }
+
+  /** Hover cosmetics: show `Series[float]`, not the alias-collapsed `float`. */
+  private decorateHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    hover: vscode.Hover
+  ): vscode.Hover {
+    if (!this.isPyneDocument(document)) return hover;
+    const analysis = this.analyzer.cached(document.uri, document.getText());
+    if (!analysis) {
+      void this.analyzer.analyze(document.uri, document.getText());
+      return hover;
+    }
+    const ref = analysis.refs.find(
+      (r) =>
+        r.line === position.line && r.start <= position.character && position.character < r.end
+    );
+    if (!ref) return hover;
+    const contents = hover.contents.map((part) => reannotateHoverPart(part, ref.annotation));
+    return new vscode.Hover(contents, hover.range);
+  }
+
+  /**
+   * A file outside every workspace folder that is not a Pyne script —
+   * typically a pynecore source opened via go-to-definition. pyright hands
+   * such files to the nearest workspace instance, so the workdir's generated
+   * "basic" config judges code it was never written for (pynecore's own
+   * `overload` decorator alone yields reportRedeclaration errors its repo
+   * config silences). Pylance's configless default was "off"; these files get
+   * the same treatment: syntax errors only.
+   */
+  private isForeignSource(uri: vscode.Uri): boolean {
+    if (vscode.workspace.getWorkspaceFolder(uri) !== undefined) return false;
+    return !this.isPyneUri(uri);
   }
 
   private isPyneUri(uri: vscode.Uri): boolean {
@@ -351,6 +548,112 @@ export class PyrightService {
         break;
     }
   }
+}
+
+const INDEX_RULE = 'reportIndexIssue';
+
+/**
+ * Appended to index errors we keep, because pyright's own wording
+ * ("__getitem__ method not defined on type float") describes the stub, not
+ * what the user has to change.
+ */
+const INDEX_HINT =
+  'Pyne: history indexing (`x[1]`) only works on series values — ' +
+  'declare the variable as `Series[...]` or index a lib series directly.';
+
+function dropIndexIssues(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
+  return diagnostics.filter((d) => diagnosticRule(d) !== INDEX_RULE);
+}
+
+/** Syntax errors carry no rule code; everything rule-based is dropped. */
+function syntaxOnly(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
+  return diagnostics.filter((d) => diagnosticRule(d) === undefined);
+}
+
+/** Keep the index errors whose subscript base is not a series access. */
+function applySeriesAnalysis(
+  diagnostics: vscode.Diagnostic[],
+  analysis: SeriesAnalysis,
+  text: string
+): vscode.Diagnostic[] {
+  const lines = text.split(/\r?\n/);
+  const index = seriesSpanIndex(analysis.spans);
+  const kept: vscode.Diagnostic[] = [];
+  for (const diagnostic of diagnostics) {
+    if (diagnosticRule(diagnostic) !== INDEX_RULE) {
+      kept.push(diagnostic);
+      continue;
+    }
+    const { start, end } = diagnostic.range;
+    const line = lines[start.line] ?? '';
+    // A base expression spanning several lines cannot match a single-line
+    // span, so it is kept as-is rather than guessed at.
+    if (start.line === end.line && isSeriesAccess(index, line, start.line, start.character, end.character)) {
+      continue;
+    }
+    kept.push(withHint(diagnostic));
+  }
+  return kept;
+}
+
+function withHint(diagnostic: vscode.Diagnostic): vscode.Diagnostic {
+  const copy = new vscode.Diagnostic(
+    diagnostic.range,
+    `${diagnostic.message}\n${INDEX_HINT}`,
+    diagnostic.severity
+  );
+  copy.code = diagnostic.code;
+  copy.source = diagnostic.source;
+  copy.tags = diagnostic.tags;
+  copy.relatedInformation = diagnostic.relatedInformation;
+  return copy;
+}
+
+/**
+ * Rewrite the declared type in one hover part back to its Pyne form
+ * (`Series[...]`, `Persistent[...]`). The whole displayed type is replaced,
+ * not just the alias-collapsed element type: pyright's assignment narrowing
+ * otherwise surfaces (`p: Persistent[float] = 0` then `p += 1` hovers as
+ * `Literal[1]`), and for a per-bar mutable Pyne variable the declared type is
+ * the truthful view, the literal a distraction.
+ */
+function reannotateHoverPart(
+  part: vscode.MarkdownString | vscode.MarkedString,
+  annotation: string
+): vscode.MarkdownString | vscode.MarkedString {
+  const rewrite = (value: string): string =>
+    value.replace(/^(\(variable\)\s+\w+:\s*).*$/m, `$1${escapeReplacement(annotation)}`);
+  if (part instanceof vscode.MarkdownString) {
+    const next = new vscode.MarkdownString(rewrite(part.value), part.supportThemeIcons);
+    next.isTrusted = part.isTrusted;
+    return next;
+  }
+  if (typeof part === 'string') return rewrite(part);
+  return { language: part.language, value: rewrite(part.value) };
+}
+
+/** `$` is special in String.replace replacement patterns — make it literal. */
+function escapeReplacement(value: string): string {
+  return value.replace(/\$/g, '$$$$');
+}
+
+/**
+ * Whether the user actually configured a list. Pylance registers
+ * `python.analysis.extraPaths` with a `[]` default, so mere presence cannot
+ * distinguish "set" from "untouched default".
+ */
+function hasEntries(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function configuredLanguageServer(): string {
+  return vscode.workspace.getConfiguration('python').get<string>('languageServer', 'Default');
+}
+
+/** Whether `python.languageServer` routes Python analysis to Pylance. */
+function pylanceServesHere(): boolean {
+  const value = configuredLanguageServer();
+  return value === 'Default' || value === 'Pylance';
 }
 
 /** The pyright rule name of a published diagnostic (code or code.value). */

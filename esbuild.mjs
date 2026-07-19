@@ -7,6 +7,7 @@ const watch = process.argv.includes('--watch');
 const smoke = process.argv.includes('--smoke');
 const smokePinels = process.argv.includes('--smoke-pinels');
 const smokePyright = process.argv.includes('--smoke-pyright');
+const smokeChecker = process.argv.includes('--smoke-checker');
 
 const common = {
   bundle: true,
@@ -78,6 +79,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/pyrightSmoke.ts'],
     outfile: 'dist/pyright-smoke.js',
+    minify: false,
+  });
+} else if (smokeChecker) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/checkerSmoke.ts'],
+    outfile: 'dist/checker-smoke.js',
     minify: false,
   });
 } else {

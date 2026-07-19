@@ -97,6 +97,41 @@ export async function scaffoldWorkdirWithCli(
 }
 
 /**
+ * Fallback `pythonVersion` for a config written before any interpreter is
+ * known. Matches pynecore's own `requires-python`, so its stubs always parse;
+ * the real interpreter's version replaces it once the environment is ready.
+ */
+const PYTHON_VERSION_FLOOR = '3.11';
+
+/** `3.14.0` -> `3.14`; undefined for anything that is not a dotted version. */
+export function majorMinor(version: string | undefined): string | undefined {
+  const match = /^(\d+)\.(\d+)/.exec(version?.trim() ?? '');
+  return match ? `${match[1]}.${match[2]}` : undefined;
+}
+
+/**
+ * Split an interpreter path into pyright's `venvPath` + `venv` pair, or
+ * undefined when it is not a virtual environment.
+ *
+ * The two together are what let a checker resolve imports out of PyneIDE's
+ * environment without the editor having that interpreter selected. A bare
+ * system interpreter (`/usr/bin/python3`) has no venv to name, and guessing
+ * one from its path would point pyright at `/usr` — hence the `pyvenv.cfg`
+ * check, which is the definitive marker.
+ */
+export function venvLocation(
+  pythonBin: string | undefined
+): { venvPath: string; venv: string } | undefined {
+  if (!pythonBin) return undefined;
+  // <venv>/bin/python, or <venv>/Scripts/python.exe on Windows.
+  const venvDir = path.dirname(path.dirname(pythonBin));
+  if (!fs.existsSync(path.join(venvDir, 'pyvenv.cfg'))) return undefined;
+  const venv = path.basename(venvDir);
+  if (!venv) return undefined;
+  return { venvPath: path.dirname(venvDir), venv };
+}
+
+/**
  * The generated pyright/Pylance config for Pyne projects. The pieces are the
  * outcome of the L5 typing spike (work/SPIKE-L5.md in this repo):
  * - `defineConstant TYPECHECKER` selects the pyright branch of pynecore's
@@ -104,14 +139,24 @@ export async function scaffoldWorkdirWithCli(
  *   produces ~140 false "not assignable to type_checker.float" errors.
  * - `reportIndexIssue: none` hides the false positives from history-indexing
  *   scalars (`close[1]`) under the transparent `Series[T] = T` alias — the
- *   only noise category the stubs cannot fix.
+ *   only noise category the stubs cannot fix. This is the checker-agnostic
+ *   fallback; when PyneIDE's own bundled pyright is the analyzer it turns the
+ *   rule back on (see `preciseIndexFilter`) and filters per access instead.
  * - `basic` mode: Pylance's default is "off"; the cleaned-up pynecore stubs
  *   make basic-level checking actually usable on @pyne scripts.
+ * - `pythonVersion` is pinned because a type checker infers it from the
+ *   interpreter the EDITOR selected, and PyneIDE's managed venv lives in
+ *   globalStorage where Pylance never sees it. Left unpinned on a machine
+ *   whose default interpreter is old, `typing.TypeAlias` (3.10+) resolves to
+ *   Unknown, which collapses pynecore's `Series: TypeAlias = T` into a plain
+ *   variable and turns every `Series[...]` annotation into
+ *   "Variable not allowed in type expression".
  */
 const PYRIGHT_CONFIG = {
   typeCheckingMode: 'basic',
   defineConstant: { TYPECHECKER: 'pyright' },
   reportIndexIssue: 'none',
+  pythonVersion: PYTHON_VERSION_FLOOR,
   exclude: ['data', 'output', '**/__pycache__'],
 };
 
@@ -126,10 +171,17 @@ function isGeneratedConfig(config: unknown): boolean {
   const define = c.defineConstant as Record<string, unknown> | undefined;
   return (
     c.typeCheckingMode === 'basic' &&
-    c.reportIndexIssue === 'none' &&
+    (c.reportIndexIssue === 'none' || c.reportIndexIssue === INDEX_RULE_ON) &&
     define?.TYPECHECKER === 'pyright'
   );
 }
+
+/**
+ * Severity the index rule is restored to for the precise filter. `error`
+ * matches what the rule carries in pyright's basic rule set, so a genuine
+ * index error looks the same whichever checker surfaced it.
+ */
+const INDEX_RULE_ON = 'error';
 
 export interface PyrightConfigOptions {
   /**
@@ -139,15 +191,57 @@ export interface PyrightConfigOptions {
    * existing generated config keeps whatever extraPaths it already has.
    */
   extraPaths?: string[];
+  /**
+   * Whether PyneIDE's own pyright is the analyzer here and filters series
+   * history indexing per access (L5c). True restores `reportIndexIssue` so
+   * genuine index errors reach that filter; false puts the blanket suppression
+   * back for whichever checker takes over. Omit to leave the rule as it is.
+   *
+   * The rule has to live in the file rather than in a client setting:
+   * `pyrightconfig.json` outranks `python.analysis.diagnosticSeverityOverrides`,
+   * so a config saying `none` cannot be reopened from the LSP side.
+   */
+  preciseIndexFilter?: boolean;
+  /**
+   * `major.minor` of the interpreter PyneIDE actually runs scripts with, so
+   * checkers analyze against it instead of whatever the editor happens to have
+   * selected. Omit while no interpreter is known; the existing value stays.
+   */
+  pythonVersion?: string;
+  /**
+   * Interpreter PyneIDE runs scripts with. When it is a virtual environment,
+   * its `venvPath`/`venv` go into the config so checkers resolve imports from
+   * there — `pythonVersion` fixes the stdlib level, but package resolution
+   * still follows the interpreter, and the managed venv is one the editor has
+   * never heard of. A non-venv interpreter clears the pair instead.
+   */
+  pythonBin?: string;
+}
+
+/** Write or clear the `venvPath`/`venv` pair; true when the config changed. */
+function applyVenv(
+  config: Record<string, unknown>,
+  venv: { venvPath: string; venv: string } | undefined
+): boolean {
+  if (!venv) {
+    if (config.venvPath === undefined && config.venv === undefined) return false;
+    delete config.venvPath;
+    delete config.venv;
+    return true;
+  }
+  if (config.venvPath === venv.venvPath && config.venv === venv.venv) return false;
+  config.venvPath = venv.venvPath;
+  config.venv = venv.venv;
+  return true;
 }
 
 /**
  * Ensure the generated `pyrightconfig.json` in `dir` is present and current.
  *
  * A missing config is written from the template. An existing config we
- * generated has only its `extraPaths` reconciled to `opts.extraPaths` (when
- * provided). A user-authored config — anything without our fingerprint — is
- * never touched. Returns true when the file was written or changed.
+ * generated has its `extraPaths` and index-rule severity reconciled to the
+ * provided options. A user-authored config — anything without our fingerprint
+ * — is never touched. Returns true when the file was written or changed.
  *
  * Note: Pylance only reads the config at the workspace root, so callers pass
  * the workspace folder as well when the workdir is a subfolder.
@@ -155,9 +249,26 @@ export interface PyrightConfigOptions {
 export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}): boolean {
   const configPath = path.join(dir, 'pyrightconfig.json');
   const extraPaths = opts.extraPaths?.filter((p) => p.length > 0);
+  const indexRule =
+    opts.preciseIndexFilter === undefined
+      ? undefined
+      : opts.preciseIndexFilter
+        ? INDEX_RULE_ON
+        : 'none';
+
+  const pythonVersion = majorMinor(opts.pythonVersion);
+  const venv = venvLocation(opts.pythonBin);
 
   if (fs.existsSync(configPath)) {
-    if (!extraPaths || extraPaths.length === 0) return false;
+    const wantsExtraPaths = extraPaths !== undefined && extraPaths.length > 0;
+    if (
+      !wantsExtraPaths &&
+      indexRule === undefined &&
+      pythonVersion === undefined &&
+      opts.pythonBin === undefined
+    ) {
+      return false;
+    }
     let existing: unknown;
     try {
       existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -166,9 +277,24 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
     }
     if (!isGeneratedConfig(existing)) return false;
     const config = existing as Record<string, unknown>;
-    const current = Array.isArray(config.extraPaths) ? (config.extraPaths as unknown[]) : undefined;
-    if (current && JSON.stringify(current) === JSON.stringify(extraPaths)) return false;
-    config.extraPaths = extraPaths;
+    let changed = false;
+    if (wantsExtraPaths) {
+      const current = Array.isArray(config.extraPaths) ? config.extraPaths : undefined;
+      if (!current || JSON.stringify(current) !== JSON.stringify(extraPaths)) {
+        config.extraPaths = extraPaths;
+        changed = true;
+      }
+    }
+    if (indexRule !== undefined && config.reportIndexIssue !== indexRule) {
+      config.reportIndexIssue = indexRule;
+      changed = true;
+    }
+    if (pythonVersion !== undefined && config.pythonVersion !== pythonVersion) {
+      config.pythonVersion = pythonVersion;
+      changed = true;
+    }
+    if (opts.pythonBin !== undefined && applyVenv(config, venv)) changed = true;
+    if (!changed) return false;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
     return true;
   }
@@ -176,6 +302,9 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
   fs.mkdirSync(dir, { recursive: true });
   const config: Record<string, unknown> = { ...PYRIGHT_CONFIG };
   if (extraPaths && extraPaths.length > 0) config.extraPaths = extraPaths;
+  if (indexRule !== undefined) config.reportIndexIssue = indexRule;
+  if (pythonVersion !== undefined) config.pythonVersion = pythonVersion;
+  applyVenv(config, venv);
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   return true;
 }

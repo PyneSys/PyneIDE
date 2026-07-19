@@ -47,6 +47,11 @@ export class LspStdio {
         this.pending.get(message.id)?.(message.result, message.error);
         this.pending.delete(message.id);
       } else if (message.method) {
+        // Server->client requests (client/registerCapability, ...) must get a
+        // response or the server stalls; null acknowledges them all.
+        if (message.id !== undefined) {
+          this.send({ jsonrpc: '2.0', id: message.id, result: null });
+        }
         for (let i = this.notificationWaiters.length - 1; i >= 0; i--) {
           const waiter = this.notificationWaiters[i];
           if (waiter.method === message.method && (waiter.predicate?.(message.params) ?? true)) {
