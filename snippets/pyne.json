@@ -1,0 +1,298 @@
+{
+  "Pyne indicator skeleton": {
+    "prefix": "indicator",
+    "description": "Pyne indicator script skeleton (full file)",
+    "body": [
+      "\"\"\"",
+      "@pyne",
+      "\"\"\"",
+      "from pynecore.lib import close, color, input, plot, script, ta",
+      "from pynecore.types import Series",
+      "",
+      "",
+      "@script.indicator(\"${1:My Indicator}\", shorttitle=\"${2:MI}\", overlay=${3|True,False|})",
+      "def main(",
+      "    length=input.int(${4:14}, \"Length\", minval=1),",
+      "    src: Series[float] = input.source(close, \"Source\"),",
+      "):",
+      "    value: Series[float] = ${5:ta.sma(src, length)}",
+      "",
+      "    plot(value, \"${1/(.*)/${1:/pascalcase}/}\", color=color.blue)",
+      "    $0"
+    ]
+  },
+  "Pyne strategy skeleton": {
+    "prefix": "strategy",
+    "description": "Pyne strategy script skeleton (full file)",
+    "body": [
+      "\"\"\"",
+      "@pyne",
+      "\"\"\"",
+      "from pynecore.lib import close, input, script, strategy, ta",
+      "",
+      "",
+      "@script.strategy(\"${1:My Strategy}\", shorttitle=\"${2:MS}\", overlay=${3|True,False|},",
+      "                 default_qty_type=strategy.percent_of_equity, default_qty_value=${4:100})",
+      "def main(",
+      "    length=input.int(${5:14}, \"Length\", minval=1),",
+      "):",
+      "    long_condition = ${6:ta.crossover(close, ta.sma(close, length))}",
+      "    short_condition = ${7:ta.crossunder(close, ta.sma(close, length))}",
+      "",
+      "    if long_condition:",
+      "        strategy.entry(\"Long\", strategy.long)",
+      "",
+      "    if short_condition:",
+      "        strategy.entry(\"Short\", strategy.short)",
+      "    $0"
+    ]
+  },
+  "Pyne library skeleton": {
+    "prefix": "library",
+    "description": "Pyne library script skeleton (full file)",
+    "body": [
+      "\"\"\"",
+      "@pyne",
+      "\"\"\"",
+      "from pynecore.lib import script, ta",
+      "from pynecore.types import Series",
+      "",
+      "",
+      "@script.library(\"${1:MyLibrary}\", overlay=${2|False,True|})",
+      "def main():",
+      "    def ${3:my_function}(source: Series[float], length: int) -> Series[float]:",
+      "        \"\"\"${4:Short description}\"\"\"",
+      "        return ${5:ta.sma(source, length)}",
+      "    $0"
+    ]
+  },
+  "Pyne input group": {
+    "prefix": "inputgroup",
+    "description": "Grouped input block in the main() signature",
+    "body": [
+      "enabled=input.bool(True, \"Enabled\", group=\"${1:Settings}\"),",
+      "length=input.int(${2:14}, \"Length\", minval=1, group=\"${1}\"),",
+      "mult=input.float(${3:2.0}, \"Multiplier\", minval=0.1, step=0.1, group=\"${1}\"),",
+      "ma_type=input.string(\"SMA\", \"MA Type\", options=(\"SMA\", \"EMA\", \"RMA\", \"WMA\"), group=\"${1}\"),",
+      "$0"
+    ]
+  },
+  "Pyne moving average crossover": {
+    "prefix": "macross",
+    "description": "Fast/slow MA crossover with cross signals",
+    "body": [
+      "fast_len = ${1:9}",
+      "slow_len = ${2:21}",
+      "",
+      "fast: Series[float] = ta.${3|sma,ema,wma,rma|}(close, fast_len)",
+      "slow: Series[float] = ta.${3}(close, slow_len)",
+      "",
+      "bull_cross = ta.crossover(fast, slow)",
+      "bear_cross = ta.crossunder(fast, slow)",
+      "",
+      "plot(fast, \"Fast\", color=color.blue)",
+      "plot(slow, \"Slow\", color=color.orange)",
+      "$0"
+    ]
+  },
+  "Pyne RSI with bands": {
+    "prefix": "rsi",
+    "description": "RSI with overbought/oversold bands and fill",
+    "body": [
+      "rsi_value: Series[float] = ta.rsi(close, ${1:14})",
+      "",
+      "plot(rsi_value, \"RSI\", color=color.purple)",
+      "ob_band = hline(${2:70}, \"Overbought\", color=color.gray, linestyle=hline.style_dashed)",
+      "os_band = hline(${3:30}, \"Oversold\", color=color.gray, linestyle=hline.style_dashed)",
+      "fill(ob_band, os_band, color=color.new(color.purple, 95), title=\"Background\")",
+      "$0"
+    ]
+  },
+  "Pyne Bollinger Bands": {
+    "prefix": "bb",
+    "description": "Bollinger Bands with fill",
+    "body": [
+      "length = ${1:20}",
+      "mult = ${2:2.0}",
+      "src: Series[float] = ${3:close}",
+      "",
+      "basis: Series[float] = ta.sma(src, length)",
+      "dev = mult * ta.stdev(src, length)",
+      "upper = basis + dev",
+      "lower = basis - dev",
+      "",
+      "plot(basis, \"Basis\", color=color.orange)",
+      "p1 = plot(upper, \"Upper\", color=color.blue)",
+      "p2 = plot(lower, \"Lower\", color=color.blue)",
+      "fill(p1, p2, color=color.new(color.blue, 95), title=\"Background\")",
+      "$0"
+    ]
+  },
+  "Pyne MACD": {
+    "prefix": "macd",
+    "description": "MACD line, signal line and histogram",
+    "body": [
+      "macd_line, signal_line, hist_line = ta.macd(close, ${1:12}, ${2:26}, ${3:9})",
+      "",
+      "plot(macd_line, \"MACD\", color=color.blue)",
+      "plot(signal_line, \"Signal\", color=color.orange)",
+      "plot(hist_line, \"Histogram\",",
+      "     color=color.green if hist_line >= 0 else color.red,",
+      "     style=plot.style_histogram)",
+      "$0"
+    ]
+  },
+  "Pyne ATR trailing stop": {
+    "prefix": "atrstop",
+    "description": "ATR-based trailing stop level",
+    "body": [
+      "atr_value: Series[float] = ta.atr(${1:14})",
+      "atr_mult = ${2:3.0}",
+      "",
+      "long_stop = close - atr_mult * atr_value",
+      "short_stop = close + atr_mult * atr_value",
+      "",
+      "plot(long_stop, \"Long Stop\", color=color.green)",
+      "plot(short_stop, \"Short Stop\", color=color.red)",
+      "$0"
+    ]
+  },
+  "Pyne conditional color plot": {
+    "prefix": "plotcond",
+    "description": "Plot whose color follows a condition",
+    "body": [
+      "value: Series[float] = ${1:ta.ema(close, 20)}",
+      "is_bull = ${2:close > value}",
+      "",
+      "plot(value, \"${3:Trend}\", color=color.green if is_bull else color.red, linewidth=2)",
+      "bgcolor(color.new(color.green, 92) if is_bull else color.new(color.red, 92), title=\"Trend Background\")",
+      "$0"
+    ]
+  },
+  "Pyne signal markers": {
+    "prefix": "plotshape",
+    "description": "Buy/sell shape markers on the chart",
+    "body": [
+      "buy_signal = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "sell_signal = ${2:ta.crossunder(close, ta.sma(close, 20))}",
+      "",
+      "plotshape(buy_signal, \"Buy\", shape.triangleup, location.belowbar, color.green, size=size.tiny)",
+      "plotshape(sell_signal, \"Sell\", shape.triangledown, location.abovebar, color.red, size=size.tiny)",
+      "$0"
+    ]
+  },
+  "Pyne alert condition": {
+    "prefix": "alertcond",
+    "description": "alertcondition plus runtime alert() call",
+    "body": [
+      "triggered = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "",
+      "alertcondition(triggered, title=\"${2:Cross Up}\", message=\"${3:Price crossed above the MA}\")",
+      "",
+      "if triggered:",
+      "    alert(\"${3}\", alert.freq_once_per_bar_close)",
+      "$0"
+    ]
+  },
+  "Pyne higher timeframe request": {
+    "prefix": "htf",
+    "description": "Non-repainting higher timeframe value via request.security",
+    "body": [
+      "htf_close: Series[float] = request.security(syminfo.tickerid, \"${1:60}\", close[1],",
+      "                                            gaps=barmerge.gaps_off,",
+      "                                            lookahead=barmerge.lookahead_on)",
+      "",
+      "plot(htf_close, \"HTF Close\", color=color.blue, style=plot.style_stepline)",
+      "$0"
+    ]
+  },
+  "Pyne last bar label": {
+    "prefix": "lastlabel",
+    "description": "Single label kept on the last bar",
+    "body": [
+      "info_label: Persistent[Label] = na",
+      "",
+      "if barstate.islast:",
+      "    label.delete(info_label)",
+      "    info_label = label.new(bar_index, ${1:close},",
+      "                           text=string.tostring(${1}, \"#.##\"),",
+      "                           style=label.style_label_left,",
+      "                           color=color.blue, textcolor=color.white)",
+      "$0"
+    ]
+  },
+  "Pyne entry with stop loss and take profit": {
+    "prefix": "entryexit",
+    "description": "Long entry with ATR stop loss and R-multiple take profit",
+    "body": [
+      "atr_mult = ${1:2.0}",
+      "rr = ${2:2.0}",
+      "",
+      "long_condition = ${3:ta.crossover(close, ta.sma(close, 50))}",
+      "",
+      "if long_condition and strategy.position_size == 0:",
+      "    stop_price = close - atr_mult * ta.atr(14)",
+      "    limit_price = close + rr * (close - stop_price)",
+      "    strategy.entry(\"Long\", strategy.long)",
+      "    strategy.exit(\"Exit Long\", from_entry=\"Long\", stop=stop_price, limit=limit_price)",
+      "$0"
+    ]
+  },
+  "Pyne persistent counter": {
+    "prefix": "varcount",
+    "description": "Persistent counter that survives across bars (Pine 'var')",
+    "body": [
+      "${1:count}: Persistent[int] = 0",
+      "",
+      "if ${2:close > open}:",
+      "    ${1} += 1",
+      "else:",
+      "    ${1} = 0",
+      "",
+      "plot(${1}, \"${1/(.*)/${1:/pascalcase}/}\", color=color.blue)",
+      "$0"
+    ]
+  },
+  "Pyne series history access": {
+    "prefix": "series",
+    "description": "Series variable with previous-bar history access",
+    "body": [
+      "${1:value}: Series[float] = ${2:close}",
+      "",
+      "prev = nz(${1}[1])",
+      "changed = ${1} - prev",
+      "",
+      "plot(changed, \"${1/(.*)/${1:/pascalcase}/} Change\", color=color.blue)",
+      "$0"
+    ]
+  },
+  "Pyne bars since / value when": {
+    "prefix": "barssince",
+    "description": "Bars elapsed since a condition and the value captured at it",
+    "body": [
+      "condition = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "",
+      "bars_elapsed = ta.barssince(condition)",
+      "price_at_signal = ta.valuewhen(condition, close, 0)",
+      "",
+      "plot(bars_elapsed, \"Bars Since\", color=color.gray)",
+      "plot(price_at_signal, \"Price At Signal\", color=color.blue)",
+      "$0"
+    ]
+  },
+  "Pyne stats table": {
+    "prefix": "table",
+    "description": "Info table drawn on the last bar",
+    "body": [
+      "info_table: Persistent[Table] = table.new(position.top_right, ${1:2}, ${2:2},",
+      "                                          bgcolor=color.new(color.gray, 80),",
+      "                                          frame_color=color.gray, frame_width=1)",
+      "",
+      "if barstate.islast:",
+      "    table.cell(info_table, 0, 0, \"${3:Label}\", text_color=color.white, text_size=size.small)",
+      "    table.cell(info_table, 1, 0, string.tostring(${4:close}, \"#.##\"),",
+      "               text_color=color.white, text_size=size.small)",
+      "$0"
+    ]
+  }
+}

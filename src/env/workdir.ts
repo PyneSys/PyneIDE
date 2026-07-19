@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -373,6 +374,71 @@ export function hideGeneratedFiles(projectDir: string): boolean {
   settings['files.exclude'] = exclude;
   fs.mkdirSync(vscodeDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  return true;
+}
+
+/** Generated workspace snippet file, relative to a project's `.vscode`. */
+const SNIPPETS_FILE = 'pyne.code-snippets';
+
+/**
+ * Marker identifying a snippet file we generated. It carries a hash of the
+ * source snippets, so a shipped snippet change regenerates the file without a
+ * version constant anyone has to remember to bump.
+ */
+const SNIPPETS_MARKER = /pyneide-snippets:\s*([0-9a-f]+)/;
+
+/**
+ * Install the Pyne snippets as *workspace* snippets in
+ * `<projectDir>/.vscode/pyne.code-snippets`.
+ *
+ * Pyne scripts are plain `.py`, so `contributes.snippets` would scope them to
+ * language `python` — i.e. every Python file the user ever opens, Pyne project
+ * or not. Their prefixes deliberately mirror the Pine ones (`rsi`, `bb`,
+ * `table`, ...), which are ordinary words, so that leak would be noisy.
+ * Workspace snippets scope by folder instead, and unlike a
+ * `CompletionItemProvider` they stay a first-class snippet source, so the
+ * "Insert Snippet" palette keeps listing them.
+ *
+ * A file without our marker is user-authored and never touched. Returns true
+ * when the file was written or refreshed.
+ */
+export function ensurePyneSnippets(projectDir: string, extensionPath: string): boolean {
+  const sourcePath = path.join(extensionPath, 'snippets', 'pyne.json');
+  let source: string;
+  let snippets: Record<string, Record<string, unknown>>;
+  try {
+    source = fs.readFileSync(sourcePath, 'utf8');
+    snippets = JSON.parse(source) as Record<string, Record<string, unknown>>;
+  } catch {
+    return false;
+  }
+
+  const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+  const vscodeDir = path.join(projectDir, '.vscode');
+  const targetPath = path.join(vscodeDir, SNIPPETS_FILE);
+  if (fs.existsSync(targetPath)) {
+    let existing: string;
+    try {
+      existing = fs.readFileSync(targetPath, 'utf8');
+    } catch {
+      return false;
+    }
+    const marker = SNIPPETS_MARKER.exec(existing);
+    if (!marker || marker[1] === fingerprint) return false;
+  }
+
+  // `scope` is what confines each snippet to Python inside this workspace;
+  // without it a .code-snippets entry applies to every language.
+  const scoped: Record<string, unknown> = {};
+  for (const [name, snippet] of Object.entries(snippets)) {
+    scoped[name] = { ...snippet, scope: 'python' };
+  }
+  const header =
+    '// PyneIDE generated — Pyne snippets, scoped to this workspace.\n' +
+    '// Delete the marker line below to take ownership; it is then never rewritten.\n' +
+    `// pyneide-snippets: ${fingerprint}\n`;
+  fs.mkdirSync(vscodeDir, { recursive: true });
+  fs.writeFileSync(targetPath, header + JSON.stringify(scoped, null, 2) + '\n');
   return true;
 }
 

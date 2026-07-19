@@ -1,0 +1,294 @@
+{
+  "Indicator skeleton": {
+    "prefix": "indicator",
+    "description": "Indicator script skeleton",
+    "body": [
+      "//@version=6",
+      "indicator(\"${1:My Indicator}\", shorttitle=\"${2:MI}\", overlay=${3|true,false|})",
+      "",
+      "length = input.int(${4:14}, \"Length\", minval=1)",
+      "src = input.source(close, \"Source\")",
+      "",
+      "value = ${5:ta.sma(src, length)}",
+      "",
+      "plot(value, \"${1/(.*)/${1:/pascalcase}/}\", color=color.blue)",
+      "$0"
+    ]
+  },
+
+  "Strategy skeleton": {
+    "prefix": "strategy",
+    "description": "Strategy script skeleton",
+    "body": [
+      "//@version=6",
+      "strategy(\"${1:My Strategy}\", shorttitle=\"${2:MS}\", overlay=${3|true,false|},",
+      "     default_qty_type=strategy.percent_of_equity, default_qty_value=${4:100})",
+      "",
+      "length = input.int(${5:14}, \"Length\", minval=1)",
+      "",
+      "longCondition = ${6:ta.crossover(close, ta.sma(close, length))}",
+      "shortCondition = ${7:ta.crossunder(close, ta.sma(close, length))}",
+      "",
+      "if longCondition",
+      "    strategy.entry(\"Long\", strategy.long)",
+      "",
+      "if shortCondition",
+      "    strategy.entry(\"Short\", strategy.short)",
+      "$0"
+    ]
+  },
+
+  "Library skeleton": {
+    "prefix": "library",
+    "description": "Library script skeleton with an exported function",
+    "body": [
+      "//@version=6",
+      "library(\"${1:MyLibrary}\", overlay=${2|false,true|})",
+      "",
+      "// @function ${3:Short description}",
+      "// @param source Series to process",
+      "// @param length Lookback length",
+      "// @returns The computed series",
+      "export ${4:myFunction}(series float source, simple int length) =>",
+      "    ${5:ta.sma(source, length)}",
+      "$0"
+    ]
+  },
+
+  "Input group": {
+    "prefix": "inputgroup",
+    "description": "Grouped input block",
+    "body": [
+      "grp = \"${1:Settings}\"",
+      "enabled  = input.bool(true, \"Enabled\", group=grp)",
+      "length   = input.int(${2:14}, \"Length\", minval=1, group=grp)",
+      "mult     = input.float(${3:2.0}, \"Multiplier\", minval=0.1, step=0.1, group=grp)",
+      "maType   = input.string(\"SMA\", \"MA Type\", options=[\"SMA\", \"EMA\", \"RMA\", \"WMA\"], group=grp)",
+      "$0"
+    ]
+  },
+
+  "Moving average crossover": {
+    "prefix": "macross",
+    "description": "Fast/slow MA crossover with cross signals",
+    "body": [
+      "fastLen = input.int(${1:9}, \"Fast Length\", minval=1)",
+      "slowLen = input.int(${2:21}, \"Slow Length\", minval=1)",
+      "",
+      "fast = ta.${3|sma,ema,wma,rma|}(close, fastLen)",
+      "slow = ta.${3}(close, slowLen)",
+      "",
+      "bullCross = ta.crossover(fast, slow)",
+      "bearCross = ta.crossunder(fast, slow)",
+      "",
+      "plot(fast, \"Fast\", color=color.blue)",
+      "plot(slow, \"Slow\", color=color.orange)",
+      "$0"
+    ]
+  },
+
+  "RSI with bands": {
+    "prefix": "rsi",
+    "description": "RSI with overbought/oversold bands and fill",
+    "body": [
+      "length = input.int(${1:14}, \"RSI Length\", minval=1)",
+      "obLevel = input.int(${2:70}, \"Overbought\")",
+      "osLevel = input.int(${3:30}, \"Oversold\")",
+      "",
+      "rsiValue = ta.rsi(close, length)",
+      "",
+      "plot(rsiValue, \"RSI\", color=color.purple)",
+      "obBand = hline(obLevel, \"Overbought\", color=color.gray, linestyle=hline.style_dashed)",
+      "osBand = hline(osLevel, \"Oversold\", color=color.gray, linestyle=hline.style_dashed)",
+      "fill(obBand, osBand, color=color.new(color.purple, 95), title=\"Background\")",
+      "$0"
+    ]
+  },
+
+  "Bollinger Bands": {
+    "prefix": "bb",
+    "description": "Bollinger Bands with fill",
+    "body": [
+      "length = input.int(${1:20}, \"Length\", minval=1)",
+      "mult = input.float(${2:2.0}, \"StdDev\", minval=0.001, maxval=50)",
+      "src = input.source(close, \"Source\")",
+      "",
+      "basis = ta.sma(src, length)",
+      "dev = mult * ta.stdev(src, length)",
+      "upper = basis + dev",
+      "lower = basis - dev",
+      "",
+      "plot(basis, \"Basis\", color=color.orange)",
+      "p1 = plot(upper, \"Upper\", color=color.blue)",
+      "p2 = plot(lower, \"Lower\", color=color.blue)",
+      "fill(p1, p2, color=color.new(color.blue, 95), title=\"Background\")",
+      "$0"
+    ]
+  },
+
+  "MACD": {
+    "prefix": "macd",
+    "description": "MACD line, signal line and histogram",
+    "body": [
+      "fastLen = input.int(${1:12}, \"Fast Length\")",
+      "slowLen = input.int(${2:26}, \"Slow Length\")",
+      "sigLen = input.int(${3:9}, \"Signal Smoothing\")",
+      "",
+      "[macdLine, signalLine, histLine] = ta.macd(close, fastLen, slowLen, sigLen)",
+      "",
+      "plot(macdLine, \"MACD\", color=color.blue)",
+      "plot(signalLine, \"Signal\", color=color.orange)",
+      "plot(histLine, \"Histogram\", color=histLine >= 0 ? color.green : color.red, style=plot.style_histogram)",
+      "$0"
+    ]
+  },
+
+  "ATR trailing stop": {
+    "prefix": "atrstop",
+    "description": "ATR-based trailing stop level",
+    "body": [
+      "atrLen = input.int(${1:14}, \"ATR Length\", minval=1)",
+      "atrMult = input.float(${2:3.0}, \"ATR Multiplier\", minval=0.1, step=0.1)",
+      "",
+      "atrValue = ta.atr(atrLen)",
+      "longStop = close - atrMult * atrValue",
+      "shortStop = close + atrMult * atrValue",
+      "",
+      "plot(longStop, \"Long Stop\", color=color.green)",
+      "plot(shortStop, \"Short Stop\", color=color.red)",
+      "$0"
+    ]
+  },
+
+  "Conditional color plot": {
+    "prefix": "plotcond",
+    "description": "Plot whose color follows a condition",
+    "body": [
+      "value = ${1:ta.ema(close, 20)}",
+      "isBull = ${2:close > value}",
+      "",
+      "plot(value, \"${3:Trend}\", color=isBull ? color.green : color.red, linewidth=2)",
+      "bgcolor(isBull ? color.new(color.green, 92) : color.new(color.red, 92), title=\"Trend Background\")",
+      "$0"
+    ]
+  },
+
+  "Signal markers": {
+    "prefix": "plotshape",
+    "description": "Buy/sell shape markers on the chart",
+    "body": [
+      "buySignal = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "sellSignal = ${2:ta.crossunder(close, ta.sma(close, 20))}",
+      "",
+      "plotshape(buySignal, \"Buy\", shape.triangleup, location.belowbar, color.green, size=size.tiny)",
+      "plotshape(sellSignal, \"Sell\", shape.triangledown, location.abovebar, color.red, size=size.tiny)",
+      "$0"
+    ]
+  },
+
+  "Alert condition": {
+    "prefix": "alertcond",
+    "description": "alertcondition plus runtime alert() call",
+    "body": [
+      "triggered = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "",
+      "alertcondition(triggered, title=\"${2:Cross Up}\", message=\"${3:Price crossed above the MA}\")",
+      "",
+      "if triggered",
+      "    alert(\"${3}\", alert.freq_once_per_bar_close)",
+      "$0"
+    ]
+  },
+
+  "Higher timeframe request": {
+    "prefix": "htf",
+    "description": "Non-repainting higher timeframe value via request.security",
+    "body": [
+      "htf = input.string(\"${1:60}\", \"Higher Timeframe\")",
+      "",
+      "htfClose = request.security(syminfo.tickerid, htf, close[1],",
+      "     gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)",
+      "",
+      "plot(htfClose, \"HTF Close\", color=color.blue, style=plot.style_stepline)",
+      "$0"
+    ]
+  },
+
+  "Last bar label": {
+    "prefix": "lastlabel",
+    "description": "Single label kept on the last bar",
+    "body": [
+      "var label infoLabel = na",
+      "",
+      "if barstate.islast",
+      "    label.delete(infoLabel)",
+      "    infoLabel := label.new(bar_index, ${1:close},",
+      "         text=str.tostring(${1}, \"#.##\"),",
+      "         style=label.style_label_left, color=color.blue, textcolor=color.white)",
+      "$0"
+    ]
+  },
+
+  "Entry with stop loss and take profit": {
+    "prefix": "entryexit",
+    "description": "Long entry with ATR stop loss and R-multiple take profit",
+    "body": [
+      "atrMult = input.float(${1:2.0}, \"Stop ATR Multiplier\", minval=0.1, step=0.1)",
+      "rr = input.float(${2:2.0}, \"Reward/Risk\", minval=0.1, step=0.1)",
+      "",
+      "longCondition = ${3:ta.crossover(close, ta.sma(close, 50))}",
+      "",
+      "if longCondition and strategy.position_size == 0",
+      "    stopPrice = close - atrMult * ta.atr(14)",
+      "    limitPrice = close + rr * (close - stopPrice)",
+      "    strategy.entry(\"Long\", strategy.long)",
+      "    strategy.exit(\"Exit Long\", from_entry=\"Long\", stop=stopPrice, limit=limitPrice)",
+      "$0"
+    ]
+  },
+
+  "Persistent counter": {
+    "prefix": "varcount",
+    "description": "var counter that survives across bars",
+    "body": [
+      "var int ${1:count} = 0",
+      "",
+      "if ${2:close > open}",
+      "    ${1} += 1",
+      "else",
+      "    ${1} := 0",
+      "",
+      "plot(${1}, \"${1/(.*)/${1:/pascalcase}/}\", color=color.blue)",
+      "$0"
+    ]
+  },
+
+  "Bars since / value when": {
+    "prefix": "barssince",
+    "description": "Bars elapsed since a condition and the value captured at it",
+    "body": [
+      "condition = ${1:ta.crossover(close, ta.sma(close, 20))}",
+      "",
+      "barsElapsed = ta.barssince(condition)",
+      "priceAtSignal = ta.valuewhen(condition, close, 0)",
+      "",
+      "plot(barsElapsed, \"Bars Since\", color=color.gray)",
+      "plot(priceAtSignal, \"Price At Signal\", color=color.blue)",
+      "$0"
+    ]
+  },
+
+  "Stats table": {
+    "prefix": "table",
+    "description": "Info table drawn on the last bar",
+    "body": [
+      "var table infoTable = table.new(position.top_right, ${1:2}, ${2:2},",
+      "     bgcolor=color.new(color.gray, 80), frame_color=color.gray, frame_width=1)",
+      "",
+      "if barstate.islast",
+      "    table.cell(infoTable, 0, 0, \"${3:Label}\", text_color=color.white, text_size=size.small)",
+      "    table.cell(infoTable, 1, 0, str.tostring(${4:close}, \"#.##\"), text_color=color.white, text_size=size.small)",
+      "$0"
+    ]
+  }
+}

@@ -13,6 +13,7 @@ import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
 import {
+  ensurePyneSnippets,
   ensurePyrightConfig,
   hideGeneratedFiles,
   markProjectAsWorkdir,
@@ -99,7 +100,10 @@ export function activate(context: vscode.ExtensionContext): void {
   if (workdir?.exists) {
     ensurePyrightConfig(workdir.path);
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
-    if (wsFolder) hideGeneratedFiles(wsFolder.uri.fsPath);
+    if (wsFolder) {
+      hideGeneratedFiles(wsFolder.uri.fsPath);
+      ensurePyneSnippets(wsFolder.uri.fsPath, context.extensionPath);
+    }
     void takeOverPythonAnalysis();
   }
 
@@ -286,6 +290,7 @@ async function initProjectCommand(
       }
       hideGeneratedFiles(folder.uri.fsPath);
       recommendTomlExtension(folder.uri.fsPath);
+      ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       updateTerminalWorkdirEnv(context);
       void takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
@@ -323,6 +328,7 @@ async function initProjectCommand(
     }
     hideGeneratedFiles(baseDir);
     recommendTomlExtension(baseDir);
+    ensurePyneSnippets(baseDir, context.extensionPath);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {
     void vscode.window.showErrorMessage(
