@@ -97,6 +97,13 @@ export async function ensureUv(
 export function uvEnv(storageDir: string, proxyUrl?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     UV_PYTHON_INSTALL_DIR: path.join(storageDir, 'python'),
+    // Without this uv prefers a system interpreter (e.g. Homebrew framework
+    // Python) over its own standalone build, so the env depends on whatever
+    // Python the machine happens to have.
+    UV_MANAGED_PYTHON: '1',
+    // uv's default clone (APFS reflink) link mode has produced venvs with
+    // missing site-packages on macOS (astral-sh/uv#15084).
+    UV_LINK_MODE: 'copy',
     UV_NO_MODIFY_PATH: '1',
   };
   if (proxyUrl) {

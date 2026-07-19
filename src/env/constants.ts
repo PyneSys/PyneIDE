@@ -12,7 +12,7 @@ export const DEBUGPY_VERSION = '1.8.21';
 export const PYNECORE_MIN_VERSION = '6.5.7';
 
 /** Bump when the managed environment layout or pins change. */
-export const ENV_SCHEMA_VERSION = 1;
+export const ENV_SCHEMA_VERSION = 2;
 
 export interface UvArtifact {
   name: string;

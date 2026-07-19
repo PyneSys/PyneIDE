@@ -43,7 +43,7 @@ export interface BootstrapOptions {
 }
 
 const VERIFY_SCRIPT = [
-  'import json, os, platform',
+  'import json, os, platform, sys',
   'from importlib import metadata',
   'def ver(name):',
   '    try:',
@@ -57,13 +57,52 @@ const VERIFY_SCRIPT = [
   '        return None',
   '    f = getattr(pynecore, "__file__", None)',
   '    return os.path.dirname(os.path.dirname(f)) if f else None',
+  'def pyvenv_cfg():',
+  '    p = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), "pyvenv.cfg")',
+  '    try:',
+  '        with open(p, encoding="utf-8") as f:',
+  '            return f.read()',
+  '    except OSError:',
+  '        return None',
   'print(json.dumps({',
   '    "python": platform.python_version(),',
   '    "pynecore": ver("pynesys-pynecore"),',
   '    "debugpy": ver("debugpy"),',
   '    "pynecoreRoot": pynecore_root(),',
+  '    "prefix": sys.prefix,',
+  '    "basePrefix": sys.base_prefix,',
+  '    "executable": sys.executable,',
+  '    "path": sys.path,',
+  '    "pyvenvCfg": pyvenv_cfg(),',
   '}))',
 ].join('\n');
+
+interface VerifyInfo {
+  python: string;
+  pynecore: string | null;
+  debugpy: string | null;
+  pynecoreRoot: string | null;
+  prefix: string;
+  basePrefix: string;
+  executable: string;
+  path: string[];
+  pyvenvCfg: string | null;
+}
+
+/** Dump interpreter state so a missing-package failure is diagnosable from logs. */
+function logInterpreterDiag(info: VerifyInfo, log: Logger): void {
+  log(`  sys.executable = ${info.executable}`);
+  log(`  sys.prefix = ${info.prefix}`);
+  log(`  sys.base_prefix = ${info.basePrefix}`);
+  log(`  sys.path = ${JSON.stringify(info.path)}`);
+  if (info.pyvenvCfg) {
+    for (const line of info.pyvenvCfg.split('\n')) {
+      if (line.trim()) log(`  pyvenv.cfg: ${line}`);
+    }
+  } else {
+    log('  pyvenv.cfg: not found next to the interpreter');
+  }
+}
 
 function markerPath(storageDir: string): string {
   return path.join(storageDir, 'env.json');
@@ -121,17 +160,14 @@ export async function verifyPython(pythonBin: string, log: Logger): Promise<Veri
     if (result.code !== 0) {
       return { ok: false, error: result.stderr.trim() || `exit code ${result.code}` };
     }
-    const info = JSON.parse(result.stdout.trim()) as {
-      python: string;
-      pynecore: string | null;
-      debugpy: string | null;
-      pynecoreRoot: string | null;
-    };
+    const info = JSON.parse(result.stdout.trim()) as VerifyInfo;
     const pynecoreRoot = info.pynecoreRoot ?? undefined;
     if (!info.pynecore) {
+      logInterpreterDiag(info, log);
       return { ok: false, pythonVersion: info.python, error: 'pynesys-pynecore is not installed' };
     }
     if (!info.debugpy) {
+      logInterpreterDiag(info, log);
       return {
         ok: false,
         pythonVersion: info.python,
@@ -175,8 +211,16 @@ export async function bootstrapManagedEnv(
   const venvDir = managedVenvDir(storageDir);
   const pythonBin = venvPythonPath(venvDir);
 
-  if (recreate) {
-    log(`Removing existing venv at ${venvDir}`);
+  // A schema bump means the env layout changed (not just package pins), so the
+  // venv itself must be rebuilt, not merely reinstalled into.
+  const marker = readMarker(storageDir);
+  const staleLayout = marker !== undefined && marker.schema !== ENV_SCHEMA_VERSION;
+  if (recreate || staleLayout) {
+    log(
+      recreate
+        ? `Removing existing venv at ${venvDir}`
+        : `Env schema changed (${marker?.schema} -> ${ENV_SCHEMA_VERSION}), rebuilding venv at ${venvDir}`
+    );
     fs.rmSync(venvDir, { recursive: true, force: true });
     fs.rmSync(markerPath(storageDir), { force: true });
   }
@@ -211,6 +255,10 @@ export async function bootstrapManagedEnv(
   });
 
   const verify = await verifyPython(pythonBin, log);
+  if (!verify.ok && !recreate) {
+    log(`Verification failed (${verify.error}); recreating the environment once`);
+    return bootstrapManagedEnv({ ...options, recreate: true });
+  }
   if (verify.ok) {
     fs.writeFileSync(markerPath(storageDir), JSON.stringify(currentMarker(), null, 2));
     log(
