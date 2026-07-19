@@ -15,6 +15,12 @@ const PYNE_HEAD_RE =
 const PYNE_EDGE_RE =
   /^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')\s*@pyne[^\S\r\n]+edge(?:\s|\1|$)/;
 
+// PYNE_EDGE_RE with the removable token split out: group 1 is everything up
+// to and including `@pyne`, group 3 is the whitespace + `edge` sequence whose
+// deletion turns an Edge script back into a plain Pyne script.
+const PYNE_EDGE_TOKEN_RE =
+  /^((?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*("""|'''|"|')\s*@pyne)([^\S\r\n]+edge)(?=\s|\2|$)/;
+
 export type PyneKind = 'pyne' | 'edge';
 
 /**
@@ -26,6 +32,20 @@ export function detectPyne(head: string): PyneKind | undefined {
     return undefined;
   }
   return PYNE_EDGE_RE.test(head) ? 'edge' : 'pyne';
+}
+
+/**
+ * Locate the removable ` edge` token (leading whitespace included) in a
+ * source head, as character offsets. Deleting exactly this range converts an
+ * Edge marker into a plain `@pyne` one.
+ */
+export function findEdgeToken(head: string): { start: number; end: number } | undefined {
+  const match = PYNE_EDGE_TOKEN_RE.exec(head);
+  if (!match) {
+    return undefined;
+  }
+  const start = match[1].length;
+  return { start, end: start + match[3].length };
 }
 
 /** How many bytes of a file are enough for detection. */

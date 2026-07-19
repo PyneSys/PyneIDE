@@ -24,6 +24,7 @@ import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { RunService } from './run/runService';
+import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
 import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
@@ -128,6 +129,8 @@ export function activate(context: vscode.ExtensionContext): void {
   pyright.register();
   const pyneChecker = new PyneCheckerService(context, seriesAnalyzer, pyrightOutput);
   pyneChecker.register();
+  // "Convert to full @pyne" quick fix on Edge-profile violations.
+  new EdgeQuickFixProvider().register(context);
   // Declared-type hovers when Pylance (or another pyright) supersedes the
   // bundled server — there is no LSP middleware to rewrite through then.
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
