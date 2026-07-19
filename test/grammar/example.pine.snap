@@ -1,5 +1,8 @@
 >//@version=6
-#^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#          ^ source.pine comment.line.documentation.pine keyword.operator.assignment.pine
+#           ^ source.pine comment.line.documentation.pine constant.numeric.integer.pine
 >indicator("Pine Script Syntax Test", overlay=true)
 #^^^^^^^^^ source.pine entity.name.function.pine
 #         ^ source.pine

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Pyne docstring head",
+  "scopeName": "pyne.injection",
+  "injectionSelector": "L:source.python string.quoted.docstring",
+  "patterns": [{ "include": "#pyne-head" }],
+  "repository": {
+    "pyne-head": {
+      "patterns": [
+        {
+          "comment": "`@pyne` on the same line as the opening quotes: \"\"\"@pyne",
+          "match": "(?<=\"\"\"|'''|\"|')[ \\t]*(@pyne)(?:[ \\t]+(edge))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.annotation.pyne" },
+            "2": { "name": "constant.language.edge.pyne" }
+          }
+        },
+        {
+          "comment": "`@pyne` as the first thing on its own docstring line",
+          "match": "^[ \\t]*(@pyne)(?:[ \\t]+(edge))?\\b",
+          "captures": {
+            "1": { "name": "keyword.other.annotation.pyne" },
+            "2": { "name": "constant.language.edge.pyne" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,177 @@
+>//@version=6
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#          ^ source.pine comment.line.documentation.pine keyword.operator.assignment.pine
+#           ^ source.pine comment.line.documentation.pine constant.numeric.integer.pine
+>
+>//@description Library of helper utilities.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>library("annotations", overlay = true)
+#^^^^^^^ source.pine entity.name.function.pine
+#       ^ source.pine
+#        ^ source.pine string.quoted.double.pine
+#         ^^^^^^^^^^^ source.pine string.quoted.double.pine
+#                    ^ source.pine string.quoted.double.pine
+#                     ^^ source.pine
+#                       ^^^^^^^ source.pine variable.other.pine
+#                              ^ source.pine
+#                               ^ source.pine keyword.operator.assignment.pine
+#                                ^ source.pine
+#                                 ^^^^ source.pine constant.language.boolean.pine
+#                                     ^^ source.pine
+>
+>//#region math helpers
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^ source.pine comment.line.documentation.pine keyword.control.region.pine
+#         ^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>
+>//@function Computes a weighted average of two values.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@param a First value.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^ source.pine comment.line.documentation.pine variable.parameter.pine
+#          ^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@param b Second value.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^ source.pine comment.line.documentation.pine variable.parameter.pine
+#          ^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@returns The weighted average.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#          ^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>export wavg(float a, float b) =>
+#^^^^^^ source.pine keyword.declaration.pine
+#      ^ source.pine
+#       ^^^^ source.pine entity.name.function.pine
+#           ^ source.pine
+#            ^^^^^ source.pine storage.type.primitive.pine
+#                 ^ source.pine
+#                  ^ source.pine variable.other.pine
+#                   ^^ source.pine
+#                     ^^^^^ source.pine storage.type.primitive.pine
+#                          ^ source.pine
+#                           ^ source.pine variable.other.pine
+#                            ^^ source.pine
+#                              ^^ source.pine keyword.operator.arrow.pine
+>    (a * 2 + b) / 3
+#^^^^^ source.pine
+#     ^ source.pine variable.other.pine
+#      ^ source.pine
+#       ^ source.pine keyword.operator.arithmetic.pine
+#        ^ source.pine
+#         ^ source.pine constant.numeric.integer.pine
+#          ^ source.pine
+#           ^ source.pine keyword.operator.arithmetic.pine
+#            ^ source.pine
+#             ^ source.pine variable.other.pine
+#              ^^ source.pine
+#                ^ source.pine keyword.operator.arithmetic.pine
+#                 ^ source.pine
+#                  ^ source.pine constant.numeric.integer.pine
+>
+>//#endregion
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^^ source.pine comment.line.documentation.pine keyword.control.region.pine
+>
+>//@type Holds a single measurement.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@field value The measured value.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^^^^^ source.pine comment.line.documentation.pine variable.parameter.pine
+#              ^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@field label A human readable label.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^^^^^ source.pine comment.line.documentation.pine variable.parameter.pine
+#              ^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>type Measurement
+#^^^^ source.pine keyword.declaration.pine
+#    ^ source.pine
+#     ^^^^^^^^^^^ source.pine entity.name.type.pine
+>    float value
+#^^^^ source.pine
+#    ^^^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^^^^^ source.pine variable.other.pine
+>    string label
+#^^^^ source.pine
+#    ^^^^^^ source.pine storage.type.primitive.pine
+#          ^ source.pine
+#           ^^^^^ source.pine storage.type.builtin.pine
+>
+>//@enum Directions a trade can take.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@field long Upward direction.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^^^^ source.pine comment.line.documentation.pine variable.parameter.pine
+#             ^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>//@field short Downward direction.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#        ^ source.pine comment.line.documentation.pine
+#         ^^^^^ source.pine comment.line.documentation.pine variable.parameter.pine
+#              ^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>enum Direction
+#^^^^ source.pine keyword.declaration.pine
+#    ^ source.pine
+#     ^^^^^^^^^ source.pine entity.name.type.pine
+>    long
+#^^^^ source.pine
+#    ^^^^ source.pine variable.other.pine
+>    short
+#^^^^ source.pine
+#    ^^^^^ source.pine variable.other.pine
+>
+>//@variable Running total of closes.
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#           ^ source.pine comment.line.documentation.pine
+#            ^^^^^^^ source.pine comment.line.documentation.pine variable.parameter.pine
+#                   ^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>var float total = 0.0
+#^^^ source.pine keyword.declaration.pine
+#   ^ source.pine
+#    ^^^^^ source.pine storage.type.primitive.pine
+#         ^ source.pine
+#          ^^^^^ source.pine variable.other.pine
+#               ^ source.pine
+#                ^ source.pine keyword.operator.assignment.pine
+#                 ^ source.pine
+#                  ^^^ source.pine constant.numeric.float.pine
+>
+>//@strategy_alert_message {{strategy.order.action}} @ {{close}}
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine keyword.other.annotation.pine
+#                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>
+>// plain comment with an @param that must stay plain
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>x = close // trailing comment @returns stays plain
+#^ source.pine variable.other.pine
+# ^ source.pine
+#  ^ source.pine keyword.operator.assignment.pine
+#   ^ source.pine
+#    ^^^^^ source.pine constant.language.pine
+#         ^ source.pine
+#          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.double-slash.pine
+>//@nosuchtag unknown tags stay plain
+#^^ source.pine comment.line.documentation.pine punctuation.definition.comment.pine
+#  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.pine comment.line.documentation.pine
+>

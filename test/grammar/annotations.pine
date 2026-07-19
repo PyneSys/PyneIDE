@@ -1,0 +1,38 @@
+//@version=6
+
+//@description Library of helper utilities.
+library("annotations", overlay = true)
+
+//#region math helpers
+
+//@function Computes a weighted average of two values.
+//@param a First value.
+//@param b Second value.
+//@returns The weighted average.
+export wavg(float a, float b) =>
+    (a * 2 + b) / 3
+
+//#endregion
+
+//@type Holds a single measurement.
+//@field value The measured value.
+//@field label A human readable label.
+type Measurement
+    float value
+    string label
+
+//@enum Directions a trade can take.
+//@field long Upward direction.
+//@field short Downward direction.
+enum Direction
+    long
+    short
+
+//@variable Running total of closes.
+var float total = 0.0
+
+//@strategy_alert_message {{strategy.order.action}} @ {{close}}
+
+// plain comment with an @param that must stay plain
+x = close // trailing comment @returns stays plain
+//@nosuchtag unknown tags stay plain

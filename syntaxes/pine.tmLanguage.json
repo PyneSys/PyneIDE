@@ -8,9 +8,6 @@
       "include": "#comments"
     },
     {
-      "include": "#annotations"
-    },
-    {
       "include": "#script-declarations"
     },
     {
@@ -42,16 +39,44 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.line.documentation.pine",
+          "begin": "^[ \\t]*//(?=[ \\t]*[@#])",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.pine" }
+          },
+          "end": "$",
+          "patterns": [{ "include": "#comment-tags" }]
+        },
+        {
           "name": "comment.line.double-slash.pine",
           "match": "//.*$"
         }
       ]
     },
-    "annotations": {
+    "comment-tags": {
       "patterns": [
         {
-          "name": "comment.block.documentation.pine",
-          "match": "^\\s*//@\\w+.*$"
+          "match": "\\G[ \\t]*(@version)[ \\t]*(=)[ \\t]*([0-9]+)",
+          "captures": {
+            "1": { "name": "keyword.other.annotation.pine" },
+            "2": { "name": "keyword.operator.assignment.pine" },
+            "3": { "name": "constant.numeric.integer.pine" }
+          }
+        },
+        {
+          "match": "\\G[ \\t]*(@(?:param|field|variable))\\b[ \\t]*([A-Za-z_][A-Za-z0-9_]*)?",
+          "captures": {
+            "1": { "name": "keyword.other.annotation.pine" },
+            "2": { "name": "variable.parameter.pine" }
+          }
+        },
+        {
+          "name": "keyword.other.annotation.pine",
+          "match": "\\G[ \\t]*@(?:description|function|returns|type|enum|strategy_alert_message)\\b"
+        },
+        {
+          "name": "keyword.control.region.pine",
+          "match": "\\G[ \\t]*#(?:region|endregion)\\b"
         }
       ]
     },

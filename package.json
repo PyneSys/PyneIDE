@@ -455,6 +455,13 @@
         "language": "toml",
         "scopeName": "source.toml",
         "path": "./syntaxes/toml.tmLanguage.json"
+      },
+      {
+        "scopeName": "pyne.injection",
+        "path": "./syntaxes/pyne.injection.json",
+        "injectTo": [
+          "source.python"
+        ]
       }
     ],
     "snippets": [
@@ -480,8 +487,12 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",
-    "test:grammar": "vscode-tmgrammar-snap test/grammar/*.pine",
-    "test:grammar:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
+    "test:grammar": "npm run test:grammar:pine && npm run test:grammar:pyne",
+    "test:grammar:pine": "vscode-tmgrammar-snap test/grammar/*.pine",
+    "test:grammar:pyne": "vscode-tmgrammar-snap -g test/grammar/vendor/MagicPython.tmLanguage.json -s source.python test/grammar/*.py",
+    "test:grammar:update": "npm run test:grammar:pine:update && npm run test:grammar:pyne:update",
+    "test:grammar:pine:update": "vscode-tmgrammar-snap --updateSnapshot test/grammar/*.pine",
+    "test:grammar:pyne:update": "vscode-tmgrammar-snap --updateSnapshot -g test/grammar/vendor/MagicPython.tmLanguage.json -s source.python test/grammar/*.py",
     "test:env": "node esbuild.mjs --smoke && node dist/env-smoke.js",
     "test:pinels": "node esbuild.mjs --smoke-pinels && node dist/pinels-smoke.js",
     "test:pyright": "node esbuild.mjs --smoke-pyright && node dist/pyright-smoke.js",

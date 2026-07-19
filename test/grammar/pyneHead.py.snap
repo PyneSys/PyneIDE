@@ -1,0 +1,120 @@
+>"""@pyne edge"""
+#^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.begin.python
+#   ^^^^^ source.python string.quoted.docstring.multi.python keyword.other.annotation.pyne
+#        ^ source.python string.quoted.docstring.multi.python
+#         ^^^^ source.python string.quoted.docstring.multi.python constant.language.edge.pyne
+#             ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.end.python
+>
+>from pynecore import lib
+#^^^^ source.python keyword.control.import.python
+#    ^ source.python
+#     ^^^^^^^^ source.python
+#             ^ source.python
+#              ^^^^^^ source.python keyword.control.import.python
+#                    ^ source.python
+#                     ^^^ source.python
+>
+>
+>def own_line():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^ source.python meta.function.python entity.name.function.python
+#            ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#             ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#              ^ source.python meta.function.python punctuation.section.function.begin.python
+>    """
+#^^^^ source.python
+#    ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.begin.python
+>    @pyne
+#^^^^ source.python string.quoted.docstring.multi.python
+#    ^^^^^ source.python string.quoted.docstring.multi.python keyword.other.annotation.pyne
+>    """
+#^^^^ source.python string.quoted.docstring.multi.python
+#    ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.end.python
+>
+>
+>def raw_prefix():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^^^ source.python meta.function.python entity.name.function.python
+#              ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#               ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#                ^ source.python meta.function.python punctuation.section.function.begin.python
+>    r"""@pyne"""
+#^^^^ source.python
+#    ^ source.python string.quoted.docstring.raw.multi.python storage.type.string.python
+#     ^^^ source.python string.quoted.docstring.raw.multi.python punctuation.definition.string.begin.python
+#        ^^^^^ source.python string.quoted.docstring.raw.multi.python keyword.other.annotation.pyne
+#             ^^^ source.python string.quoted.docstring.raw.multi.python punctuation.definition.string.end.python
+>
+>
+>def single_quoted():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^^^^^^ source.python meta.function.python entity.name.function.python
+#                 ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#                  ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#                   ^ source.python meta.function.python punctuation.section.function.begin.python
+>    '@pyne'
+#^^^^ source.python
+#    ^ source.python string.quoted.docstring.single.python punctuation.definition.string.begin.python
+#     ^^^^^ source.python string.quoted.docstring.single.python keyword.other.annotation.pyne
+#          ^ source.python string.quoted.docstring.single.python punctuation.definition.string.end.python
+>
+>
+>def triple_single():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^^^^^^ source.python meta.function.python entity.name.function.python
+#                 ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#                  ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#                   ^ source.python meta.function.python punctuation.section.function.begin.python
+>    '''@pyne edge'''
+#^^^^ source.python
+#    ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.begin.python
+#       ^^^^^ source.python string.quoted.docstring.multi.python keyword.other.annotation.pyne
+#            ^ source.python string.quoted.docstring.multi.python
+#             ^^^^ source.python string.quoted.docstring.multi.python constant.language.edge.pyne
+#                 ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.end.python
+>
+>
+>def not_at_start():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^^^^^ source.python meta.function.python entity.name.function.python
+#                ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#                 ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#                  ^ source.python meta.function.python punctuation.section.function.begin.python
+>    """Docs that merely mention @pyne stay plain."""
+#^^^^ source.python
+#    ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.begin.python
+#       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.python string.quoted.docstring.multi.python
+#                                                 ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.end.python
+>
+>
+>def word_boundary():
+#^^^ source.python meta.function.python storage.type.function.python
+#   ^ source.python meta.function.python
+#    ^^^^^^^^^^^^^ source.python meta.function.python entity.name.function.python
+#                 ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.begin.python
+#                  ^ source.python meta.function.python meta.function.parameters.python punctuation.definition.parameters.end.python
+#                   ^ source.python meta.function.python punctuation.section.function.begin.python
+>    """@pynecore is not the marker."""
+#^^^^ source.python
+#    ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.begin.python
+#       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.python string.quoted.docstring.multi.python
+#                                   ^^^ source.python string.quoted.docstring.multi.python punctuation.definition.string.end.python
+>
+>
+># @pyne in a plain comment stays plain
+#^ source.python comment.line.number-sign.python punctuation.definition.comment.python
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.python comment.line.number-sign.python
+>x = "@pyne in a normal string stays plain"
+#^ source.python
+# ^ source.python
+#  ^ source.python keyword.operator.assignment.python
+#   ^ source.python
+#    ^ source.python string.quoted.single.python punctuation.definition.string.begin.python
+#     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.python string.quoted.single.python
+#                                         ^ source.python string.quoted.single.python punctuation.definition.string.end.python
+>
