@@ -4,7 +4,11 @@ import { DETECT_HEAD_BYTES, detectPyne, type PyneKind } from './pyneDetect';
 
 /**
  * Explorer/tab badge for Pyne scripts: `.py` files whose docstring starts
- * with `@pyne` get a "Py" badge, `@pyne edge` scripts a "PE" badge.
+ * with `@pyne` get an evergreen badge, `@pyne edge` scripts an evergreen + e
+ * one. VSCode allows at most two grapheme clusters in a badge, so the
+ * surrogate-pair emoji plus a single letter is exactly at the limit. No
+ * decoration color: in the Explorer that channel already carries git and
+ * language-server state, and a second meaning for it only confuses.
  */
 export class PyneDecorationProvider implements vscode.FileDecorationProvider {
   private readonly changeEmitter = new vscode.EventEmitter<vscode.Uri | vscode.Uri[]>();
@@ -49,8 +53,8 @@ export class PyneDecorationProvider implements vscode.FileDecorationProvider {
       return undefined;
     }
     return kind === 'edge'
-      ? new vscode.FileDecoration('PE', 'Pyne Edge script', new vscode.ThemeColor('charts.purple'))
-      : new vscode.FileDecoration('Py', 'Pyne script', new vscode.ThemeColor('charts.green'));
+      ? new vscode.FileDecoration('\u{1F332}e', 'Pyne Edge script')
+      : new vscode.FileDecoration('\u{1F332}', 'Pyne script');
   }
 }
 

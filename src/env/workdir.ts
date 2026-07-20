@@ -337,11 +337,12 @@ export function markProjectAsWorkdir(projectDir: string): boolean {
 /**
  * Explorer/search patterns for the generated scaffolding the user should not
  * edit by hand (pyrightconfig.json feeds the type checker, __pycache__ is
- * bytecode noise, .vscode holds machine-written settings). Hidden via
+ * bytecode noise, .vscode holds machine-written settings, .pyne marks the
+ * directory as a PyneCore workdir). Hidden via
  * `files.exclude`, so the files stay in place and keep working — they are just
  * not shown. The settings UI still opens .vscode/settings.json as JSON.
  */
-const HIDDEN_FILE_PATTERNS = ['**/__pycache__', '**/pyrightconfig.json', '.vscode'];
+const HIDDEN_FILE_PATTERNS = ['**/__pycache__', '**/pyrightconfig.json', '.vscode', '.pyne'];
 
 /**
  * Merge the scaffolding-hiding patterns into `files.exclude` of
