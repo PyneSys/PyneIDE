@@ -8,6 +8,7 @@ job (F2) — this module only runs ``.py`` Pyne scripts against ``.ohlcv`` data.
 from __future__ import annotations
 
 import ast
+import math
 import sys
 import time
 from pathlib import Path
@@ -18,6 +19,116 @@ from .protocol import Emitter, num_or_none, sanitize
 
 # Flush the pending bar batch when it reaches this many rows or this age.
 FLUSH_AGE_SECONDS = 0.1
+
+_MISSING = object()
+
+
+def _scrub_nonfinite(obj: Any) -> Any:
+    """Replace non-finite floats with None recursively (the emitter dumps
+    with allow_nan=False; NaN is pynecore's na, None is its wire form)."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _scrub_nonfinite(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_nonfinite(v) for v in obj]
+    return obj
+
+
+class _VizTap:
+    """In-process tap of the viz state pynecore >= 6.6 exposes via ``lib``.
+
+    ``active`` is False when the running pynecore predates the viz layer
+    (released 6.5.x): every hook degrades to a no-op and the protocol keeps
+    its v1 shape. The tap must copy per-bar state inside the run_iter loop —
+    ``run_iter`` clears ``_plot_meta_new``/``_viz_dyn`` after each yield.
+    pynecore's own VizWriter drains the same pending-meta list, but only when
+    a ``viz_path`` is passed to ScriptRunner — the bridge never does, so the
+    tap is the sole drainer.
+    """
+
+    def __init__(self, lib: Any) -> None:
+        self.active = False
+        self.journal = False
+        self._lib = lib
+        self._metas: dict[str, dict[str, Any]] = {}
+        self._colors: list[list[Any]] = []
+        self._last: dict[str, Any] = {}
+        self._shadow: dict[Any, Any] = {}
+        self._draw_events: list[dict[str, Any]] = []
+        try:
+            from pynecore.core import viz
+        except ImportError:
+            return
+        if getattr(lib, "_plot_meta_new", None) is None \
+                or getattr(lib, "_viz_dyn", None) is None \
+                or not hasattr(viz, "serialize_meta") \
+                or not hasattr(viz, "_encode_color_channel"):
+            return
+        self._serialize_meta = viz.serialize_meta
+        self._encode = viz._encode_color_channel
+        self.active = True
+        # Drawing journal (line/label/box/table/polyline/linefill). The
+        # drawing registries — unlike the per-bar plot state — survive the
+        # yield, so the tap diffs them itself with a private shadow dict:
+        # no viz_journal ctor param, no viz_events callback needed.
+        if hasattr(viz, "journal_diff"):
+            self._journal_diff = viz.journal_diff
+            self.journal = True
+
+    def drain_metas(self) -> None:
+        """Copy newly registered plot metas, keyed by id (upsert: a plot
+        turning dynamic re-appends the same meta with ``dynamic=True``)."""
+        pending = self._lib._plot_meta_new
+        if pending:
+            for meta in pending:
+                self._metas[meta.id] = self._serialize_meta(meta)
+            pending.clear()
+
+    def collect_colors(self, time_ms: int) -> None:
+        """Record only-on-change dynamic color deltas for the current bar.
+
+        Must run after the bar's row joined the batch so a flush never emits
+        a color delta before the bar it refers to.
+        """
+        delta: dict[str, Any] = {}
+        for cid, val in self._lib._viz_dyn.items():
+            # Gradient fill channels carry raw floats — scrub like every
+            # other path (the emitter dumps with allow_nan=False).
+            enc = _scrub_nonfinite(self._encode(val))
+            if self._last.get(cid, _MISSING) != enc:
+                self._last[cid] = enc
+                delta[cid] = enc
+        if delta:
+            self._colors.append([time_ms, delta])
+
+    def collect_drawings(self, bar_index: int) -> None:
+        """Diff the live drawing registries against the previous bar.
+
+        Runs after the bar's row joined the batch (like collect_colors), so
+        every event's bar index refers to an already-flushed-or-in-flight
+        bar. The ``t: "ev"`` tag is dropped — the protocol event carries the
+        list under its own key.
+        """
+        events = self._journal_diff(self._shadow, bar_index)
+        for ev in events:
+            ev.pop("t", None)
+            self._draw_events.append(_scrub_nonfinite(ev))
+
+    def emit_metas(self, emitter: Emitter) -> None:
+        if self._metas:
+            emitter.emit({"e": "plotMeta", "metas": list(self._metas.values())})
+            self._metas = {}
+
+    def emit_colors(self, emitter: Emitter) -> None:
+        if self._colors:
+            emitter.emit({"e": "colors", "d": self._colors})
+            self._colors = []
+
+    def emit_drawings(self, emitter: Emitter) -> None:
+        if self._draw_events:
+            emitter.emit({"e": "drawings", "d": self._draw_events})
+            self._draw_events = []
 
 _TRADE_FIELDS = (
     ("entry_id", "entryId"),
@@ -353,12 +464,19 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
     bars_done = 0
     last_flush = time.monotonic()
     cancelled = False
+    viz_tap = _VizTap(lib)
 
     def flush() -> None:
+        # Order matters: metas before the bars that reference them, color
+        # deltas and drawing events after the bars their timestamps / bar
+        # indices join against.
         nonlocal batch, trade_batch, last_flush
+        viz_tap.emit_metas(emitter)
         if batch:
             emitter.emit({"e": "bars", "d": batch})
             batch = []
+        viz_tap.emit_colors(emitter)
+        viz_tap.emit_drawings(emitter)
         if trade_batch:
             emitter.emit({"e": "trades", "d": trade_batch})
             trade_batch = []
@@ -383,10 +501,14 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
             # is reached (armed by the debug proxy via control.request_runto).
             control.note_bar(bars_done)
 
+            if viz_tap.active:
+                viz_tap.drain_metas()
+
             # lib.* holds the mintick-rounded values of the current bar
             # (raw .ohlcv floats carry float32 storage dust).
+            time_ms = int(candle.timestamp) * 1000
             row: list[Any] = [
-                int(candle.timestamp) * 1000,
+                time_ms,
                 num_or_none(lib.open), num_or_none(lib.high),
                 num_or_none(lib.low), num_or_none(lib.close),
                 num_or_none(lib.volume),
@@ -420,6 +542,10 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                         trade_batch.append(_serialize_trade(trade))
 
             batch.append(row)
+            if viz_tap.active:
+                viz_tap.collect_colors(time_ms)
+            if viz_tap.journal:
+                viz_tap.collect_drawings(bars_done - 1)
             if len(batch) >= batch_size or \
                     time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
                 flush()

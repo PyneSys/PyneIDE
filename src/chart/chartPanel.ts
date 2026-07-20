@@ -17,7 +17,15 @@ import * as path from 'path';
 
 import * as vscode from 'vscode';
 
-import type { BarRow, BridgeEvent, StartEvent, TradeRecord } from '../run/bridgeClient';
+import type {
+  BarRow,
+  BridgeEvent,
+  ColorDeltaRow,
+  DrawingEventRecord,
+  PlotMetaRecord,
+  StartEvent,
+  TradeRecord,
+} from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
 import { openChartKeys } from './chartKey';
 import type { ChartInMessage, ChartOutMessage } from './messages';
@@ -32,6 +40,14 @@ interface ChartSnapshot {
   start: StartEvent;
   bars: BarRow[];
   plotKeys: string[];
+  /** Plot style metadata keyed by plot id — upserted, a repeated id is an
+   * update (a plot turning dynamic re-emits its meta). */
+  plotMeta: Map<string, PlotMetaRecord>;
+  /** Accumulated per-bar dynamic color deltas (sparse, only-on-change). */
+  colors: ColorDeltaRow[];
+  /** Live drawing objects keyed by "family#vid": create/update upserts the
+   * latest state, delete removes it — replay sends only what still exists. */
+  drawings: Map<string, DrawingEventRecord>;
   trades: TradeRecord[];
   openTrades: TradeRecord[];
   stats: Record<string, number | null> | undefined;
@@ -69,6 +85,9 @@ export class ChartPanel {
           start: event,
           bars: [],
           plotKeys: [],
+          plotMeta: new Map(),
+          colors: [],
+          drawings: new Map(),
           trades: [],
           openTrades: [],
           stats: undefined,
@@ -84,6 +103,24 @@ export class ChartPanel {
       case 'plotKeys':
         if (this.snap) this.snap.plotKeys = event.keys;
         this.post({ type: 'plotKeys', keys: event.keys });
+        break;
+      case 'plotMeta':
+        if (this.snap) for (const m of event.metas) this.snap.plotMeta.set(m.id, m);
+        this.post({ type: 'plotMeta', metas: event.metas });
+        break;
+      case 'colors':
+        if (this.snap) for (const row of event.d) this.snap.colors.push(row);
+        this.post({ type: 'colors', d: event.d });
+        break;
+      case 'drawings':
+        if (this.snap) {
+          for (const rec of event.d) {
+            const key = `${rec.obj}#${rec.id}`;
+            if (rec.op === 'delete') this.snap.drawings.delete(key);
+            else this.snap.drawings.set(key, rec);
+          }
+        }
+        this.post({ type: 'drawings', d: event.d });
         break;
       case 'trades':
         if (this.snap) for (const t of event.d) this.snap.trades.push(t);
@@ -161,15 +198,25 @@ export class ChartPanel {
     }
   }
 
-  /** Rebuild the current webview from the host snapshot (reset → keys → bars →
-   * trades → stats → end). Safe to call only once the webview is ready. */
+  /** Rebuild the current webview from the host snapshot (reset → meta → keys →
+   * bars → colors → drawings → trades → stats → end; metas must precede the
+   * bars that reference them, colors/drawings follow the bars their
+   * timestamps / bar indices join against). Safe to call only once the
+   * webview is ready. */
   private replayFromSnapshot(): void {
     const s = this.snap;
     const webview = this.panel?.webview;
     if (!s || !webview) return;
     void webview.postMessage({ type: 'reset', start: s.start });
+    if (s.plotMeta.size) {
+      void webview.postMessage({ type: 'plotMeta', metas: [...s.plotMeta.values()] });
+    }
     if (s.plotKeys.length) void webview.postMessage({ type: 'plotKeys', keys: s.plotKeys });
     if (s.bars.length) void webview.postMessage({ type: 'bars', rows: s.bars });
+    if (s.colors.length) void webview.postMessage({ type: 'colors', d: s.colors });
+    if (s.drawings.size) {
+      void webview.postMessage({ type: 'drawings', d: [...s.drawings.values()] });
+    }
     if (s.trades.length) void webview.postMessage({ type: 'trades', trades: s.trades });
     if (s.openTrades.length) void webview.postMessage({ type: 'openTrades', trades: s.openTrades });
     if (s.stats) void webview.postMessage({ type: 'stats', stats: s.stats });

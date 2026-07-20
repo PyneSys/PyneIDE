@@ -9,6 +9,7 @@ const smokePinels = process.argv.includes('--smoke-pinels');
 const smokePyright = process.argv.includes('--smoke-pyright');
 const smokeChecker = process.argv.includes('--smoke-checker');
 const smokeEdgeCorpus = process.argv.includes('--smoke-edge-corpus');
+const smokeBridgeViz = process.argv.includes('--smoke-bridge-viz');
 
 const common = {
   bundle: true,
@@ -94,6 +95,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/edgeCorpusSmoke.ts'],
     outfile: 'dist/edge-corpus-smoke.js',
+    minify: false,
+  });
+} else if (smokeBridgeViz) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/bridgeVizSmoke.ts'],
+    outfile: 'dist/bridge-viz-smoke.js',
     minify: false,
   });
 } else {

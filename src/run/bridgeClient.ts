@@ -9,7 +9,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
-export const BRIDGE_PROTOCOL_VERSION = 1;
+export const BRIDGE_PROTOCOL_VERSION = 3;
 
 /**
  * One bar row: [timeMs, open, high, low, close, volume, plots, equity].
@@ -61,6 +61,109 @@ export interface StartEvent {
   outputs: { plot: string; strat: string | null; trades: string | null };
 }
 
+/**
+ * Serialized pynecore PlotMeta (viz layer, pynecore >= 6.6): the static
+ * style metadata of one plot-family output. Emitted lazily on the first bar
+ * the plot fires; a repeated `id` is an UPDATE (a plot turning `dynamic`
+ * re-emits its meta). Only the core fields are typed — kind-specific extras
+ * pass through untyped.
+ */
+export interface PlotMetaRecord {
+  id: string;
+  kind:
+    | 'plot'
+    | 'shape'
+    | 'char'
+    | 'arrow'
+    | 'candle'
+    | 'bar'
+    | 'bgcolor'
+    | 'barcolor'
+    | 'hline'
+    | 'fill';
+  title?: string;
+  /** Static color as #RRGGBBAA (alpha last, FF = opaque). */
+  color?: string;
+  linewidth?: number;
+  /** Style name, e.g. 'line' | 'histogram' | 'circles' (kind 'plot'). */
+  style?: string;
+  histbase?: number;
+  trackprice?: boolean;
+  offset?: number;
+  show_last?: number;
+  display?: string;
+  format?: string;
+  precision?: number;
+  force_overlay?: boolean;
+  /** Fixed price level (kind 'hline'). */
+  price?: number;
+  /** 'solid' | 'dotted' | 'dashed' (kind 'hline'). */
+  linestyle?: string;
+  /** Marker glyph (kind 'char'). */
+  char?: string;
+  /** 'abovebar' | 'belowbar' | 'top' | 'bottom' | 'absolute' (shape/char). */
+  location?: string;
+  /** 'auto' | 'tiny' | 'small' | 'normal' | 'large' | 'huge' (shape/char). */
+  size?: string;
+  /** Text drawn with the marker (shape/char). */
+  text?: string;
+  textcolor?: string;
+  /** Up/down arrow colors (kind 'arrow'). */
+  colorup?: string;
+  colordown?: string;
+  /** Arrow length bounds in pixels (kind 'arrow'). */
+  minheight?: number;
+  maxheight?: number;
+  /** Wick/border colors (kind 'candle'). */
+  wickcolor?: string;
+  bordercolor?: string;
+  /** Referenced plot titles or hline ids (kind 'fill'). */
+  plot1?: string;
+  plot2?: string;
+  hline1?: string;
+  hline2?: string;
+  /** True: the fill continues across na gaps (kind 'fill'). */
+  fillgaps?: boolean;
+  /** True once per-bar colors flow on this plot's channel in `colors`. */
+  dynamic?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * One dynamic color channel value: #RRGGBBAA, null (off/na), or an array
+ * for compound families (shape/char: [color, textcolor]; arrow: [up, down];
+ * candle: [color, wick, border]; fill gradient: [topVal, bottomVal,
+ * topColor, bottomColor]).
+ */
+export type ColorEnc = string | number | null | (string | number | null)[];
+
+/**
+ * Per-bar color deltas: [timeMs, {channelId: enc}]. Delta semantics — a
+ * channel appears only when its value changed; carry the last value forward.
+ * `timeMs` always refers to an already-delivered bar row.
+ */
+export type ColorDeltaRow = [number, Record<string, ColorEnc>];
+
+/** Drawing object families of the pynecore viz journal. */
+export type DrawingFamily = 'line' | 'label' | 'box' | 'table' | 'polyline' | 'linefill';
+
+/**
+ * One drawing journal event (pynecore viz layer, protocol v3): the live
+ * drawing registries diffed per bar. `id` is the object's run-stable vid;
+ * `s` is the full serialized state (absent for deletes) — colors are
+ * #RRGGBBAA, enums are names (xloc 'bar_index'|'bar_time', extend
+ * 'none'|'left'|'right'|'both', line style 'solid'|'dotted'|'dashed'|
+ * 'arrow_*', ...), na coordinates are null. `i` is the 0-based bar index
+ * the change was detected on and always refers to an already-delivered bar.
+ */
+export interface DrawingEventRecord {
+  i: number;
+  op: 'create' | 'update' | 'delete';
+  obj: DrawingFamily;
+  id: number;
+  s?: Record<string, unknown>;
+}
+
 export type BridgeEvent =
   | { e: 'hello'; protocol: number; pid: number }
   | { e: 'debugpy'; host: string; port: number }
@@ -68,6 +171,9 @@ export type BridgeEvent =
   | StartEvent
   | { e: 'bars'; d: BarRow[] }
   | { e: 'plotKeys'; keys: string[] }
+  | { e: 'plotMeta'; metas: PlotMetaRecord[] }
+  | { e: 'colors'; d: ColorDeltaRow[] }
+  | { e: 'drawings'; d: DrawingEventRecord[] }
   | { e: 'trades'; d: TradeRecord[] }
   | { e: 'openTrades'; d: TradeRecord[] }
   | { e: 'progress'; done: number; total: number }

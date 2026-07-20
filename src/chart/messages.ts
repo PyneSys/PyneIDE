@@ -3,12 +3,22 @@
  * chart webview. A thin projection of the bridge events: the panel forwards,
  * the webview owns all chart state.
  */
-import type { BarRow, StartEvent, TradeRecord } from '../run/bridgeClient';
+import type {
+  BarRow,
+  ColorDeltaRow,
+  DrawingEventRecord,
+  PlotMetaRecord,
+  StartEvent,
+  TradeRecord,
+} from '../run/bridgeClient';
 
 export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }
   | { type: 'bars'; rows: BarRow[] }
   | { type: 'plotKeys'; keys: string[] }
+  | { type: 'plotMeta'; metas: PlotMetaRecord[] }
+  | { type: 'colors'; d: ColorDeltaRow[] }
+  | { type: 'drawings'; d: DrawingEventRecord[] }
   | { type: 'trades'; trades: TradeRecord[] }
   | { type: 'openTrades'; trades: TradeRecord[] }
   | { type: 'stats'; stats: Record<string, number | null> }

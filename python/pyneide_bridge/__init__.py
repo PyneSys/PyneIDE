@@ -11,4 +11,8 @@ the managed venv's Python: ``python -m pyneide_bridge ...`` with PYTHONPATH
 pointing at this directory's parent.
 """
 
-PROTOCOL_VERSION = 1
+# v2: additive plotMeta/colors events (pynecore viz metadata).
+# v3: additive drawings events (line/label/box/table/polyline/linefill
+# journal). The client tolerates unknown events, so older consumers keep
+# working.
+PROTOCOL_VERSION = 3

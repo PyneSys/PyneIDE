@@ -516,7 +516,7 @@ async function main(): Promise<void> {
   const byType = <K extends BridgeEvent['e']>(k: K): Extract<BridgeEvent, { e: K }>[] =>
     events.filter((ev): ev is Extract<BridgeEvent, { e: K }> => ev.e === k);
   const hello = byType('hello')[0];
-  if (!hello || hello.protocol !== 1) throw new Error('bridge: bad hello');
+  if (!hello || hello.protocol !== 3) throw new Error('bridge: bad hello');
   const start = byType('start')[0];
   if (!start || !start.syminfo.ticker) throw new Error('bridge: bad start event');
   if (typeof start.overlay !== 'boolean') throw new Error('bridge: start event missing overlay flag');
