@@ -128,6 +128,9 @@ export class RunService {
       vscode.commands.registerCommand('pyneide.openChart', (uri?: vscode.Uri) =>
         this.openChart(uri)
       ),
+      vscode.commands.registerCommand('pyneide.toggleChartFullscreen', () =>
+        vscode.commands.executeCommand('workbench.action.toggleMaximizeEditorGroup')
+      ),
       vscode.commands.registerCommand('pyneide.pauseRun', () => this.control('pause')),
       vscode.commands.registerCommand('pyneide.resumeRun', () => this.control('resume')),
       vscode.commands.registerCommand('pyneide.stepBar', () => this.control('step')),

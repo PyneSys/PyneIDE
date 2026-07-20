@@ -15,6 +15,7 @@ import {
   init,
   dispose,
   registerIndicator,
+  utils,
   type Chart,
   type KLineData,
   type DeepPartial,
@@ -148,7 +149,7 @@ function chartStyles(): DeepPartial<Styles> {
       vertical: { color: grid },
     },
     candle: {
-      priceMark: { last: { text: { color: dark ? '#000' : '#fff' } } },
+      priceMark: { last: { show: false } },
       tooltip: { legend: { color: text } },
     },
     indicator: {
@@ -217,6 +218,16 @@ function startRun(start: StartEvent): void {
   if (!chart) return;
 
   chart.setStyles(chartStyles());
+  // The crosshair date label also shows the bar_index — a big help while
+  // developing a script, since log/debug output is indexed by it.
+  chart.setFormatter({
+    formatDate: ({ dateTimeFormat, timestamp, template, type }) => {
+      const text = utils.formatDate(dateTimeFormat, timestamp, template);
+      if (type !== 'crosshair') return text;
+      const idx = state?.tsToIndex.get(timestamp);
+      return idx === undefined ? text : `${text} (${idx})`;
+    },
+  });
   const tz = start.syminfo.timezone;
   if (typeof tz === 'string' && tz) {
     try {

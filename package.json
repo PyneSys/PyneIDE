@@ -142,6 +142,12 @@
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
+        "command": "pyneide.toggleChartFullscreen",
+        "title": "Toggle Chart Fullscreen",
+        "category": "PyneIDE",
+        "icon": "$(screen-full)"
+      },
+      {
         "command": "pyneide.pauseRun",
         "title": "Pause Run at Next Bar",
         "category": "PyneIDE",
@@ -230,6 +236,11 @@
           "command": "pyneide.openChart",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.toggleChartFullscreen",
+          "when": "activeWebviewPanelId == pyneideChart && !editorPartMaximizedEditorGroup",
+          "group": "navigation@-100"
         }
       ],
       "debug/toolBar": [
