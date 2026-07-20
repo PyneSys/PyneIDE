@@ -52,9 +52,13 @@ export class PyneDecorationProvider implements vscode.FileDecorationProvider {
     if (kind === undefined) {
       return undefined;
     }
-    return kind === 'edge'
-      ? new vscode.FileDecoration('\u{1F332}e', 'Pyne Edge script')
-      : new vscode.FileDecoration('\u{1F332}', 'Pyne script');
+    if (kind === 'edge') {
+      return new vscode.FileDecoration('\u{1F332}e', 'Pyne Edge script');
+    }
+    if (kind === 'lib') {
+      return new vscode.FileDecoration('\u{1F332}l', 'Pyne library module');
+    }
+    return new vscode.FileDecoration('\u{1F332}', 'Pyne script');
   }
 }
 

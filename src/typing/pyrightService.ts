@@ -417,14 +417,14 @@ export class PyrightService {
     diagnostics: vscode.Diagnostic[]
   ): vscode.Diagnostic[] {
     if (this.isForeignSource(uri)) return syntaxOnly(diagnostics);
-    if (!diagnostics.some((d) => diagnosticRule(d) === 'reportIndexIssue')) return diagnostics;
+    if (!diagnostics.some((d) => FILTERED_RULES.has(diagnosticRule(d) ?? ''))) return diagnostics;
     if (!this.isPyneUri(uri)) return diagnostics;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropIndexIssues(diagnostics);
+    if (text === undefined) return dropFilteredRules(diagnostics);
     const analysis = this.analyzer.cached(uri, text);
     if (analysis) return applySeriesAnalysis(diagnostics, analysis, text);
     void this.analyzeAndRepublish(uri, text);
-    return dropIndexIssues(diagnostics);
+    return dropFilteredRules(diagnostics);
   }
 
   /**
@@ -438,12 +438,12 @@ export class PyrightService {
     items: vscode.Diagnostic[]
   ): Promise<vscode.Diagnostic[]> {
     if (this.isForeignSource(uri)) return syntaxOnly(items);
-    if (!items.some((d) => diagnosticRule(d) === INDEX_RULE)) return items;
+    if (!items.some((d) => FILTERED_RULES.has(diagnosticRule(d) ?? ''))) return items;
     if (!this.isPyneUri(uri)) return items;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropIndexIssues(items);
+    if (text === undefined) return dropFilteredRules(items);
     const analysis = await this.analyzer.analyze(uri, text);
-    if (!analysis) return dropIndexIssues(items);
+    if (!analysis) return dropFilteredRules(items);
     return applySeriesAnalysis(items, analysis, text);
   }
 
@@ -553,6 +553,16 @@ export class PyrightService {
 const INDEX_RULE = 'reportIndexIssue';
 
 /**
+ * pynecore's own `@overload` decorator redefines one name per implementation
+ * on purpose; pyright only special-cases `typing.overload`, so it reports
+ * `reportRedeclaration` on every earlier definition. The analysis carries the
+ * decorated defs' name spans and exactly those diagnostics are dropped.
+ */
+const REDECL_RULE = 'reportRedeclaration';
+
+const FILTERED_RULES = new Set([INDEX_RULE, REDECL_RULE]);
+
+/**
  * Appended to index errors we keep, because pyright's own wording
  * ("__getitem__ method not defined on type float") describes the stub, not
  * what the user has to change.
@@ -561,8 +571,11 @@ const INDEX_HINT =
   'Pyne: history indexing (`x[1]`) only works on series values — ' +
   'declare the variable as `Series[...]` or index a lib series directly.';
 
-function dropIndexIssues(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
-  return diagnostics.filter((d) => diagnosticRule(d) !== INDEX_RULE);
+function dropFilteredRules(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
+  return diagnostics.filter((d) => {
+    const rule = diagnosticRule(d);
+    return rule === undefined || !FILTERED_RULES.has(rule);
+  });
 }
 
 /** Syntax errors carry no rule code; everything rule-based is dropped. */
@@ -570,7 +583,10 @@ function syntaxOnly(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
   return diagnostics.filter((d) => diagnosticRule(d) === undefined);
 }
 
-/** Keep the index errors whose subscript base is not a series access. */
+/**
+ * Keep the index errors whose subscript base is not a series access, and the
+ * redeclarations that are not pynecore `@overload` implementations.
+ */
 function applySeriesAnalysis(
   diagnostics: vscode.Diagnostic[],
   analysis: SeriesAnalysis,
@@ -578,13 +594,27 @@ function applySeriesAnalysis(
 ): vscode.Diagnostic[] {
   const lines = text.split(/\r?\n/);
   const index = seriesSpanIndex(analysis.spans);
+  const overloads = seriesSpanIndex(analysis.overloads);
   const kept: vscode.Diagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    if (diagnosticRule(diagnostic) !== INDEX_RULE) {
+    const rule = diagnosticRule(diagnostic);
+    const { start, end } = diagnostic.range;
+    if (rule === REDECL_RULE) {
+      // pyright anchors the redeclaration on the obscured def's name, which
+      // is exactly the span the analyzer reports for an @overload def.
+      if (
+        start.line === end.line &&
+        overloads.has([start.line, start.character, end.character].join(':'))
+      ) {
+        continue;
+      }
       kept.push(diagnostic);
       continue;
     }
-    const { start, end } = diagnostic.range;
+    if (rule !== INDEX_RULE) {
+      kept.push(diagnostic);
+      continue;
+    }
     const line = lines[start.line] ?? '';
     // A base expression spanning several lines cannot match a single-line
     // span, so it is kept as-is rather than guessed at.

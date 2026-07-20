@@ -46,7 +46,8 @@ Protocol: NDJSON on stdin/stdout, one request/response object per line.
 Request  ``{"id": N, "source": "..."}``
 Response ``{"id": N, "ok": true, "spans": [[line, col, endCol], ...],
             "refs": [[line, col, endCol, "Series[float]"], ...],
-            "problems": [[line, col, endCol, "code", "message"], ...]}``
+            "problems": [[line, col, endCol, "code", "message"], ...],
+            "overloads": [[line, col, endCol], ...]}``
          ``{"id": N, "ok": false, "error": "..."}`` on unparsable source.
 
 Positions are 0-based LSP coordinates: `line` is 0-based and columns are
@@ -73,24 +74,40 @@ except ImportError:  # pragma: no cover - partial deployment
     # rest of the analyzer must keep working.
     _edge_rules = None  # type: ignore[assignment]
 
-# Port of PYNE_EDGE_RE in src/pyneDetect.ts — the two must match verbatim,
-# and both look at the first DETECT_HEAD_BYTES of the file only.
+# Ports of PYNE_EDGE_RE / PYNE_LIB_RE in src/pyneDetect.ts — they must match
+# verbatim, and all look at the first DETECT_HEAD_BYTES of the file only.
 _PYNE_EDGE_RE = re.compile(
     r'^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*'
     r'("""|\'\'\'|"|\')\s*@pyne[^\S\r\n]+edge(?:\s|\1|$)')
 
+_PYNE_LIB_RE = re.compile(
+    r'^(?:[^\S\r\n]*#[^\r\n]*(?:\r?\n|$))*\s*[rRbBuUfF]*'
+    r'("""|\'\'\'|"|\')\s*@pyne[^\S\r\n]+lib(?:\s|\1|$)')
+
 _DETECT_HEAD_BYTES = 4096
 
 
-def _is_edge(source: str) -> bool:
-    """Whether the module head docstring marks the source ``@pyne edge``.
+def _head(source: str) -> str:
+    """First DETECT_HEAD_BYTES of the source, sliced as *bytes*.
 
-    The TS side slices the first 4096 *bytes*; slicing bytes here too keeps
-    the two detections aligned even when multi-byte text sits on the
-    boundary.
+    The TS side slices bytes; slicing bytes here too keeps the detections
+    aligned even when multi-byte text sits on the boundary.
     """
-    head = source.encode('utf-8')[:_DETECT_HEAD_BYTES].decode('utf-8', 'ignore')
-    return _PYNE_EDGE_RE.match(head) is not None
+    return source.encode('utf-8')[:_DETECT_HEAD_BYTES].decode('utf-8', 'ignore')
+
+
+def _is_edge(source: str) -> bool:
+    """Whether the module head docstring marks the source ``@pyne edge``."""
+    return _PYNE_EDGE_RE.match(_head(source)) is not None
+
+
+def _is_lib_module(source: str) -> bool:
+    """Whether the head docstring marks the source ``@pyne lib``.
+
+    A library module is a transformed Pyne module that is imported by
+    scripts, never run directly — so the `main` requirement does not apply.
+    """
+    return _PYNE_LIB_RE.match(_head(source)) is not None
 
 # Kept in sync with pynecore.transformers.lib_series.NON_SERIES_LIB_ATTRS.
 NON_SERIES_LIB_ATTRS = frozenset({'extra_fields'})
@@ -533,16 +550,21 @@ class _StructureChecker:
     rule too — a wrapper could legitimately set `.script`.
     """
 
-    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns):
+    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns,
+                 require_main: bool = True):
         self.tree = tree
         self.lib = lib
         self.columns = columns
+        self.require_main = require_main
         self.problems: list[tuple[int, int, int, str, str]] = []
 
     def check(self) -> None:
         self._check_lib_alias()
         self._check_module_scope_declarations()
-        self._check_main()
+        # `@pyne lib` modules are imported, never run: `main` (and with it the
+        # script decorator) has no meaning there, so the whole rule is off.
+        if self.require_main:
+            self._check_main()
 
     def _check_lib_alias(self) -> None:
         for node in ast.walk(self.tree):
@@ -948,6 +970,43 @@ def _is_internal_test_module(tree: ast.Module) -> bool:
     return False
 
 
+def _overload_def_spans(tree: ast.Module, columns: _Utf16Columns) -> list[tuple[int, int, int]]:
+    """Name spans of functions decorated with pynecore's own ``@overload``.
+
+    pynecore's ``@overload`` (`pynecore.core.overload`) is a runtime
+    dispatcher: every implementation legitimately redefines the same name.
+    pyright only special-cases `typing.overload`, so it anchors a
+    `reportRedeclaration` on each obscured definition's name — these spans
+    let the IDE drop exactly those diagnostics. Only names imported directly
+    from `pynecore.core.overload` count; an unresolvable decorator reports
+    nothing, so the fallback stays noisier, never wrong.
+    """
+    overload_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'pynecore.core.overload':
+            for alias in node.names:
+                if alias.name == 'overload':
+                    overload_names.add(alias.asname or alias.name)
+    if not overload_names:
+        return []
+    spans: list[tuple[int, int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(isinstance(d, ast.Name) and d.id in overload_names
+                   for d in node.decorator_list):
+            continue
+        prefix = 'async def ' if isinstance(node, ast.AsyncFunctionDef) else 'def '
+        line = node.lineno - 1
+        start_byte = node.col_offset + len(prefix)
+        spans.append((
+            line,
+            columns.convert(line, start_byte),
+            columns.convert(line, start_byte + len(node.name.encode('utf-8'))),
+        ))
+    return spans
+
+
 def analyze(source: str) -> dict[str, Any]:
     """Analyze Pyne source: series spans/references plus checker problems."""
     tree = ast.parse(source)
@@ -958,7 +1017,8 @@ def analyze(source: str) -> dict[str, Any]:
     if _is_internal_test_module(tree):
         problems: list[tuple[int, int, int, str, str]] = []
     else:
-        checker = _StructureChecker(tree, analyzer.lib, columns)
+        checker = _StructureChecker(tree, analyzer.lib, columns,
+                                    require_main=not _is_lib_module(source))
         checker.check()
         problems = checker.problems + analyzer.problems
         if _edge_rules is not None and _is_edge(source):
@@ -970,6 +1030,7 @@ def analyze(source: str) -> dict[str, Any]:
         'spans': [list(span) for span in analyzer.spans],
         'refs': [list(ref) for ref in analyzer.refs],
         'problems': [list(problem) for problem in problems],
+        'overloads': [list(span) for span in _overload_def_spans(tree, columns)],
     }
 
 

@@ -58,6 +58,38 @@ async function main(): Promise<void> {
     assert(missing.problems![0][0] === 0, `missing-main: expected line 0, got ${missing.problems![0][0]}`);
     log('missing-main OK');
 
+    // --- `@pyne lib` module: main is not required ----------------------------
+    const libModule = await worker.request(
+      '"""\n@pyne lib\n"""\ndef helper():\n    pass\n'
+    );
+    expectCodes(libModule, [], 'lib-module');
+    log('lib-module OK');
+
+    // --- pynecore @overload defs are reported for the redeclaration filter ---
+    const overloads = await worker.request(
+      HEAD +
+        'from pynecore.lib import script\n' +
+        'from pynecore.core.overload import overload\n\n\n' +
+        '@overload\n' +
+        'def f(a: float) -> float:\n' +
+        '    return a\n\n\n' +
+        '@overload\n' +
+        'def f(a: int) -> int:\n' +
+        '    return a\n\n\n' +
+        'def plain():\n' +
+        '    pass\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    pass\n'
+    );
+    assert(overloads.ok, `overloads: worker returned ok:false (${overloads.error ?? 'no error'})`);
+    const spans = overloads.overloads ?? [];
+    assert(
+      spans.length === 2 && spans.every((s) => s[2] - s[1] === 1),
+      `overloads: expected two one-char name spans, got ${JSON.stringify(spans)}`
+    );
+    log('overloads OK');
+
     // --- undecorated main ----------------------------------------------------
     const undecorated = await worker.request(
       HEAD + 'from pynecore.lib import script\n\n\ndef main():\n    pass\n'

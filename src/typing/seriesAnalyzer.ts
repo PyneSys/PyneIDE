@@ -33,6 +33,11 @@ export interface SeriesAnalysis {
   refs: SeriesRef[];
   /** Script-structure diagnostics for the Pyne-checker (L5d). */
   problems: PyneProblem[];
+  /**
+   * Name spans of defs decorated with pynecore's own `@overload` — legit
+   * redefinitions of one name, whose `reportRedeclaration` gets dropped.
+   */
+  overloads: Span[];
 }
 
 interface CacheEntry {
@@ -51,6 +56,7 @@ interface WorkerResponse {
   spans?: Span[];
   refs?: [number, number, number, string][];
   problems?: [number, number, number, string, string][];
+  overloads?: Span[];
   error?: string;
 }
 
@@ -254,6 +260,7 @@ export class SeriesAnalyzer implements vscode.Disposable {
         code,
         message,
       })),
+      overloads: response.overloads ?? [],
     });
   }
 

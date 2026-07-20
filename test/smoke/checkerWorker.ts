@@ -16,6 +16,7 @@ export interface WorkerResponse {
   spans?: Span[];
   refs?: Ref[];
   problems?: Problem[];
+  overloads?: Span[];
   error?: string;
 }
 

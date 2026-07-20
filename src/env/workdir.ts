@@ -143,6 +143,11 @@ export function venvLocation(
  *   only noise category the stubs cannot fix. This is the checker-agnostic
  *   fallback; when PyneIDE's own bundled pyright is the analyzer it turns the
  *   rule back on (see `preciseIndexFilter`) and filters per access instead.
+ * - `reportRedeclaration: none` follows the same scheme: pynecore's own
+ *   `@overload` (`pynecore.core.overload`) redefines one name per
+ *   implementation by design, which only the bundled pyright can filter per
+ *   def (the analyzer reports the decorated names). Other checkers get the
+ *   blanket suppression.
  * - `basic` mode: Pylance's default is "off"; the cleaned-up pynecore stubs
  *   make basic-level checking actually usable on @pyne scripts.
  * - `pythonVersion` is pinned because a type checker infers it from the
@@ -157,6 +162,7 @@ const PYRIGHT_CONFIG = {
   typeCheckingMode: 'basic',
   defineConstant: { TYPECHECKER: 'pyright' },
   reportIndexIssue: 'none',
+  reportRedeclaration: 'none',
   pythonVersion: PYTHON_VERSION_FLOOR,
   exclude: ['data', 'output', '**/__pycache__'],
 };
@@ -194,9 +200,10 @@ export interface PyrightConfigOptions {
   extraPaths?: string[];
   /**
    * Whether PyneIDE's own pyright is the analyzer here and filters series
-   * history indexing per access (L5c). True restores `reportIndexIssue` so
-   * genuine index errors reach that filter; false puts the blanket suppression
-   * back for whichever checker takes over. Omit to leave the rule as it is.
+   * history indexing per access (L5c) and `@overload` redeclarations per def.
+   * True restores `reportIndexIssue`/`reportRedeclaration` so genuine errors
+   * reach that filter; false puts the blanket suppression back for whichever
+   * checker takes over. Omit to leave the rules as they are.
    *
    * The rule has to live in the file rather than in a client setting:
    * `pyrightconfig.json` outranks `python.analysis.diagnosticSeverityOverrides`,
@@ -290,6 +297,10 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
       config.reportIndexIssue = indexRule;
       changed = true;
     }
+    if (indexRule !== undefined && config.reportRedeclaration !== indexRule) {
+      config.reportRedeclaration = indexRule;
+      changed = true;
+    }
     if (pythonVersion !== undefined && config.pythonVersion !== pythonVersion) {
       config.pythonVersion = pythonVersion;
       changed = true;
@@ -303,7 +314,10 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
   fs.mkdirSync(dir, { recursive: true });
   const config: Record<string, unknown> = { ...PYRIGHT_CONFIG };
   if (extraPaths && extraPaths.length > 0) config.extraPaths = extraPaths;
-  if (indexRule !== undefined) config.reportIndexIssue = indexRule;
+  if (indexRule !== undefined) {
+    config.reportIndexIssue = indexRule;
+    config.reportRedeclaration = indexRule;
+  }
   if (pythonVersion !== undefined) config.pythonVersion = pythonVersion;
   applyVenv(config, venv);
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
