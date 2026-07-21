@@ -8,6 +8,7 @@ job (F2) — this module only runs ``.py`` Pyne scripts against ``.ohlcv`` data.
 from __future__ import annotations
 
 import ast
+import inspect
 import math
 import sys
 import time
@@ -42,9 +43,9 @@ class _VizTap:
     (released 6.5.x): every hook degrades to a no-op and the protocol keeps
     its v1 shape. The tap must copy per-bar state inside the run_iter loop —
     ``run_iter`` clears ``_plot_meta_new``/``_viz_dyn`` after each yield.
-    pynecore's own VizWriter drains the same pending-meta list, but only when
-    a ``viz_path`` is passed to ScriptRunner — the bridge never does, so the
-    tap is the sole drainer.
+    pynecore's own VizWriter drains the pending-meta list before ``run_iter``
+    yields. The bridge therefore observes the persistent ``_plot_meta``
+    registry and emits a meta whenever its serialized form changes.
     """
 
     def __init__(self, lib: Any) -> None:
@@ -52,6 +53,7 @@ class _VizTap:
         self.journal = False
         self._lib = lib
         self._metas: dict[str, dict[str, Any]] = {}
+        self._last_metas: dict[str, dict[str, Any]] = {}
         self._colors: list[list[Any]] = []
         self._last: dict[str, Any] = {}
         self._shadow: dict[Any, Any] = {}
@@ -77,13 +79,18 @@ class _VizTap:
             self.journal = True
 
     def drain_metas(self) -> None:
-        """Copy newly registered plot metas, keyed by id (upsert: a plot
-        turning dynamic re-appends the same meta with ``dynamic=True``)."""
-        pending = self._lib._plot_meta_new
-        if pending:
-            for meta in pending:
-                self._metas[meta.id] = self._serialize_meta(meta)
-            pending.clear()
+        """Copy new or changed plot metas from the persistent registry.
+
+        The native VizWriter consumes ``_plot_meta_new`` before the generator
+        yields, so that queue cannot be shared with the live IDE stream. A
+        serialized-value comparison preserves the same upsert semantics,
+        including the later ``dynamic=True`` re-emission.
+        """
+        for meta in self._lib._plot_meta.values():
+            serialized = self._serialize_meta(meta)
+            if self._last_metas.get(meta.id) != serialized:
+                self._last_metas[meta.id] = serialized
+                self._metas[meta.id] = serialized
 
     def collect_colors(self, time_ms: int) -> None:
         """Record only-on-change dynamic color deltas for the current bar.
@@ -256,21 +263,26 @@ def _resolve_data(workdir: Path, data_arg: str) -> Path:
     return data
 
 
-def _serialize_input(name: str, data: Any) -> dict[str, Any]:
+def _serialize_input(name: str, data: Any, current: Any = _MISSING) -> dict[str, Any]:
     """Serialize one pynecore ``InputData`` to a JSON-safe dict for the IDE's
     input form. ``defval``/``options`` are coerced through ``sanitize`` (Color
     and enum members become their string form); the ``__global__`` suffix the
-    strict-mode registry appends is stripped from the name."""
+    strict-mode registry appends is stripped from the name. ``current`` is the
+    value read back from the sibling ``.toml`` by pynecore's canonical loader
+    (``_MISSING`` when the toml has no entry) — the form shows it, falling back
+    to ``defval``."""
     def _san_opt(opt: Any) -> Any:
         return sanitize(opt)
 
     options = getattr(data, "options", None)
+    defval = sanitize(getattr(data, "defval", None))
     return {
         "name": name.removesuffix("__global__"),
         "id": getattr(data, "id", None),
         "type": getattr(data, "input_type", None),
         "title": getattr(data, "title", None),
-        "defval": sanitize(getattr(data, "defval", None)),
+        "defval": defval,
+        "value": sanitize(current) if current is not _MISSING else defval,
         "minval": num_or_none(getattr(data, "minval", None)),
         "maxval": num_or_none(getattr(data, "maxval", None)),
         "step": num_or_none(getattr(data, "step", None)),
@@ -317,13 +329,77 @@ def inspect_inputs(args: Any, emitter: Emitter) -> int:
         return 0
 
     inputs = getattr(script_obj, "inputs", {}) or {}
-    serialized = [_serialize_input(name, data) for name, data in inputs.items() if name]
+
+    # Current values come from the sibling .toml through pynecore's OWN loader
+    # (tomllib), so hand-written / canonical toml is parsed exactly once, by the
+    # authoritative code — never re-implemented on the IDE side. import_script
+    # clears _old_input_values at the end of the decorator, so load() again here.
+    from pynecore.core.script import _old_input_values
+    _old_input_values.clear()
+    warning = None
+    toml_path = script.with_suffix(".toml")
+    if toml_path.exists():
+        try:
+            script_obj.load(toml_path)
+        except Exception as exc:  # noqa: BLE001 - a broken toml must not break inspect
+            _old_input_values.clear()
+            warning = f"Could not read {toml_path.name} ({exc}); showing defaults."
+
+    serialized = [
+        _serialize_input(name, data, _old_input_values.get(name, _MISSING))
+        for name, data in inputs.items() if name
+    ]
     emitter.emit({
         "e": "inputs",
         "script": str(script),
         "scriptType": _script_type_name(script_obj),
         "inputs": serialized,
-        "warning": None,
+        "warning": warning,
+    })
+    return 0
+
+
+def write_inputs(args: Any, emitter: Emitter) -> int:
+    """Persist input values to the sibling ``<script>.toml`` through pynecore's
+    CANONICAL writer (``Script.save``), so the IDE never emits a second toml
+    format. Values arrive as a JSON object ``{name: value}`` on stdin; they are
+    fed in as pynecore ``_programmatic_inputs`` before importing the script, so
+    the ``@script`` decorator loads any existing toml, overlays these values,
+    and writes the full self-documenting toml (metadata comments + ``value``).
+
+    Only indicator/strategy scripts persist a toml (pynecore's rule); a library
+    import writes nothing and reports it so the IDE can surface that.
+    """
+    import json
+    import os
+
+    from pynecore.core.script import _programmatic_inputs
+    from pynecore.core.script_runner import import_script
+
+    workdir = Path(args.workdir).resolve()
+    script = _resolve_script(workdir, args.write_inputs)
+
+    lib_dir = workdir / "scripts" / "lib"
+    if lib_dir.is_dir():
+        sys.path.insert(0, str(lib_dir))
+
+    raw = sys.stdin.read() or "{}"
+    payload = json.loads(raw)
+    values = payload.get("values", payload) if isinstance(payload, dict) else {}
+
+    _programmatic_inputs.clear()
+    _programmatic_inputs.update(values)
+    os.environ["PYNE_SAVE_SCRIPT_TOML"] = "1"
+
+    module = import_script(script)
+    main = getattr(module, "main", None)
+    script_obj = getattr(main, "script", None)
+    script_type = _script_type_name(script_obj) if script_obj is not None else None
+    emitter.emit({
+        "e": "written",
+        "script": str(script),
+        "scriptType": script_type,
+        "persisted": script_type in ("indicator", "strategy"),
     })
     return 0
 
@@ -347,6 +423,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
     plot_path = output_dir / f"{script.stem}.csv"
     strat_path = output_dir / f"{script.stem}_strat.csv"
     trade_path = output_dir / f"{script.stem}_trade.csv"
+    viz_path = output_dir / f"{script.stem}_viz.ndjson"
 
     # --security KEY=VALUE mappings (backtest file mode only)
     security_data: dict[str, str] | None = None
@@ -409,15 +486,24 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         else:
             ohlcv_iter = reader.read_from(time_from_ts, time_to_ts)
 
+        runner_kwargs: dict[str, Any] = {
+            "last_bar_index": size - 1,
+            "last_bar_time": last_bar_time,
+            "plot_path": plot_path,
+            "strat_path": strat_path,
+            "trade_path": trade_path,
+            "security_data": security_data,
+            "magnifier_iter": magnifier_iter,
+            "magnifier_source_tf": magnifier_source_tf,
+            "chart_data_path": data_path,
+        }
+        viz_supported = "viz_path" in inspect.signature(ScriptRunner).parameters
+        if viz_supported:
+            runner_kwargs["viz_path"] = viz_path
+
         runner = ScriptRunner(
             script, ohlcv_iter, syminfo,
-            last_bar_index=size - 1,
-            last_bar_time=last_bar_time,
-            plot_path=plot_path, strat_path=strat_path, trade_path=trade_path,
-            security_data=security_data,
-            magnifier_iter=magnifier_iter,
-            magnifier_source_tf=magnifier_source_tf,
-            chart_data_path=data_path,
+            **runner_kwargs,
         )
 
         is_strategy = _script_type_name(runner.script) == "strategy"
@@ -433,6 +519,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                 "plot": str(plot_path),
                 "strat": str(strat_path) if is_strategy else None,
                 "trades": str(trade_path) if is_strategy else None,
+                "viz": str(viz_path) if viz_supported else None,
             },
         })
 

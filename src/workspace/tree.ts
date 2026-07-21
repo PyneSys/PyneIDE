@@ -11,8 +11,10 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import type { ChartManager } from '../chart/chartPanel';
 import { OhlcvEditorProvider } from '../data/ohlcvEditor';
-import { parseSymbolSection, readOhlcvStats } from '../data/syminfo';
+import { buildOutputPreview, resolveOutputPair } from '../data/outputPreview';
+import { parseSymInfo, readOhlcvStats } from '../data/syminfo';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES, type PyneKind } from '../pyneDetect';
 
@@ -42,7 +44,14 @@ interface OutputNode {
   uri: vscode.Uri;
 }
 
-export type PyneNode = SectionNode | ScriptNode | DataNode | OutputNode;
+/** The compiled `.py` nested under its `.pine` parent. */
+interface CompanionNode {
+  type: 'companion';
+  uri: vscode.Uri;
+  pyneKind?: PyneKind;
+}
+
+export type PyneNode = SectionNode | ScriptNode | DataNode | OutputNode | CompanionNode;
 
 interface DataMeta {
   label: string;
@@ -60,6 +69,25 @@ function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Provider names that carry the `<provider>_…` stem convention, used only as a
+ * fallback when the `.toml` has no persisted `[download]` provider string. */
+const KNOWN_PROVIDERS = new Set(['ccxt', 'bybit', 'tradingview', 'capitalcom', 'ctrader', 'coinbase']);
+
+/** First `:`-delimited token of a pynecore provider string
+ * (`ccxt:BYBIT:ETH/USDT:USDT@1D` -> `ccxt`, `bybit:ETHUSDT.P@1` -> `bybit`). */
+function providerName(providerStr: string | undefined): string | undefined {
+  if (!providerStr) return undefined;
+  const head = providerStr.split(':', 1)[0].trim();
+  return head || undefined;
+}
+
+/** Best-effort provider from the `<provider>_…` filename stem, but only for the
+ * known set — arbitrary user-named files (`pf68`, `demo`) must NOT guess one. */
+function providerFromStem(stem: string): string | undefined {
+  const head = stem.split('_', 1)[0].toLowerCase();
+  return KNOWN_PROVIDERS.has(head) ? head : undefined;
 }
 
 export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> {
@@ -100,6 +128,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.dataItem(node);
       case 'output':
         return this.outputItem(node);
+      case 'companion':
+        return this.companionItem(node);
     }
   }
 
@@ -112,6 +142,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         { type: 'section', kind: 'output' },
       ];
     }
+    if (node.type === 'script') return this.companionChildren(node);
     if (node.type !== 'section') return [];
     switch (node.kind) {
       case 'scripts':
@@ -142,8 +173,13 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
 
   private scriptChildren(): ScriptNode[] {
     const dir = path.join(this.workdir!, 'scripts');
+    const files = walkScripts(dir);
+    const present = new Set(files);
     const nodes: ScriptNode[] = [];
-    for (const file of walkScripts(dir)) {
+    for (const file of files) {
+      // A compiled `.py` with a sibling `.pine` is nested under it, not listed
+      // at the top level.
+      if (/\.py$/i.test(file) && present.has(file.replace(/\.py$/i, '.pine'))) continue;
       nodes.push({
         type: 'script',
         uri: vscode.Uri.file(file),
@@ -155,12 +191,43 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     return nodes;
   }
 
+  /** The compiled `.py` nested under a `.pine`, if it exists on disk. The
+   * generated `.py.map`/`.toml` are intentionally hidden here. Empty for `.py`. */
+  private companionChildren(node: ScriptNode): CompanionNode[] {
+    if (!/\.pine$/i.test(node.uri.fsPath)) return [];
+    const py = node.uri.fsPath.replace(/\.pine$/i, '.py');
+    if (!fs.existsSync(py)) return [];
+    return [{ type: 'companion', uri: vscode.Uri.file(py), pyneKind: detectScriptKind(py) }];
+  }
+
   private scriptItem(node: ScriptNode): vscode.TreeItem {
-    const item = new vscode.TreeItem(node.rel, vscode.TreeItemCollapsibleState.None);
+    const collapsible =
+      this.companionChildren(node).length > 0
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None;
+    const item = new vscode.TreeItem(node.rel, collapsible);
     if (/\.pine$/i.test(node.rel)) {
       const pineIcon = vscode.Uri.joinPath(this.extensionUri, 'icons', 'pine-file.svg');
       item.iconPath = { light: pineIcon, dark: pineIcon };
     } else if (node.pyneKind) {
+      const pyneIcon = vscode.Uri.joinPath(this.extensionUri, 'icons', 'pyne-core.svg');
+      item.iconPath = { light: pyneIcon, dark: pyneIcon };
+      item.description = node.pyneKind === 'edge' ? '@pyne edge' : node.pyneKind === 'lib' ? '@pyne lib' : '@pyne';
+    } else {
+      item.resourceUri = node.uri;
+      item.iconPath = new vscode.ThemeIcon('file');
+    }
+    item.contextValue = node.pyneKind ? 'pyneScript' : 'pyneFile';
+    item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
+    return item;
+  }
+
+  private companionItem(node: CompanionNode): vscode.TreeItem {
+    const item = new vscode.TreeItem(
+      path.basename(node.uri.fsPath),
+      vscode.TreeItemCollapsibleState.None
+    );
+    if (node.pyneKind) {
       const pyneIcon = vscode.Uri.joinPath(this.extensionUri, 'icons', 'pyne-core.svg');
       item.iconPath = { light: pyneIcon, dark: pyneIcon };
       item.description = node.pyneKind === 'edge' ? '@pyne edge' : node.pyneKind === 'lib' ? '@pyne lib' : '@pyne';
@@ -193,10 +260,12 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     item.tooltip = meta.tooltip;
     item.iconPath = new vscode.ThemeIcon('graph-line');
     item.contextValue = 'pyneData';
+    // preserveFocus keeps the tree focused (like the built-in Explorer), so
+    // arrow-key browsing and the Delete keybinding keep working after a click.
     item.command = {
       command: 'vscode.openWith',
       title: 'Open as Table',
-      arguments: [node.uri, OhlcvEditorProvider.viewType],
+      arguments: [node.uri, OhlcvEditorProvider.viewType, { preserveFocus: true }],
     };
     return item;
   }
@@ -220,18 +289,31 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     const stem = path.basename(fsPath).replace(/\.ohlcv$/i, '');
     let ticker: string | undefined;
     let period: string | undefined;
+    let broker: string | undefined;
+    let provider: string | undefined;
     try {
       const tomlPath = fsPath.replace(/\.ohlcv$/i, '.toml');
-      const sym = parseSymbolSection(fs.readFileSync(tomlPath, 'utf8'));
-      ticker = sym.ticker;
-      period = sym.period;
+      const sym = parseSymInfo(fs.readFileSync(tomlPath, 'utf8'));
+      ticker = sym.symbol.ticker;
+      period = sym.symbol.period;
+      broker = sym.symbol.prefix || undefined;
+      provider = providerName(sym.provider);
     } catch {
       // No sibling toml — fall back to the file stem.
     }
-    const label = [ticker, period].filter(Boolean).join(' ') || stem;
+    provider ??= providerFromStem(stem);
+
+    // Prefix the label with the exchange (TradingView-style `BYBIT:BTCUSDT`);
+    // requires a real ticker so a stem-only fallback stays a plain name.
+    const symbolLabel = [ticker, period].filter(Boolean).join(' ') || stem;
+    const label = broker && ticker ? `${broker}:${symbolLabel}` : symbolLabel;
 
     const parts: string[] = [];
-    const tooltipLines: string[] = [ticker && period ? `${ticker} ${period}` : stem];
+    const tooltipLines: string[] = [label];
+    const origin = [provider && `Provider: ${provider}`, broker && `Broker: ${broker}`]
+      .filter(Boolean)
+      .join(' · ');
+    if (origin) tooltipLines.push(origin);
     try {
       const stats = readOhlcvStats(fsPath);
       if (stats.firstTs !== undefined && stats.lastTs !== undefined) {
@@ -273,8 +355,19 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     );
     item.resourceUri = node.uri;
     item.iconPath = vscode.ThemeIcon.File;
-    item.contextValue = 'pyneOutput';
-    item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
+    const chartable = resolveOutputPair(node.uri.fsPath) !== undefined;
+    item.contextValue = chartable ? 'pyneChartOutput' : 'pyneOutput';
+    item.command = chartable
+      ? {
+          command: 'pyneide.workspace.openOutputChart',
+          title: 'Open chart',
+          arguments: [node],
+        }
+      : {
+          command: 'vscode.open',
+          title: 'Open',
+          arguments: [node.uri, { preserveFocus: true }],
+        };
     return item;
   }
 }
@@ -323,7 +416,10 @@ function detectScriptKind(file: string): PyneKind | undefined {
  * command is supplied by the caller (it owns the environment/output plumbing);
  * C2 replaces it with the full wizard.
  */
-export function registerWorkspaceView(context: vscode.ExtensionContext): PyneWorkspaceProvider {
+export function registerWorkspaceView(
+  context: vscode.ExtensionContext,
+  chartManager?: ChartManager
+): PyneWorkspaceProvider {
   const provider = new PyneWorkspaceProvider(context.extensionUri);
   const view = vscode.window.createTreeView(PYNE_WORKSPACE_VIEW_ID, {
     treeDataProvider: provider,
@@ -391,17 +487,45 @@ export function registerWorkspaceView(context: vscode.ExtensionContext): PyneWor
         );
       }
     }),
+    vscode.commands.registerCommand('pyneide.workspace.openOutputChart', (node?: PyneNode) => {
+      const uri = nodeUri(node ?? view.selection[0]);
+      const pair = uri && resolveOutputPair(uri.fsPath);
+      if (!pair || !chartManager) return;
+      try {
+        const preview = buildOutputPreview(pair);
+        chartManager.openOutputPreview(pair.plot, preview.events);
+        if (preview.warnings.length) {
+          void vscode.window.showWarningMessage(
+            `PyneIDE: chart opened with ${preview.warnings.length} ignored output record(s).`
+          );
+        }
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `PyneIDE: could not open output chart — ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }),
     vscode.commands.registerCommand('pyneide.workspace.revealInExplorer', (node?: PyneNode) => {
-      const uri = nodeUri(node);
+      const uri = nodeUri(node ?? view.selection[0]);
       if (uri) void vscode.commands.executeCommand('revealInExplorer', uri);
     }),
     vscode.commands.registerCommand('pyneide.dataDelete', (node?: PyneNode) => {
-      const uri = nodeUri(node);
-      if (uri) void deleteDataFile(uri);
+      const target = node ?? view.selection[0];
+      if (target?.type === 'data') void deleteDataFile(target.uri);
     }),
     vscode.commands.registerCommand('pyneide.outputDelete', (node?: PyneNode) => {
-      const uri = nodeUri(node);
-      if (uri) void deleteOutputFile(uri);
+      const target = node ?? view.selection[0];
+      if (target?.type === 'output') void deleteOutputFile(target.uri);
+    }),
+    // The Delete/Backspace keybinding routes here: its `when` only checks the
+    // focused view (viewItem is unreliable at keybinding-eval time), so the
+    // target type is resolved from the current selection.
+    vscode.commands.registerCommand('pyneide.workspace.deleteSelected', (node?: PyneNode) => {
+      const target = node ?? view.selection[0];
+      if (target?.type === 'data') void deleteDataFile(target.uri);
+      else if (target?.type === 'output') void deleteOutputFile(target.uri);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('pyneide.workdir')) refresh();

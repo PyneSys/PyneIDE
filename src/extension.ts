@@ -97,7 +97,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // retires the chart; closing only the chart's own tab keeps it dormant so it
   // can be reopened with its state intact.
   context.subscriptions.push(
-    vscode.window.tabGroups.onDidChangeTabs(() => chartManager.reconcile())
+    vscode.window.tabGroups.onDidChangeTabs(() => {
+      chartManager.reconcile();
+      inputsView.reconcile();
+    })
   );
 
   // Existing workdirs predating the generated typing config get it on
@@ -140,11 +143,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // bundled server — there is no LSP middleware to rewrite through then.
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
 
-  registerWorkspaceView(context);
+  registerWorkspaceView(context, chartManager);
   const inputsView = new InputsViewManager(context, manager, output);
   context.subscriptions.push(
-    vscode.commands.registerCommand('pyneide.editInputs', (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
-      const uri = editInputsUri(arg);
+    vscode.commands.registerCommand('pyneide.editInputs', async (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
+      const uri = await editInputsUri(arg, compileService);
       if (uri) void inputsView.open(uri);
     }),
     vscode.commands.registerCommand('pyneide.dataDownloadWizard', () =>
@@ -218,23 +221,36 @@ async function legacyDownloadWizard(
 }
 
 /**
- * Resolve the script Uri for the "Edit inputs" command from a tree node, an
- * explicit Uri (editor/title), or the active editor. Only `.py` Pyne scripts
- * can be inspected (the bridge imports them); `.pine` must be compiled first.
+ * Resolve the compiled `.py` to inspect for the "Edit inputs" command, from a
+ * tree node, an explicit Uri (editor/title), or the active editor. The bridge
+ * imports the `.py`, so a `.pine` source is compiled on demand first — exactly
+ * like a run: the content-hash cache skips the API when nothing changed, a
+ * stale output recompiles, and a `.py` the user has edited triggers the same
+ * overwrite prompt. Returns undefined if compilation did not produce a `.py`.
  */
-function editInputsUri(arg?: { uri?: vscode.Uri } | vscode.Uri): vscode.Uri | undefined {
+async function editInputsUri(
+  arg: { uri?: vscode.Uri } | vscode.Uri | undefined,
+  compile: CompileService
+): Promise<vscode.Uri | undefined> {
   let uri: vscode.Uri | undefined;
   if (arg instanceof vscode.Uri) uri = arg;
   else if (arg && arg.uri instanceof vscode.Uri) uri = arg.uri;
   else uri = vscode.window.activeTextEditor?.document.uri;
   if (!uri) return undefined;
-  if (!/\.py$/i.test(uri.fsPath)) {
-    void vscode.window.showWarningMessage(
-      'PyneIDE: input editing works on compiled .py Pyne scripts — compile the .pine first.'
-    );
-    return undefined;
+
+  if (/\.py$/i.test(uri.fsPath)) return uri;
+
+  if (/\.pine$/i.test(uri.fsPath)) {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    if (doc.isDirty) await doc.save();
+    const compiled = await compile.ensureCompiledForRun(doc);
+    return compiled ? vscode.Uri.file(compiled) : undefined;
   }
-  return uri;
+
+  void vscode.window.showWarningMessage(
+    'PyneIDE: input editing needs a Pyne (.py) or Pine (.pine) script.'
+  );
+  return undefined;
 }
 
 /**

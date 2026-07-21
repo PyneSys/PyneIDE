@@ -58,7 +58,13 @@ export interface StartEvent {
   syminfo: Record<string, string | number | boolean | null>;
   data: string;
   range: { from: number; to: number; bars: number };
-  outputs: { plot: string; strat: string | null; trades: string | null };
+  outputs: {
+    plot: string;
+    strat: string | null;
+    trades: string | null;
+    /** Native PyneCore visualization sidecar (newline-delimited JSON). */
+    viz?: string | null;
+  };
 }
 
 /**

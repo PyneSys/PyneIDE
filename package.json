@@ -35,6 +35,14 @@
     "onCustomEditor:pyneide.ohlcvTable"
   ],
   "contributes": {
+    "configurationDefaults": {
+      "explorer.fileNesting.enabled": true,
+      "explorer.fileNesting.patterns": {
+        "*.pine": "${capture}.py, ${capture}.py.map, ${capture}.toml",
+        "*.py": "${capture}.py.map, ${capture}.toml",
+        "*.ohlcv": "${capture}.toml"
+      }
+    },
     "commands": [
       {
         "command": "pyneide.setupEnvironment",
@@ -454,6 +462,14 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "pyneide.workspace.deleteSelected",
+        "key": "delete",
+        "mac": "backspace",
+        "when": "focusedView == pyneide.workspace"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

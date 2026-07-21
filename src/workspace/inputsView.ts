@@ -6,26 +6,31 @@
  * written back there on save, preserving the rest of the file.
  */
 import { spawn } from 'node:child_process';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { canonicalChartKey, openChartKeys } from '../chart/chartKey';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import type { InputSpec, InputsOutMessage, InputsPayload, InputValue } from './inputsMessages';
-import { readInputValues, writeInputValues } from './inputsToml';
 
 const VIEW_TYPE = 'pyneide.inputsForm';
 
 interface InspectResult {
   inputs: InputSpec[];
+  /** Current values, read back through pynecore's own toml loader. */
+  values: Record<string, InputValue>;
   scriptType?: string;
   warning?: string | null;
 }
 
 export class InputsViewManager {
-  /** Live panels keyed by the script's fsPath (one editor per script). */
+  /**
+   * Live panels keyed by the canonical chart key — a `.pine` and its compiled
+   * `.py` share one form (both back the same sibling `.toml`), exactly like the
+   * chart. One panel per script.
+   */
   private readonly panels = new Map<string, vscode.WebviewPanel>();
 
   constructor(
@@ -34,10 +39,26 @@ export class InputsViewManager {
     private readonly output: vscode.OutputChannel
   ) {}
 
+  /**
+   * Close input forms whose script is no longer open in ANY editor tab (neither
+   * the `.pine` nor its `.py`) — the same lifetime rule as the chart. Closing
+   * only the form's own tab keeps nothing dormant; it just disposes.
+   */
+  reconcile(): void {
+    const live = openChartKeys();
+    for (const [key, panel] of [...this.panels]) {
+      if (!live.has(key)) panel.dispose();
+    }
+  }
+
   /** Open (or reveal) the input form for a `.py` Pyne script. */
   async open(scriptUri: vscode.Uri): Promise<void> {
     const scriptPath = scriptUri.fsPath;
-    const existing = this.panels.get(scriptPath);
+    const key = canonicalChartKey(scriptPath);
+    // A `.pine` and its `.py` are one script, so the label is the shared stem
+    // with no extension (like the chart tab).
+    const displayName = path.parse(key).name;
+    const existing = this.panels.get(key);
     if (existing) {
       existing.reveal();
       return;
@@ -66,23 +87,23 @@ export class InputsViewManager {
       return;
     }
 
-    const values = this.currentValues(scriptPath, inspect.inputs);
+    const values = inspect.values;
 
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist');
     const panel = vscode.window.createWebviewPanel(
       VIEW_TYPE,
-      `Inputs: ${path.basename(scriptPath)}`,
-      vscode.ViewColumn.Active,
+      `Inputs: ${displayName}`,
+      vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [distRoot] }
     );
-    this.panels.set(scriptPath, panel);
+    this.panels.set(key, panel);
     panel.onDidDispose(() => {
-      if (this.panels.get(scriptPath) === panel) this.panels.delete(scriptPath);
+      if (this.panels.get(key) === panel) this.panels.delete(key);
     });
     panel.webview.html = this.html(panel.webview, distRoot);
 
     const payload: InputsPayload = {
-      script: path.basename(scriptPath),
+      script: displayName,
       scriptType: inspect.scriptType,
       inputs: inspect.inputs,
       values,
@@ -93,77 +114,99 @@ export class InputsViewManager {
       if (msg.type === 'ready') {
         void panel.webview.postMessage({ type: 'data', payload });
       } else if (msg.type === 'save') {
-        try {
-          this.saveValues(scriptPath, msg.values, inspect.inputs);
-          void panel.webview.postMessage({ type: 'saved' });
-          void vscode.window.showInformationMessage(
-            `PyneIDE: saved inputs for ${path.basename(scriptPath)}.`
-          );
-        } catch (err) {
-          void panel.webview.postMessage({
-            type: 'error',
-            message: err instanceof Error ? err.message : String(err),
+        this.writeInputs(pythonBin, bridgeRoot, workdir.path, scriptPath, msg.values)
+          .then(() => {
+            void panel.webview.postMessage({ type: 'saved' });
+            void vscode.window.showInformationMessage(
+              `PyneIDE: saved inputs for ${displayName}.`
+            );
+          })
+          .catch((err: unknown) => {
+            void panel.webview.postMessage({
+              type: 'error',
+              message: err instanceof Error ? err.message : String(err),
+            });
           });
-        }
       }
     });
   }
 
-  /** Read current input values from the sibling `.toml`, defaulting to defval. */
-  private currentValues(scriptPath: string, specs: InputSpec[]): Record<string, InputValue> {
-    const tomlPath = scriptPath.replace(/\.py$/i, '.toml');
-    let saved: Record<string, InputValue> = {};
-    try {
-      saved = readInputValues(fs.readFileSync(tomlPath, 'utf8'));
-    } catch {
-      // No sibling toml yet — fall back to declared defaults below.
-    }
-    const values: Record<string, InputValue> = {};
-    for (const spec of specs) {
-      if (spec.name in saved) {
-        values[spec.name] = saved[spec.name];
-      } else if (spec.defval !== null) {
-        values[spec.name] = spec.defval;
-      }
-    }
-    return values;
-  }
-
-  private saveValues(
-    scriptPath: string,
-    values: Record<string, InputValue>,
-    specs: InputSpec[]
-  ): void {
-    const tomlPath = scriptPath.replace(/\.py$/i, '.toml');
-    let text = '';
-    try {
-      text = fs.readFileSync(tomlPath, 'utf8');
-    } catch {
-      // Missing toml — writeInputValues seeds a minimal [script] header.
-    }
-    fs.writeFileSync(tomlPath, writeInputValues(text, values, specs), 'utf8');
-  }
-
-  /** Spawn the bridge in `--inspect-inputs` mode and parse the `inputs` event. */
-  private inspect(
+  /** Spawn the bridge in `--inspect-inputs` mode: the fields AND the current
+   * values both come from pynecore (the values via its own toml loader). */
+  private async inspect(
     pythonBin: string,
     bridgeRoot: string,
     workdir: string,
     scriptPath: string
   ): Promise<InspectResult> {
+    const event = await this.oneShot(
+      pythonBin,
+      bridgeRoot,
+      workdir,
+      ['--inspect-inputs', scriptPath],
+      'inputs'
+    );
+    const inputs = (event.inputs as Array<InputSpec & { value?: InputValue | null }>) ?? [];
+    const values: Record<string, InputValue> = {};
+    for (const it of inputs) {
+      if (it.value !== null && it.value !== undefined) values[it.name] = it.value;
+    }
+    return {
+      inputs,
+      values,
+      scriptType: event.scriptType as string | undefined,
+      warning: (event.warning as string | null) ?? null,
+    };
+  }
+
+  /** Persist input values through the bridge's canonical writer (pynecore's
+   * `Script.save`) — the IDE never generates a second toml format. */
+  private async writeInputs(
+    pythonBin: string,
+    bridgeRoot: string,
+    workdir: string,
+    scriptPath: string,
+    values: Record<string, InputValue>
+  ): Promise<void> {
+    await this.oneShot(
+      pythonBin,
+      bridgeRoot,
+      workdir,
+      ['--write-inputs', scriptPath],
+      'written',
+      { values }
+    );
+  }
+
+  /**
+   * Run a one-shot bridge subcommand and resolve with the first `wantEvent`
+   * event (or reject on an `error` event). When `stdinJson` is given it is
+   * written to the child's stdin as JSON (used by `--write-inputs`).
+   */
+  private oneShot(
+    pythonBin: string,
+    bridgeRoot: string,
+    workdir: string,
+    extraArgs: string[],
+    wantEvent: string,
+    stdinJson?: unknown
+  ): Promise<Record<string, unknown>> {
     return new Promise((resolve, reject) => {
       const pythonPath = process.env.PYTHONPATH
         ? `${bridgeRoot}${path.delimiter}${process.env.PYTHONPATH}`
         : bridgeRoot;
       const child = spawn(
         pythonBin,
-        ['-X', 'utf8', '-m', 'pyneide_bridge', '--workdir', workdir, '--inspect-inputs', scriptPath],
+        ['-X', 'utf8', '-m', 'pyneide_bridge', '--workdir', workdir, ...extraArgs],
         {
           cwd: workdir,
           env: { ...process.env, PYTHONPATH: pythonPath, PYNE_WORK_DIR: workdir, PYTHONUNBUFFERED: '1' },
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [stdinJson !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         }
       );
+      if (stdinJson !== undefined && child.stdin) {
+        child.stdin.end(JSON.stringify(stdinJson));
+      }
 
       let settled = false;
       let stdoutBuf = '';
@@ -173,8 +216,8 @@ export class InputsViewManager {
         fn();
       };
 
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (chunk: string) => {
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (chunk: string) => {
         stdoutBuf += chunk;
         let nl: number;
         while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
@@ -187,29 +230,25 @@ export class InputsViewManager {
           } catch {
             continue;
           }
-          if (event.e === 'inputs') {
-            finish(() =>
-              resolve({
-                inputs: (event.inputs as InputSpec[]) ?? [],
-                scriptType: event.scriptType as string | undefined,
-                warning: (event.warning as string | null) ?? null,
-              })
-            );
+          if (event.e === wantEvent) {
+            finish(() => resolve(event));
           } else if (event.e === 'error') {
-            finish(() => reject(new Error(String(event.message ?? 'inspect failed'))));
+            finish(() => reject(new Error(String(event.message ?? `${wantEvent} failed`))));
           }
         }
       });
 
-      child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (chunk: string) => {
+      child.stderr?.setEncoding('utf8');
+      child.stderr?.on('data', (chunk: string) => {
         for (const line of chunk.split('\n')) {
-          if (line.trim()) this.output.appendLine(`[inspect-inputs] ${line}`);
+          if (line.trim()) this.output.appendLine(`[${extraArgs[0]}] ${line}`);
         }
       });
 
       child.on('error', (err) => finish(() => reject(err)));
-      child.on('close', () => finish(() => reject(new Error('inspect-inputs produced no result'))));
+      child.on('close', () =>
+        finish(() => reject(new Error(`${extraArgs[0]} produced no result`)))
+      );
     });
   }
 

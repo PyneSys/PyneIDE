@@ -71,7 +71,7 @@ export class ChartPanel {
     private readonly onSelectData: () => void,
     private readonly onWebviewClosed?: () => void
   ) {
-    this.title = `${path.basename(chartKey)} — Chart`;
+    this.title = `${path.parse(chartKey).name} — Chart`;
   }
 
   /**
@@ -443,6 +443,24 @@ export class ChartManager implements RunListener {
     }
     this.dataPreviews.add(filePath);
     panel.previewData(start, bars);
+  }
+
+  /** Open a persisted CSV + native viz-NDJSON result. The supplied events use
+   * the same protocol as a live run, so ChartPanel records/replays them without
+   * a separate rendering path. */
+  openOutputPreview(filePath: string, events: BridgeEvent[]): void {
+    let panel = this.panels.get(filePath);
+    if (!panel) {
+      panel = new ChartPanel(
+        this.context,
+        filePath,
+        () => {},
+        () => this.retirePreview(filePath)
+      );
+      this.panels.set(filePath, panel);
+    }
+    this.dataPreviews.add(filePath);
+    for (const event of events) panel.handleEvent(event);
   }
 
   private retirePreview(filePath: string): void {

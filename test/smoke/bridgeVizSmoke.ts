@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { execProcess } from '../../src/env/exec';
+import { buildOutputPreview, resolveOutputPair } from '../../src/data/outputPreview';
 import { managedVenvDir, pyneBinPath, venvPythonPath } from '../../src/env/uv';
 import { scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import {
@@ -283,6 +284,34 @@ function assertVizStream(events: BridgeEvent[]): void {
   log(`Viz stream OK: ${metas.size} metas, ${channelValues.size} color channels`);
 }
 
+function assertNativeVizFile(workdir: string, stem: string): void {
+  const file = path.join(workdir, 'output', `${stem}_viz.ndjson`);
+  if (!fs.existsSync(file)) fail(`native viz output missing: ${file}`);
+  const records = fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as { t?: string; id?: string; bars?: number });
+  if (records[0]?.t !== 'hdr') fail('native viz header missing');
+  if (records.at(-1)?.t !== 'end') fail('native viz end missing');
+  if (!records.some((record) => record.t === 'meta' && record.id === 'sma')) {
+    fail('native viz plot metadata missing');
+  }
+  if (!records.some((record) => record.t === 'bar')) fail('native viz bars missing');
+
+  const pair = resolveOutputPair(file);
+  if (!pair) fail('native viz/CSV pair was not resolved');
+  const preview = buildOutputPreview(pair);
+  if (preview.warnings.length) fail(`output preview warnings: ${preview.warnings.join('; ')}`);
+  if (!preview.events.some((event) => event.e === 'plotMeta')) fail('preview plot metadata missing');
+  if (!preview.events.some((event) => event.e === 'colors')) fail('preview colors missing');
+  const bars = preview.events.find((event) => event.e === 'bars');
+  if (!bars || bars.e !== 'bars' || !bars.d.length) fail('preview bars missing');
+  const end = preview.events.at(-1);
+  if (!end || end.e !== 'end' || end.cancelled) fail('preview end missing');
+  log(`Native viz file OK: ${records.length} NDJSON records`);
+}
+
 /**
  * F9B drawing journal assertions: every family present, the persistent
  * trend line accumulates per-bar updates, the doomed line's delete is
@@ -400,7 +429,10 @@ async function main(): Promise<void> {
 
   const { events, exitCode } = await runBridge(pythonBin, ws.workdir, 'viz_styles_demo');
   if (exitCode !== 0) fail(`bridge exit code ${exitCode}`);
-  if (capable) assertVizStream(events);
+  if (capable) {
+    assertVizStream(events);
+    assertNativeVizFile(ws.workdir, 'viz_styles_demo');
+  }
   else assertDegraded(events);
 
   if (capable) {

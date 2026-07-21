@@ -41,6 +41,9 @@ def main() -> int:
     parser.add_argument("--inspect-inputs", default=None, metavar="SCRIPT",
                         help="One-shot: import SCRIPT and print its collected input "
                              "declarations as JSON, without running it")
+    parser.add_argument("--write-inputs", default=None, metavar="SCRIPT",
+                        help="One-shot: read {name: value} JSON from stdin and persist it "
+                             "to SCRIPT's sibling .toml via pynecore's canonical writer")
     parser.add_argument("--data-only", action="store_true",
                         help="Stream the raw .ohlcv candles without running a script "
                              "(chart preview); ignores --script/--debugpy-port")
@@ -86,19 +89,9 @@ def main() -> int:
             })
             return 1
 
-    control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
-    # Publish for the debug proxy's run-to-bar evaluate (see control.request_runto).
-    control_module.ACTIVE_CONTROL = control
-    start_stdin_reader(control)
-
-    # SIGTERM/SIGINT stop the run at the next bar boundary so the runner's
-    # cleanup (stats CSV, security subprocess teardown) still executes.
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            signal.signal(sig, lambda *_: control.cancel())
-        except (ValueError, OSError):
-            pass
-
+    # inspect/write are one-shot and own stdin themselves (write reads the JSON
+    # values from it), so they run BEFORE the run Control's stdin reader would
+    # otherwise swallow it — same as --provider-service above.
     if args.inspect_inputs:
         from .runner import inspect_inputs
         try:
@@ -111,6 +104,32 @@ def main() -> int:
                 "traceback": traceback.format_exc(),
             })
             return 1
+
+    if args.write_inputs:
+        from .runner import write_inputs
+        try:
+            return write_inputs(args, emitter)
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+
+    control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
+    # Publish for the debug proxy's run-to-bar evaluate (see control.request_runto).
+    control_module.ACTIVE_CONTROL = control
+    start_stdin_reader(control)
+
+    # SIGTERM/SIGINT stop the run at the next bar boundary so the runner's
+    # cleanup (stats CSV, security subprocess teardown) still executes.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, lambda *_: control.cancel())
+        except (ValueError, OSError):
+            pass
 
     if not args.data:
         emitter.emit({"e": "error", "message": "--data is required for a run",
