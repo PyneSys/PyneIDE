@@ -391,6 +391,18 @@ export function registerWorkspaceView(context: vscode.ExtensionContext): PyneWor
         );
       }
     }),
+    vscode.commands.registerCommand('pyneide.workspace.revealInExplorer', (node?: PyneNode) => {
+      const uri = nodeUri(node);
+      if (uri) void vscode.commands.executeCommand('revealInExplorer', uri);
+    }),
+    vscode.commands.registerCommand('pyneide.dataDelete', (node?: PyneNode) => {
+      const uri = nodeUri(node);
+      if (uri) void deleteDataFile(uri);
+    }),
+    vscode.commands.registerCommand('pyneide.outputDelete', (node?: PyneNode) => {
+      const uri = nodeUri(node);
+      if (uri) void deleteOutputFile(uri);
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('pyneide.workdir')) refresh();
     }),
@@ -403,4 +415,47 @@ export function registerWorkspaceView(context: vscode.ExtensionContext): PyneWor
 function nodeUri(node?: PyneNode): vscode.Uri | undefined {
   if (node && node.type !== 'section') return node.uri;
   return undefined;
+}
+
+/**
+ * Delete an `.ohlcv` data file and its sibling `.toml` syminfo (to the OS
+ * trash), after a modal confirm. The FileSystemWatcher refreshes the tree.
+ */
+async function deleteDataFile(uri: vscode.Uri): Promise<void> {
+  const name = path.basename(uri.fsPath);
+  const choice = await vscode.window.showWarningMessage(
+    `Delete ${name} and its symbol info?`,
+    { modal: true, detail: 'The files are moved to the trash.' },
+    'Delete'
+  );
+  if (choice !== 'Delete') return;
+  await deleteToTrash(uri);
+  const tomlPath = uri.fsPath.replace(/\.ohlcv$/i, '.toml');
+  if (tomlPath !== uri.fsPath && fs.existsSync(tomlPath)) {
+    await deleteToTrash(vscode.Uri.file(tomlPath));
+  }
+}
+
+/** Delete an output file (to the OS trash) after a modal confirm. */
+async function deleteOutputFile(uri: vscode.Uri): Promise<void> {
+  const name = path.basename(uri.fsPath);
+  const choice = await vscode.window.showWarningMessage(
+    `Delete ${name}?`,
+    { modal: true, detail: 'The file is moved to the trash.' },
+    'Delete'
+  );
+  if (choice !== 'Delete') return;
+  await deleteToTrash(uri);
+}
+
+async function deleteToTrash(uri: vscode.Uri): Promise<void> {
+  try {
+    await vscode.workspace.fs.delete(uri, { useTrash: true });
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `PyneIDE: could not delete ${path.basename(uri.fsPath)} — ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 }

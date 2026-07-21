@@ -246,6 +246,23 @@
         "icon": "$(graph)"
       },
       {
+        "command": "pyneide.dataDelete",
+        "title": "Delete Data…",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyneide.outputDelete",
+        "title": "Delete",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyneide.workspace.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.editInputs",
         "title": "Edit Inputs…",
         "category": "PyneIDE",
@@ -381,6 +398,11 @@
           "group": "pyneide@4"
         },
         {
+          "command": "pyneide.workspace.revealInExplorer",
+          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneFile)",
+          "group": "9_reveal@1"
+        },
+        {
           "command": "pyneide.dataPreviewChart",
           "when": "view == pyneide.workspace && viewItem == pyneData",
           "group": "inline@1"
@@ -409,6 +431,26 @@
           "command": "pyneide.dataTruncate",
           "when": "view == pyneide.workspace && viewItem == pyneData",
           "group": "pyneide@4"
+        },
+        {
+          "command": "pyneide.workspace.revealInExplorer",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "9_reveal@1"
+        },
+        {
+          "command": "pyneide.dataDelete",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "9_reveal@2"
+        },
+        {
+          "command": "pyneide.workspace.revealInExplorer",
+          "when": "view == pyneide.workspace && viewItem == pyneOutput",
+          "group": "9_reveal@1"
+        },
+        {
+          "command": "pyneide.outputDelete",
+          "when": "view == pyneide.workspace && viewItem == pyneOutput",
+          "group": "9_reveal@2"
         }
       ]
     },
