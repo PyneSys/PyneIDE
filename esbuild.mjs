@@ -152,20 +152,35 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // Symbol-browser webview bundle: browser code, no vscode API.
+  const symbolBrowserCtx = await esbuild.context({
+    ...common,
+    entryPoints: ['src/data/webview/symbolBrowser.ts'],
+    outfile: 'dist/symbol-browser.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
     await webviewCtx.watch();
     await tableCtx.watch();
     await inputsCtx.watch();
+    await symbolBrowserCtx.watch();
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
     await webviewCtx.rebuild();
     await tableCtx.rebuild();
     await inputsCtx.rebuild();
+    await symbolBrowserCtx.rebuild();
     await ctx.dispose();
     await webviewCtx.dispose();
     await tableCtx.dispose();
     await inputsCtx.dispose();
+    await symbolBrowserCtx.dispose();
   }
 }

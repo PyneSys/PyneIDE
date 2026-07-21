@@ -14,7 +14,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import type { OhlcvMeta, TableOutMessage } from './messages';
-import { parseSymbolSection } from './syminfo';
+import { parseSymInfo } from './syminfo';
 
 /** Minimal read-only document: the .ohlcv is loaded straight from its uri. */
 class OhlcvDocument implements vscode.CustomDocument {
@@ -77,7 +77,8 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
     } catch {
       return meta; // no sibling toml — fall back to the raw records
     }
-    const sym = parseSymbolSection(text);
+    const full = parseSymInfo(text);
+    const sym = full.symbol;
     meta.description = sym.description;
     meta.ticker = sym.ticker;
     meta.currency = sym.currency;
@@ -87,6 +88,7 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
     meta.timezone = sym.timezone;
     meta.mintick = numOr(sym.mintick);
     meta.pricescale = numOr(sym.pricescale);
+    meta.full = full;
     return meta;
   }
 
@@ -127,6 +129,33 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
   }
   #tz-toggle:hover { background: var(--vscode-list-hoverBackground, #333); }
   #tz-toggle[hidden] { display: none; }
+  #info-toggle {
+    margin-top: 6px; display: inline-flex; align-items: center; gap: 4px;
+    background: none; border: none; cursor: pointer; padding: 0;
+    color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+    font-size: 11px; font-family: var(--vscode-font-family);
+  }
+  #info-toggle:hover { text-decoration: underline; }
+  #info-toggle[hidden] { display: none; }
+  #info-toggle .chev { display: inline-block; transition: transform .12s ease; }
+  #info-toggle.open .chev { transform: rotate(90deg); }
+  #syminfo-panel {
+    margin-top: 8px; display: none; gap: 18px 28px; flex-wrap: wrap;
+    font-size: 11px;
+  }
+  #syminfo-panel.open { display: flex; }
+  #syminfo-panel .group { min-width: 180px; }
+  #syminfo-panel .group h4 {
+    margin: 0 0 3px; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--vscode-descriptionForeground);
+    border-bottom: 1px solid var(--vscode-panel-border, #333); padding-bottom: 2px;
+  }
+  #syminfo-panel .kv-grid { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px; }
+  #syminfo-panel .kv-grid .k { color: var(--vscode-descriptionForeground); }
+  #syminfo-panel .kv-grid .v { font-variant-numeric: tabular-nums; word-break: break-word; }
+  #syminfo-panel table.hours { border-collapse: collapse; font-size: 11px; }
+  #syminfo-panel table.hours td { padding: 1px 10px 1px 0; white-space: nowrap; }
+  #syminfo-panel table.hours td.day { color: var(--vscode-descriptionForeground); }
   .grid-row {
     display: flex; align-items: center; height: 22px;
     font-size: 12px; font-variant-numeric: tabular-nums;
@@ -159,6 +188,8 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
 <div id="header">
   <div id="title">Loading…</div>
   <div id="subtitle"></div>
+  <button id="info-toggle" hidden><span class="chev">▸</span><span>Symbol info</span></button>
+  <div id="syminfo-panel"></div>
 </div>
 <div id="thead" class="grid-row">
   <div class="c-idx">#</div>

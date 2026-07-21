@@ -198,6 +198,12 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "pyneide.openSymbolBrowser",
+        "title": "Open Symbol Browser",
+        "category": "PyneIDE",
+        "icon": "$(search)"
+      },
+      {
         "command": "pyneide.workspace.runScript",
         "title": "Run Pyne code",
         "category": "PyneIDE",

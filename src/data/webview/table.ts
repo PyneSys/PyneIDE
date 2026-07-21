@@ -19,6 +19,8 @@ const vscode = acquireVsCodeApi();
 
 const titleEl = document.getElementById('title') as HTMLDivElement;
 const subtitleEl = document.getElementById('subtitle') as HTMLDivElement;
+const infoToggleEl = document.getElementById('info-toggle') as HTMLButtonElement;
+const syminfoPanelEl = document.getElementById('syminfo-panel') as HTMLDivElement;
 const thTimeEl = document.getElementById('th-time') as HTMLDivElement;
 const viewport = document.getElementById('viewport') as HTMLDivElement;
 const spacer = document.getElementById('spacer') as HTMLDivElement;
@@ -26,6 +28,8 @@ const windowEl = document.getElementById('window') as HTMLDivElement;
 const emptyEl = document.getElementById('empty') as HTMLDivElement;
 
 let view: DataView | undefined;
+/** Byte length of the loaded .ohlcv, for the file-stats panel. */
+let fileByteLength = 0;
 /** Record indices of the non-gap bars, in file order (virtual row -> record). */
 let positions = new Int32Array(0);
 let priceDecimals = 2;
@@ -67,6 +71,7 @@ function showError(message: string): void {
 
 function load(buffer: ArrayBuffer, meta: OhlcvMeta): void {
   view = new DataView(buffer);
+  fileByteLength = buffer.byteLength;
   const recordCount = Math.floor(buffer.byteLength / RECORD_SIZE);
 
   mintick = meta.mintick && meta.mintick > 0 ? meta.mintick : 0;
@@ -173,6 +178,105 @@ function renderHeader(meta: OhlcvMeta, recordCount: number): void {
   } else {
     thTimeEl.textContent = 'Time (UTC)';
   }
+
+  renderSymInfoPanel(meta, recordCount);
+}
+
+// --- expandable symbol-info panel -------------------------------------------
+
+interface Group {
+  title: string;
+  keys: string[];
+}
+const INFO_GROUPS: Group[] = [
+  { title: 'Identification', keys: ['prefix', 'ticker', 'description', 'type', 'currency', 'basecurrency', 'timezone'] },
+  { title: 'Pricing', keys: ['mintick', 'pricescale', 'minmove', 'pointvalue', 'mincontract', 'volumetype'] },
+  { title: 'Fees & spread', keys: ['avg_spread', 'taker_fee', 'maker_fee'] },
+  { title: 'Reference', keys: ['country', 'sector', 'industry', 'isin', 'expiration_date', 'current_contract'] },
+  {
+    title: 'Fundamentals',
+    keys: [
+      'employees', 'shareholders', 'shares_outstanding_total', 'shares_outstanding_float',
+      'target_price_average', 'target_price_high', 'target_price_low', 'target_price_median',
+      'recommendations_total', 'recommendations_buy', 'recommendations_hold', 'recommendations_sell',
+    ],
+  },
+];
+const DAY_NAMES = ['', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function renderSymInfoPanel(meta: OhlcvMeta, recordCount: number): void {
+  const groups: string[] = [];
+
+  // The file itself (always available, even without a .toml).
+  const first = positions.length ? recordTime(positions[0]) : undefined;
+  const last = positions.length ? recordTime(positions[positions.length - 1]) : undefined;
+  const gaps = recordCount - positions.length;
+  const fileRows: string[] = [];
+  fileRows.push(kv('bars', positions.length.toLocaleString('en-US')));
+  if (gaps > 0) fileRows.push(kv('gap-fills', gaps.toLocaleString('en-US')));
+  if (first !== undefined && last !== undefined) {
+    fileRows.push(kv('from', `${formatUtc(first)} UTC`));
+    fileRows.push(kv('to', `${formatUtc(last)} UTC`));
+  }
+  fileRows.push(kv('size', formatBytes(fileByteLength)));
+  if (meta.full?.provider) fileRows.push(kv('provider', meta.full.provider));
+  groups.push(groupHtml('File', fileRows));
+
+  const sym = meta.full?.symbol;
+  if (sym) {
+    for (const g of INFO_GROUPS) {
+      const rows: string[] = [];
+      for (const key of g.keys) {
+        const v = sym[key];
+        if (v === undefined || v === '') continue;
+        rows.push(kv(key, v));
+      }
+      if (rows.length) groups.push(groupHtml(g.title, rows));
+    }
+    const hours = hoursHtml(meta.full?.openingHours);
+    if (hours) groups.push(`<div class="group"><h4>Trading hours</h4>${hours}</div>`);
+  }
+
+  syminfoPanelEl.innerHTML = groups.join('');
+  infoToggleEl.hidden = false;
+  infoToggleEl.onclick = (): void => {
+    const open = syminfoPanelEl.classList.toggle('open');
+    infoToggleEl.classList.toggle('open', open);
+  };
+}
+
+function groupHtml(title: string, rows: string[]): string {
+  return `<div class="group"><h4>${title}</h4><div class="kv-grid">${rows.join('')}</div></div>`;
+}
+
+function kv(key: string, value: string): string {
+  return `<div class="k">${escapeHtml(key)}</div><div class="v">${escapeHtml(value)}</div>`;
+}
+
+function hoursHtml(
+  intervals: { day?: number; start?: string; end?: string }[] | undefined
+): string | undefined {
+  if (!intervals || intervals.length === 0) return undefined;
+  const rows: string[] = [];
+  for (const iv of intervals) {
+    const day = typeof iv.day === 'number' ? (DAY_NAMES[iv.day] ?? String(iv.day)) : '';
+    rows.push(
+      `<tr><td class="day">${escapeHtml(day)}</td>` +
+      `<td>${escapeHtml(hm(iv.start))} – ${escapeHtml(hm(iv.end))}</td></tr>`
+    );
+  }
+  return rows.length ? `<table class="hours">${rows.join('')}</table>` : undefined;
+}
+
+function hm(t: string | undefined): string {
+  if (!t) return '—';
+  return t.endsWith(':00') ? t.slice(0, 5) : t;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function updateTimeHeader(toggle: HTMLButtonElement): void {

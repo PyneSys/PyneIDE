@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import traceback
+from pathlib import Path
 
 
 def _hijack_stdout():
@@ -43,6 +44,10 @@ def main() -> int:
     parser.add_argument("--data-only", action="store_true",
                         help="Stream the raw .ohlcv candles without running a script "
                              "(chart preview); ignores --script/--debugpy-port")
+    parser.add_argument("--provider-service", action="store_true",
+                        help="Long-lived NDJSON RPC endpoint for the symbol browser "
+                             "(providers/brokers/symbols/syminfo/download); ignores "
+                             "--script/--data")
     parser.add_argument("--time-from", type=int, default=None,
                         help="Start of the run window (epoch seconds, UTC)")
     parser.add_argument("--time-to", type=int, default=None,
@@ -62,6 +67,25 @@ def main() -> int:
     emitter = Emitter(proto_stream)
     emitter.emit({"e": "hello", "protocol": PROTOCOL_VERSION, "pid": os.getpid()})
 
+    # PYNE_WORK_DIR keeps pynecore-internal workdir discovery consistent with
+    # the IDE's resolved workdir, whatever the folder is named.
+    os.environ.setdefault("PYNE_WORK_DIR", args.workdir)
+
+    if args.provider_service:
+        # The service owns stdin (its own RPC reader); no run Control here.
+        from .provider_service import ProviderService
+        try:
+            ProviderService(Path(args.workdir).resolve(), emitter).serve()
+            return 0
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+
     control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
     # Publish for the debug proxy's run-to-bar evaluate (see control.request_runto).
     control_module.ACTIVE_CONTROL = control
@@ -74,10 +98,6 @@ def main() -> int:
             signal.signal(sig, lambda *_: control.cancel())
         except (ValueError, OSError):
             pass
-
-    # PYNE_WORK_DIR keeps pynecore-internal workdir discovery consistent with
-    # the IDE's resolved workdir, whatever the folder is named.
-    os.environ.setdefault("PYNE_WORK_DIR", args.workdir)
 
     if args.inspect_inputs:
         from .runner import inspect_inputs

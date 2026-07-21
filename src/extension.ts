@@ -9,6 +9,7 @@ import { CompileService } from './compile/service';
 import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { buildOhlcvPreview } from './data/ohlcvPreview';
+import { SymbolBrowserPanel } from './data/symbolBrowserPanel';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
@@ -147,7 +148,10 @@ export function activate(context: vscode.ExtensionContext): void {
       if (uri) void inputsView.open(uri);
     }),
     vscode.commands.registerCommand('pyneide.dataDownloadWizard', () =>
-      dataDownloadWizard(context, manager, output)
+      openSymbolBrowser(context, manager, output)
+    ),
+    vscode.commands.registerCommand('pyneide.openSymbolBrowser', () =>
+      openSymbolBrowser(context, manager, output)
     ),
     vscode.commands.registerCommand('pyneide.dataUpdate', (node?: { uri?: vscode.Uri }) =>
       dataFileAction(manager, output, node, updateData)
@@ -165,10 +169,11 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * The multi-step download wizard (provider -> symbol -> timeframe -> range),
- * shelling out to `pyne data download`.
+ * Open the symbol browser (searchable list + live syminfo + inline download).
+ * If the provider service cannot start, the browser offers to fall back to the
+ * F9C QuickPick download wizard.
  */
-async function dataDownloadWizard(
+async function openSymbolBrowser(
   context: vscode.ExtensionContext,
   manager: EnvManager,
   output: vscode.OutputChannel
@@ -180,6 +185,31 @@ async function dataDownloadWizard(
     );
     return;
   }
+  const pythonBin = await manager.ensureReady(
+    'The symbol browser uses the pyne provider service, so the Python environment must be set up first.'
+  );
+  if (!pythonBin) return;
+  SymbolBrowserPanel.show(context, {
+    pythonBin,
+    bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+    workdir: workdir.path,
+    output,
+    onServiceUnavailable: () => void legacyDownloadWizard(context, manager, output),
+  });
+}
+
+/**
+ * The F9C multi-step QuickPick download wizard (provider -> symbol -> timeframe
+ * -> range), shelling out to `pyne data download`. Fallback when the provider
+ * service is unavailable.
+ */
+async function legacyDownloadWizard(
+  context: vscode.ExtensionContext,
+  manager: EnvManager,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) return;
   const pythonBin = await manager.ensureReady(
     'Downloading OHLCV data uses the pyne CLI, so the Python environment must be set up first.'
   );
