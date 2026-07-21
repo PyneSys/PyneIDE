@@ -33,9 +33,13 @@ def main() -> int:
     parser.add_argument("--script", default=None,
                         help="Pyne .py script (bare name resolves in workdir/scripts); "
                              "not required with --data-only")
-    parser.add_argument("--data", required=True,
-                        help=".ohlcv data file (bare name resolves in workdir/data)")
+    parser.add_argument("--data", default=None,
+                        help=".ohlcv data file (bare name resolves in workdir/data); "
+                             "not required with --inspect-inputs")
     parser.add_argument("--workdir", required=True, help="Resolved pyne workdir")
+    parser.add_argument("--inspect-inputs", default=None, metavar="SCRIPT",
+                        help="One-shot: import SCRIPT and print its collected input "
+                             "declarations as JSON, without running it")
     parser.add_argument("--data-only", action="store_true",
                         help="Stream the raw .ohlcv candles without running a script "
                              "(chart preview); ignores --script/--debugpy-port")
@@ -74,6 +78,24 @@ def main() -> int:
     # PYNE_WORK_DIR keeps pynecore-internal workdir discovery consistent with
     # the IDE's resolved workdir, whatever the folder is named.
     os.environ.setdefault("PYNE_WORK_DIR", args.workdir)
+
+    if args.inspect_inputs:
+        from .runner import inspect_inputs
+        try:
+            return inspect_inputs(args, emitter)
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+
+    if not args.data:
+        emitter.emit({"e": "error", "message": "--data is required for a run",
+                      "kind": "ValueError", "traceback": ""})
+        return 1
 
     if args.data_only:
         from .runner import run_data_only

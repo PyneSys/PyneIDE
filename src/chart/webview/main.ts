@@ -108,6 +108,10 @@ interface RunState {
   ended: boolean;
   /** plot index -> pane target, kept in sync with the metas */
   plotPane: Map<number, PaneTarget>;
+  /** Plot ids toggled off from the legend (webview-local, per-plot show/hide);
+   * a hidden plot is routed to the 'hidden' pane and dropped from every layer,
+   * without re-running the script. */
+  hidden: Set<string>;
   overlayIndicatorId?: string;
   paneIndicatorId?: string;
   overlayMarkersIndicatorId?: string;
@@ -253,9 +257,11 @@ function startRun(start: StartEvent): void {
     metaDirty: false,
     ended: false,
     plotPane: new Map(),
+    hidden: new Set(),
     showVolume: false,
   };
   renderTables();
+  renderLegend(state);
   const tables = document.getElementById('pyne-tables');
   if (tables) tables.innerHTML = '';
   const st = state;
@@ -347,7 +353,9 @@ function metaForKey(st: RunState, key: string): PlotMetaRecord | undefined {
 function assignPlotPanes(st: RunState): boolean {
   let changed = false;
   for (let i = 0; i < st.plotKeys.length; i++) {
-    const target = paneFor(metaForKey(st, st.plotKeys[i]), st.start.overlay);
+    const meta = metaForKey(st, st.plotKeys[i]);
+    const id = meta?.id ?? st.plotKeys[i];
+    const target = st.hidden.has(id) ? 'hidden' : paneFor(meta, st.start.overlay);
     if (st.plotPane.get(i) !== target) {
       st.plotPane.set(i, target);
       changed = true;
@@ -405,13 +413,13 @@ function rebuildPlotIndicators(st: RunState): void {
   // by the same pane rules (no force_overlay -> the script pane), ordered by
   // id for a stable figure layout.
   const hlines = [...st.plotMeta.values()]
-    .filter((m) => m.kind === 'hline')
+    .filter((m) => m.kind === 'hline' && !st.hidden.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
   const overlayHlines = hlines.filter((m) => paneFor(m, st.start.overlay) === 'overlay');
   const paneHlines = hlines.filter((m) => paneFor(m, st.start.overlay) === 'pane');
   // bgcolor also lives outside plotKeys (color channel only); same routing.
   const bgMetas = [...st.plotMeta.values()]
-    .filter((m) => m.kind === 'bgcolor')
+    .filter((m) => m.kind === 'bgcolor' && !st.hidden.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
   const overlayBg = bgMetas.filter((m) => paneFor(m, st.start.overlay) === 'overlay');
   const paneBg = bgMetas.filter((m) => paneFor(m, st.start.overlay) === 'pane');
@@ -470,7 +478,7 @@ function rebuildPlotIndicators(st: RunState): void {
   const overlayFills: FillItem[] = [];
   const paneFills: FillItem[] = [];
   const fillMetas = [...st.plotMeta.values()]
-    .filter((m) => m.kind === 'fill')
+    .filter((m) => m.kind === 'fill' && !st.hidden.has(m.id))
     .sort((a, b) => a.id.localeCompare(b.id));
   for (const m of fillMetas) {
     if (paneFor(m, st.start.overlay) === 'hidden') continue;
@@ -641,7 +649,7 @@ function rebuildPlotIndicators(st: RunState): void {
   // bars). Created BEFORE the overlay plots indicator: same zLevel, so the
   // paint order is creation order and the plot lines stay on top.
   const barcolorMetas = [...st.plotMeta.values()]
-    .filter((m) => m.kind === 'barcolor' && paneFor(m, true) !== 'hidden')
+    .filter((m) => m.kind === 'barcolor' && !st.hidden.has(m.id) && paneFor(m, true) !== 'hidden')
     .sort((a, b) => a.id.localeCompare(b.id));
   if (barcolorMetas.length) {
     registerIndicator({
@@ -858,6 +866,9 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
   el.style.cssText =
     `position:absolute;${tableAnchorCss(table.position)}` +
     'border-collapse:collapse;table-layout:auto;max-width:96%;max-height:96%;' +
+    // pointer-events limited to the table itself (the layer stays transparent
+    // to the mouse) so cell tooltips hover without stealing chart interaction.
+    'pointer-events:auto;' +
     `background:${table.bgcolor ?? 'transparent'};`;
   if (table.frame_color && (table.frame_width ?? 0) > 0) {
     el.style.border = `${table.frame_width}px solid ${table.frame_color}`;
@@ -900,12 +911,102 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
       // Pine cell width/height are % of the whole chart space; 0 = auto.
       if (cell?.width) td.style.width = `${(cell.width / 100) * paneW}px`;
       if (cell?.height) td.style.height = `${(cell.height / 100) * paneH}px`;
+      if (cell?.tooltip) td.title = cell.tooltip;
       td.textContent = cell?.text ?? '';
       tr.appendChild(td);
     }
     el.appendChild(tr);
   }
   return el;
+}
+
+// --- Legend: per-plot show/hide -------------------------------------------
+// A floating list of the script's plots (name + color + kind). Clicking a row
+// toggles that plot's visibility webview-locally: the plot is routed to the
+// 'hidden' pane and dropped from every layer on the next indicator rebuild, so
+// nothing re-runs and the accumulated bars/data stay put.
+
+interface LegendEntry {
+  id: string;
+  label: string;
+  kind: string;
+  color?: string;
+}
+
+const legendEl = ((): HTMLDivElement | null => {
+  const area = container?.parentElement;
+  if (!area) return null;
+  const el = document.createElement('div');
+  el.id = 'pyne-legend';
+  el.style.cssText =
+    'position:absolute;left:8px;top:8px;z-index:6;display:none;' +
+    'flex-direction:column;gap:1px;max-width:60%;max-height:60%;overflow:auto;' +
+    'font-size:11px;pointer-events:auto;user-select:none;';
+  area.appendChild(el);
+  return el;
+})();
+
+/** Collect one legend entry per plot id: every meta (plotcandle/plotbar's four
+ * columns share one id, so they collapse to one row) plus any plot column that
+ * arrived without a meta (pynecore < 6.6). */
+function legendEntries(st: RunState): LegendEntry[] {
+  const byId = new Map<string, LegendEntry>();
+  for (const meta of st.plotMeta.values()) {
+    byId.set(meta.id, { id: meta.id, label: meta.title ?? meta.id, kind: meta.kind, color: meta.color });
+  }
+  for (const key of st.plotKeys) {
+    if (metaForKey(st, key)) continue;
+    if (!byId.has(key)) byId.set(key, { id: key, label: key, kind: 'plot' });
+  }
+  return [...byId.values()];
+}
+
+/** Recompute panes and rebuild the plot indicators from the current `hidden`
+ * set, then reload the (retained) bars — no script re-run, no data reset. */
+function applyVisibility(st: RunState): void {
+  assignPlotPanes(st);
+  rebuildPlotIndicators(st);
+  st.chart.resetData();
+}
+
+function renderLegend(st: RunState): void {
+  if (!legendEl) return;
+  const entries = legendEntries(st);
+  if (entries.length === 0) {
+    legendEl.style.display = 'none';
+    legendEl.innerHTML = '';
+    return;
+  }
+  legendEl.style.display = 'flex';
+  legendEl.innerHTML = '';
+  for (const entry of entries) {
+    const off = st.hidden.has(entry.id);
+    const row = document.createElement('div');
+    row.style.cssText =
+      'display:flex;align-items:center;gap:5px;padding:1px 4px;cursor:pointer;border-radius:2px;' +
+      `opacity:${off ? '0.4' : '1'};` +
+      'background:var(--vscode-editorWidget-background, rgba(40,40,40,0.6));';
+    const swatch = document.createElement('span');
+    swatch.style.cssText =
+      'width:9px;height:9px;flex:0 0 auto;border-radius:2px;' +
+      `background:${entry.color ?? 'var(--vscode-foreground)'};` +
+      `${off ? 'outline:1px solid var(--vscode-descriptionForeground);' : ''}`;
+    const name = document.createElement('span');
+    name.textContent = entry.label;
+    name.style.cssText =
+      `color:var(--vscode-foreground);${off ? 'text-decoration:line-through;' : ''}` +
+      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    row.title = `${entry.label} (${entry.kind}) — click to ${off ? 'show' : 'hide'}`;
+    row.appendChild(swatch);
+    row.appendChild(name);
+    row.addEventListener('click', () => {
+      if (st.hidden.has(entry.id)) st.hidden.delete(entry.id);
+      else st.hidden.add(entry.id);
+      applyVisibility(st);
+      renderLegend(st);
+    });
+    legendEl.appendChild(row);
+  }
 }
 
 function ensureEquityIndicator(st: RunState): void {
@@ -981,6 +1082,7 @@ function uiTick(): void {
     if (paneChange || st.metaDirty) {
       st.metaDirty = false;
       rebuildPlotIndicators(st);
+      renderLegend(st);
     }
     ensureEquityIndicator(st);
     ensureDrawingIndicators(st);
@@ -1241,6 +1343,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         state.chart.resetData();
         state.chart.scrollToRealTime(0);
         rebuildPlotIndicators(state);
+        renderLegend(state);
         ensureEquityIndicator(state);
         ensureDrawingIndicators(state);
         renderDrawingTables(state);

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 798 781">
+  <path fill="currentColor" d="M7 506h63v119H7V506Z"/>
+  <path fill="currentColor" d="M88 388h63v237H88V388Z"/>
+  <path fill="currentColor" d="M168 270h63v355h-63V270Z"/>
+  <path fill="currentColor" d="M249 152h63v473h-63V152Zm81-118h63v575c0 5 1 11-1 16h-61c-2-5-1-12-1-17V34z"/>
+  <g fill="currentColor" opacity="0.4">
+    <path d="M410 34h63v591h-63z"/>
+    <path d="M491 152h63v473h-63z"/>
+    <path d="M572 270h63v355h-63z"/>
+    <path d="M652 388h63v237h-63z"/>
+    <path d="M733 506h63v119h-63z"/>
+    <path d="M331 625h61v117h-61z"/>
+    <path d="M410 625h62v117h-62z"/>
+  </g>
+</svg>

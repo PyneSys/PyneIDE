@@ -8,6 +8,7 @@ import { ChartManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
 import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
+import { buildOhlcvPreview } from './data/ohlcvPreview';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
@@ -23,12 +24,15 @@ import {
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
+import { downloadData, truncateData, updateData } from './run/dataSelect';
 import { RunService } from './run/runService';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
 import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
+import { InputsViewManager } from './workspace/inputsView';
+import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 
@@ -135,8 +139,120 @@ export function activate(context: vscode.ExtensionContext): void {
   // bundled server — there is no LSP middleware to rewrite through then.
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
 
+  registerWorkspaceView(context);
+  const inputsView = new InputsViewManager(context, manager, output);
+  context.subscriptions.push(
+    vscode.commands.registerCommand('pyneide.editInputs', (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
+      const uri = editInputsUri(arg);
+      if (uri) void inputsView.open(uri);
+    }),
+    vscode.commands.registerCommand('pyneide.dataDownloadWizard', () =>
+      dataDownloadWizard(context, manager, output)
+    ),
+    vscode.commands.registerCommand('pyneide.dataUpdate', (node?: { uri?: vscode.Uri }) =>
+      dataFileAction(manager, output, node, updateData)
+    ),
+    vscode.commands.registerCommand('pyneide.dataTruncate', (node?: { uri?: vscode.Uri }) =>
+      dataFileAction(manager, output, node, truncateData)
+    ),
+    vscode.commands.registerCommand('pyneide.dataPreviewChart', (node?: { uri?: vscode.Uri }) =>
+      previewDataChart(chartManager, node)
+    )
+  );
+
   void initialCheck(context, manager);
   void pineLs.initialize();
+}
+
+/**
+ * The multi-step download wizard (provider -> symbol -> timeframe -> range),
+ * shelling out to `pyne data download`.
+ */
+async function dataDownloadWizard(
+  context: vscode.ExtensionContext,
+  manager: EnvManager,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: no Pyne workspace found — initialize one first.'
+    );
+    return;
+  }
+  const pythonBin = await manager.ensureReady(
+    'Downloading OHLCV data uses the pyne CLI, so the Python environment must be set up first.'
+  );
+  if (!pythonBin) return;
+  await downloadData(context, workdir.path, pythonBin, output);
+}
+
+/**
+ * Resolve the script Uri for the "Edit inputs" command from a tree node, an
+ * explicit Uri (editor/title), or the active editor. Only `.py` Pyne scripts
+ * can be inspected (the bridge imports them); `.pine` must be compiled first.
+ */
+function editInputsUri(arg?: { uri?: vscode.Uri } | vscode.Uri): vscode.Uri | undefined {
+  let uri: vscode.Uri | undefined;
+  if (arg instanceof vscode.Uri) uri = arg;
+  else if (arg && arg.uri instanceof vscode.Uri) uri = arg.uri;
+  else uri = vscode.window.activeTextEditor?.document.uri;
+  if (!uri) return undefined;
+  if (!/\.py$/i.test(uri.fsPath)) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: input editing works on compiled .py Pyne scripts — compile the .pine first.'
+    );
+    return undefined;
+  }
+  return uri;
+}
+
+/**
+ * Data-item "Preview chart" action: decode the `.ohlcv` host-side and open a
+ * bars-only ChartPanel preview — no bridge run.
+ */
+function previewDataChart(chartManager: ChartManager, node: { uri?: vscode.Uri } | undefined): void {
+  const uri = node?.uri;
+  if (!uri) return;
+  try {
+    const { start, bars } = buildOhlcvPreview(uri.fsPath);
+    chartManager.openDataPreview(uri.fsPath, start, bars);
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `PyneIDE: could not preview data — ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/**
+ * Shared plumbing for the Data-item Update/Truncate actions: resolves the
+ * workdir and Python env, then runs `action` against the picked `.ohlcv` path.
+ */
+async function dataFileAction(
+  manager: EnvManager,
+  output: vscode.OutputChannel,
+  node: { uri?: vscode.Uri } | undefined,
+  action: (
+    workdir: string,
+    pythonBin: string,
+    ohlcvPath: string,
+    output: vscode.OutputChannel
+  ) => Promise<void>
+): Promise<void> {
+  const uri = node?.uri;
+  if (!uri) return;
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: no Pyne workspace found — initialize one first.'
+    );
+    return;
+  }
+  const pythonBin = await manager.ensureReady(
+    'Downloading OHLCV data uses the pyne CLI, so the Python environment must be set up first.'
+  );
+  if (!pythonBin) return;
+  await action(workdir.path, pythonBin, uri.fsPath, output);
 }
 
 async function initialCheck(

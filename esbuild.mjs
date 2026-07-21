@@ -140,17 +140,32 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // Input-form webview bundle: browser code, no vscode API.
+  const inputsCtx = await esbuild.context({
+    ...common,
+    entryPoints: ['src/workspace/webview/inputsForm.ts'],
+    outfile: 'dist/inputs-form.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
     await webviewCtx.watch();
     await tableCtx.watch();
+    await inputsCtx.watch();
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
     await webviewCtx.rebuild();
     await tableCtx.rebuild();
+    await inputsCtx.rebuild();
     await ctx.dispose();
     await webviewCtx.dispose();
     await tableCtx.dispose();
+    await inputsCtx.dispose();
   }
 }

@@ -184,6 +184,67 @@
         "title": "Run Controls",
         "category": "PyneIDE",
         "enablement": "pyneide.runActive"
+      },
+      {
+        "command": "pyneide.workspace.refresh",
+        "title": "Refresh",
+        "category": "PyneIDE",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pyneide.dataDownloadWizard",
+        "title": "Download Data…",
+        "category": "PyneIDE",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "pyneide.workspace.runScript",
+        "title": "Run Pyne code",
+        "category": "PyneIDE",
+        "icon": "$(play)"
+      },
+      {
+        "command": "pyneide.workspace.debugScript",
+        "title": "Debug Pyne code",
+        "category": "PyneIDE",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "pyneide.workspace.selectData",
+        "title": "Select Data…",
+        "category": "PyneIDE",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "pyneide.workspace.openTable",
+        "title": "Open as Table",
+        "category": "PyneIDE",
+        "icon": "$(table)"
+      },
+      {
+        "command": "pyneide.dataUpdate",
+        "title": "Update (continue)",
+        "category": "PyneIDE",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "pyneide.dataTruncate",
+        "title": "Truncate & Re-download…",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyneide.dataPreviewChart",
+        "title": "Preview Chart",
+        "category": "PyneIDE",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "pyneide.editInputs",
+        "title": "Edit Inputs…",
+        "category": "PyneIDE",
+        "icon": "$(settings-gear)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       }
     ],
     "menus": {
@@ -217,6 +278,11 @@
           "command": "pyneide.openChart",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "pyneide@4"
+        },
+        {
+          "command": "pyneide.editInputs",
+          "when": "pyneide.isPyneScript",
+          "group": "pyneide@5"
         }
       ],
       "editor/title/run": [
@@ -238,6 +304,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "pyneide.editInputs",
+          "when": "pyneide.isPyneScript",
+          "group": "navigation@3"
+        },
+        {
           "command": "pyneide.toggleChartFullscreen",
           "when": "activeWebviewPanelId == pyneideChart && !editorPartMaximizedEditorGroup",
           "group": "navigation@-100"
@@ -254,8 +325,113 @@
           "when": "debugType == pyne && pyneide.runActive",
           "group": "navigation@2"
         }
+      ],
+      "view/title": [
+        {
+          "command": "pyneide.workspace.refresh",
+          "when": "view == pyneide.workspace",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "pyneide.dataDownloadWizard",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.data",
+          "group": "inline@1"
+        },
+        {
+          "command": "pyneide.dataDownloadWizard",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.data",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.workspace.runScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "inline@1"
+        },
+        {
+          "command": "pyneide.workspace.debugScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "inline@2"
+        },
+        {
+          "command": "pyneide.workspace.runScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.workspace.debugScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.workspace.selectData",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "pyneide@3"
+        },
+        {
+          "command": "pyneide.editInputs",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "pyneide@4"
+        },
+        {
+          "command": "pyneide.dataPreviewChart",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "inline@1"
+        },
+        {
+          "command": "pyneide.dataUpdate",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "inline@2"
+        },
+        {
+          "command": "pyneide.dataPreviewChart",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.workspace.openTable",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.dataUpdate",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "pyneide@3"
+        },
+        {
+          "command": "pyneide.dataTruncate",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "pyneide@4"
+        }
       ]
     },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pyneide",
+          "title": "Pyne",
+          "icon": "./icons/pyne-view.svg"
+        }
+      ]
+    },
+    "views": {
+      "pyneide": [
+        {
+          "id": "pyneide.workspace",
+          "name": "Workspace",
+          "icon": "./icons/pyne-view.svg",
+          "contextualTitle": "Pyne"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "pyneide.workspace",
+        "when": "!pyneide.hasWorkdir",
+        "contents": "No Pyne workspace found in this folder.\n[Initialize Pyne Project](command:pyneide.createWorkspace)"
+      }
+    ],
     "breakpoints": [
       {
         "language": "python"
@@ -369,6 +545,12 @@
           "default": false,
           "scope": "resource",
           "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
+        },
+        "pyneide.promptInputs": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "Open the input form before running a Pyne script, so its inputs can be reviewed and edited first. When off, runs use the values already saved in the script's `.toml`."
         },
         "pyneide.debug.justMyCode": {
           "type": "boolean",

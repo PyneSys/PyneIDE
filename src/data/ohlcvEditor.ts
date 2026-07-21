@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import type { OhlcvMeta, TableOutMessage } from './messages';
+import { parseSymbolSection } from './syminfo';
 
 /** Minimal read-only document: the .ohlcv is loaded straight from its uri. */
 class OhlcvDocument implements vscode.CustomDocument {
@@ -182,41 +183,4 @@ function numOr(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
   return Number.isFinite(n) ? n : undefined;
-}
-
-/**
- * Pull the flat `key = value` pairs from the `[symbol]` table of a syminfo
- * toml. Deliberately tiny (VSCode ships no toml parser): handles quoted
- * strings, bare numbers, and `#`-commented lines — enough for the header, not a
- * general toml parser.
- */
-function parseSymbolSection(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  let inSymbol = false;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    if (line.startsWith('[')) {
-      inSymbol = line === '[symbol]';
-      continue;
-    }
-    if (!inSymbol) continue;
-    const eq = line.indexOf('=');
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    // Strip an inline comment outside of quotes.
-    if (!value.startsWith('"') && !value.startsWith("'")) {
-      const hash = value.indexOf('#');
-      if (hash >= 0) value = value.slice(0, hash).trim();
-    }
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
-  }
-  return out;
 }

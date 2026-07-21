@@ -256,6 +256,78 @@ def _resolve_data(workdir: Path, data_arg: str) -> Path:
     return data
 
 
+def _serialize_input(name: str, data: Any) -> dict[str, Any]:
+    """Serialize one pynecore ``InputData`` to a JSON-safe dict for the IDE's
+    input form. ``defval``/``options`` are coerced through ``sanitize`` (Color
+    and enum members become their string form); the ``__global__`` suffix the
+    strict-mode registry appends is stripped from the name."""
+    def _san_opt(opt: Any) -> Any:
+        return sanitize(opt)
+
+    options = getattr(data, "options", None)
+    return {
+        "name": name.removesuffix("__global__"),
+        "id": getattr(data, "id", None),
+        "type": getattr(data, "input_type", None),
+        "title": getattr(data, "title", None),
+        "defval": sanitize(getattr(data, "defval", None)),
+        "minval": num_or_none(getattr(data, "minval", None)),
+        "maxval": num_or_none(getattr(data, "maxval", None)),
+        "step": num_or_none(getattr(data, "step", None)),
+        "options": [_san_opt(o) for o in options] if options else None,
+        "group": getattr(data, "group", None),
+        "inline": getattr(data, "inline", None),
+        "tooltip": getattr(data, "tooltip", None),
+    }
+
+
+def inspect_inputs(args: Any, emitter: Emitter) -> int:
+    """One-shot: import the script far enough for its ``input.*`` registrations
+    to run (they are evaluated as ``main``'s default arguments, i.e. at import
+    time — never inside ``main``'s body), then emit the collected InputData list
+    as a single ``inputs`` event. The script's ``main`` is NOT executed.
+
+    Toml persistence is disabled for the import so inspecting never rewrites the
+    sibling ``<script>.toml``.
+    """
+    import os
+
+    from pynecore.core.script_runner import import_script
+
+    workdir = Path(args.workdir).resolve()
+    script = _resolve_script(workdir, args.inspect_inputs)
+
+    # Library scripts import their deps from workdir/scripts/lib (like run()).
+    lib_dir = workdir / "scripts" / "lib"
+    if lib_dir.is_dir():
+        sys.path.insert(0, str(lib_dir))
+
+    os.environ["PYNE_SAVE_SCRIPT_TOML"] = "0"
+
+    module = import_script(script)
+    main = getattr(module, "main", None)
+    script_obj = getattr(main, "script", None)
+    if script_obj is None:
+        emitter.emit({
+            "e": "inputs",
+            "script": str(script),
+            "inputs": [],
+            "warning": "Script has no @script decorator on main(); no inputs collected.",
+        })
+        return 0
+
+    inputs = getattr(script_obj, "inputs", {}) or {}
+    serialized = [_serialize_input(name, data) for name, data in inputs.items() if name]
+    emitter.emit({
+        "e": "inputs",
+        "script": str(script),
+        "scriptType": _script_type_name(script_obj),
+        "inputs": serialized,
+        "warning": None,
+    })
+    return 0
+
+
 def run(args: Any, emitter: Emitter, control: Control) -> int:
     """Execute the script run; returns the process exit code."""
     from pynecore.core.aggregator import validate_aggregation

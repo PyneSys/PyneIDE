@@ -68,9 +68,32 @@ export class ChartPanel {
   constructor(
     private readonly context: vscode.ExtensionContext,
     chartKey: string,
-    private readonly onSelectData: () => void
+    private readonly onSelectData: () => void,
+    private readonly onWebviewClosed?: () => void
   ) {
     this.title = `${path.basename(chartKey)} — Chart`;
+  }
+
+  /**
+   * Show a bars-only preview of an `.ohlcv` file (no run): install the
+   * host-built snapshot and replay it. The webview replays `snap` on its
+   * `ready` message, so a fresh panel needs no extra push here.
+   */
+  previewData(start: StartEvent, bars: BarRow[]): void {
+    this.snap = {
+      start,
+      bars,
+      plotKeys: [],
+      plotMeta: new Map(),
+      colors: [],
+      drawings: new Map(),
+      trades: [],
+      openTrades: [],
+      stats: undefined,
+      ended: { bars: bars.length, cancelled: false },
+    };
+    this.reveal();
+    if (this.ready) this.replayFromSnapshot();
   }
 
   /**
@@ -169,6 +192,7 @@ export class ChartPanel {
       // chart replays the snapshot. Closing the tab is not "delete the chart".
       this.panel = undefined;
       this.ready = false;
+      this.onWebviewClosed?.();
     });
   }
 
@@ -376,6 +400,9 @@ export class ChartPanel {
  */
 export class ChartManager implements RunListener {
   private readonly panels = new Map<string, ChartPanel>();
+  /** Data-preview panels keyed by `.ohlcv` path: kept alive by their own
+   * webview (not an editor tab), retired when that webview is closed. */
+  private readonly dataPreviews = new Set<string>();
   /** Set by the host: invoked when a panel's Data button is clicked, with the
    * script's chart key, to re-pick and reload that chart's data. */
   onSelectData: ((chartKey: string) => void) | undefined;
@@ -398,6 +425,31 @@ export class ChartManager implements RunListener {
     return this.panels.has(chartKey);
   }
 
+  /**
+   * Open (or focus) a bars-only chart preview of an `.ohlcv` file, keyed by its
+   * path. The preview panel is kept alive by its own webview; closing that tab
+   * retires it (unlike a script chart, there is no snapshot to preserve).
+   */
+  openDataPreview(filePath: string, start: StartEvent, bars: BarRow[]): void {
+    let panel = this.panels.get(filePath);
+    if (!panel) {
+      panel = new ChartPanel(
+        this.context,
+        filePath,
+        () => {},
+        () => this.retirePreview(filePath)
+      );
+      this.panels.set(filePath, panel);
+    }
+    this.dataPreviews.add(filePath);
+    panel.previewData(start, bars);
+  }
+
+  private retirePreview(filePath: string): void {
+    this.dataPreviews.delete(filePath);
+    this.closeChart(filePath);
+  }
+
   /** Open (or focus) a script's chart panel on demand — used by "Open chart". */
   reveal(chartKey: string): ChartPanel {
     const panel = this.panelFor(chartKey);
@@ -414,7 +466,9 @@ export class ChartManager implements RunListener {
   reconcile(): void {
     const live = openChartKeys();
     for (const key of [...this.panels.keys()]) {
-      if (!live.has(key) && !this.isPinned?.(key)) this.closeChart(key);
+      if (!live.has(key) && !this.dataPreviews.has(key) && !this.isPinned?.(key)) {
+        this.closeChart(key);
+      }
     }
   }
 
