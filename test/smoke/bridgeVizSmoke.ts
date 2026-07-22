@@ -13,7 +13,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { execProcess } from '../../src/env/exec';
-import { buildOutputPreview, resolveOutputPair } from '../../src/data/outputPreview';
+import {
+  buildOutputPreview,
+  resolveOutputPair,
+  resolveScriptOutputPair,
+} from '../../src/data/outputPreview';
 import { managedVenvDir, pyneBinPath, venvPythonPath } from '../../src/env/uv';
 import { scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import {
@@ -291,8 +295,10 @@ function assertNativeVizFile(workdir: string, stem: string): void {
     .readFileSync(file, 'utf8')
     .split('\n')
     .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as { t?: string; id?: string; bars?: number });
+    .map((line) => JSON.parse(line) as { t?: string; id?: string; bars?: number; data?: string });
   if (records[0]?.t !== 'hdr') fail('native viz header missing');
+  const dataPath = fs.realpathSync(path.join(workdir, 'data', 'demo.ohlcv'));
+  if (records[0]?.data !== dataPath) fail('native viz source data path missing');
   if (records.at(-1)?.t !== 'end') fail('native viz end missing');
   if (!records.some((record) => record.t === 'meta' && record.id === 'sma')) {
     fail('native viz plot metadata missing');
@@ -301,8 +307,14 @@ function assertNativeVizFile(workdir: string, stem: string): void {
 
   const pair = resolveOutputPair(file);
   if (!pair) fail('native viz/CSV pair was not resolved');
+  const scriptPair = resolveScriptOutputPair(workdir, path.join(workdir, 'scripts', `${stem}.py`));
+  if (!scriptPair || scriptPair.plot !== pair.plot || scriptPair.viz !== pair.viz) {
+    fail('script did not resolve to its native viz/CSV output pair');
+  }
   const preview = buildOutputPreview(pair);
   if (preview.warnings.length) fail(`output preview warnings: ${preview.warnings.join('; ')}`);
+  const start = preview.events[0];
+  if (start.e !== 'start' || start.data !== dataPath) fail('preview source data path missing');
   if (!preview.events.some((event) => event.e === 'plotMeta')) fail('preview plot metadata missing');
   if (!preview.events.some((event) => event.e === 'colors')) fail('preview colors missing');
   const bars = preview.events.find((event) => event.e === 'bars');

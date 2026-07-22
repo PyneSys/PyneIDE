@@ -10,6 +10,7 @@
  * plot column are harmless; the webview already drops/falls back for them.
  */
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 import type {
   BarRow,
@@ -24,6 +25,7 @@ import type {
 
 interface NativeRecord {
   t?: string;
+  data?: string;
   id?: string | number;
   kind?: string;
   time?: number;
@@ -47,6 +49,17 @@ export interface OutputPair {
 export interface OutputPreview {
   events: BridgeEvent[];
   warnings: string[];
+}
+
+/** Resolve the persisted output pair belonging to a script. Runner output is
+ * keyed by the runnable script's stem, which is shared by a Pine source and
+ * its compiled Python sibling. */
+export function resolveScriptOutputPair(
+  workdir: string,
+  scriptPath: string
+): OutputPair | undefined {
+  const plot = path.join(workdir, 'output', `${path.parse(scriptPath).name}.csv`);
+  return resolveOutputPair(plot);
 }
 
 /** Resolve either member of a plot/viz pair; undefined means it is an ordinary
@@ -154,7 +167,7 @@ function drawingEvents(record: NativeRecord | undefined): DrawingEventRecord[] {
   return events;
 }
 
-export function buildOutputPreview(pair: OutputPair): OutputPreview {
+export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputPreview {
   const warnings: string[] = [];
   const records: NativeRecord[] = [];
   const lines = fs.readFileSync(pair.viz, 'utf8').split(/\r?\n/);
@@ -221,7 +234,10 @@ export function buildOutputPreview(pair: OutputPair): OutputPreview {
     scriptType: script.type === 'strategy' ? 'strategy' : 'indicator',
     overlay: script.overlay === true,
     syminfo,
-    data: pair.plot,
+    // New bridge output persists the exact OHLCV path in the viz header. For
+    // older files, script-owned callers supply the IDE's persisted data
+    // binding; generic orphan previews retain the plot path as a fallback.
+    data: (typeof hdr?.data === 'string' && hdr.data) || dataPath || pair.plot,
     range: { from, to, bars: bars.length },
     outputs: {
       plot: pair.plot,

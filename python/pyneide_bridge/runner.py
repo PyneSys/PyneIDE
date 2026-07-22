@@ -24,6 +24,22 @@ FLUSH_AGE_SECONDS = 0.1
 _MISSING = object()
 
 
+def _make_viz_writer(path: Path, data_path: Path) -> Any:
+    """Create pynecore's native writer with an IDE-owned source-data field in
+    the header. Keeping this tiny extension in the bridge lets persisted chart
+    output identify its exact OHLCV input without changing pynecore's public
+    ScriptRunner API."""
+    from pynecore.core.viz import VizWriter
+
+    class _DataPathVizWriter(VizWriter):
+        def _emit(self, obj: dict) -> None:
+            if obj.get("t") == "hdr":
+                obj = {**obj, "data": str(data_path)}
+            super()._emit(obj)
+
+    return _DataPathVizWriter(path)
+
+
 def _scrub_nonfinite(obj: Any) -> Any:
     """Replace non-finite floats with None recursively (the emitter dumps
     with allow_nan=False; NaN is pynecore's na, None is its wire form)."""
@@ -505,6 +521,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
             script, ohlcv_iter, syminfo,
             **runner_kwargs,
         )
+        if viz_supported:
+            runner.viz_writer = _make_viz_writer(viz_path, data_path)
 
         is_strategy = _script_type_name(runner.script) == "strategy"
         emitter.emit({

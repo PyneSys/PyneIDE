@@ -22,6 +22,7 @@ import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartManager } from '../chart/chartPanel';
 import type { CompileService } from '../compile/service';
 import { mapTracebackFrames } from '../compile/sourcemap';
+import { buildOutputPreview, resolveScriptOutputPair } from '../data/outputPreview';
 import type { DebugBreakpointControl } from '../debug/dapProxy';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
@@ -208,8 +209,8 @@ export class RunService {
     return this.activeChartKey === chartKey || this.previewRuns.has(chartKey);
   }
 
-  /** Resolve the pieces every chart/data action needs: the script doc, its
-   * workdir, and a ready Python interpreter. Undefined if anything is missing. */
+  /** Resolve the pieces actions that spawn a data preview need. Persisted
+   * output loading deliberately does not require the Python environment. */
   private async resolveChartContext(
     uri?: vscode.Uri
   ): Promise<{ doc: vscode.TextDocument; workdir: string; pythonBin: string } | undefined> {
@@ -246,33 +247,66 @@ export class RunService {
   }
 
   /**
-   * Open (or focus) a script's chart and load its bound data as raw candles,
-   * before any run. First run for the script with no remembered data opens the
-   * picker; afterwards it loads silently.
+   * Open a script's chart from its persisted CSV + visualization NDJSON.
+   * Disk is authoritative whenever no run is actively streaming to this
+   * chart, so this works after extension reload and never depends on a dormant
+   * in-memory snapshot. Before the first run (no output pair yet), fall back to
+   * the bound OHLCV data as a bars-only preview.
    */
   async openChart(uri?: vscode.Uri): Promise<void> {
-    const ctx = await this.resolveChartContext(uri);
-    if (!ctx) return;
-    const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
-    // An existing chart (dormant after a close, or already visible) just replays
-    // its snapshot — that IS the persistence: reopening shows what was there,
-    // never a fresh preview that would wipe a finished run's result.
-    if (this.chartManager?.hasChart(chartKey)) {
-      this.chartManager.reveal(chartKey);
+    const doc = await this.resolveDocument(uri);
+    if (!doc) return;
+    if (doc.languageId !== 'pine' && doc.languageId !== 'python') {
+      void vscode.window.showWarningMessage('PyneIDE: open a Pyne (.py) or Pine (.pine) script.');
       return;
     }
-    // Fresh chart: load the bound data as a raw-candle preview.
-    let data = getRememberedData(this.context, ctx.workdir, chartKey);
+    const workdir = await this.resolveOrInitWorkdir(doc, doc.uri.fsPath);
+    if (!workdir) return;
+    const chartKey = canonicalChartKey(doc.uri.fsPath);
+
+    // While a run is live, its stream is newer than the files being written.
+    // Keep showing that transient state; the next idle click reloads from disk.
+    if (this.activeChartKey === chartKey) {
+      this.chartManager?.reveal(chartKey);
+      return;
+    }
+
+    const rememberedData = getRememberedData(this.context, workdir, chartKey);
+    const dataPath = rememberedData
+      ? path.join(workdir, 'data', `${rememberedData}.ohlcv`)
+      : undefined;
+    const pair = resolveScriptOutputPair(workdir, doc.uri.fsPath);
+    if (pair) {
+      this.supersedePreview(chartKey);
+      try {
+        const preview = buildOutputPreview(pair, dataPath);
+        this.chartManager?.openOutputPreview(chartKey, preview.events);
+        if (preview.warnings.length) {
+          void vscode.window.showWarningMessage(
+            `PyneIDE: chart opened with ${preview.warnings.length} ignored output record(s).`
+          );
+        }
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `PyneIDE: could not open saved chart — ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+      return;
+    }
+
+    const pythonBin = await this.manager.ensureReady(
+      'Previewing OHLCV data needs the Python environment. Set it up now?'
+    );
+    if (!pythonBin) return;
+    let data = rememberedData;
     if (!data) {
-      data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
+      data = await pickRunData(this.context, workdir, chartKey, pythonBin, this.output);
     }
     if (!data) return;
     this.chartManager?.reveal(chartKey);
-    // A run already streaming to this chart owns it — don't fight it with a
-    // preview; the new data still takes effect on the next run.
-    if (this.activeChartKey !== chartKey) {
-      this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
-    }
+    this.startPreview(chartKey, workdir, pythonBin, data);
   }
 
   /**

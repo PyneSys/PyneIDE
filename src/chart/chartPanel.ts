@@ -480,11 +480,6 @@ export class ChartManager implements RunListener {
     // The 'end' event already closed out the chart state.
   }
 
-  /** Whether a (possibly dormant) chart exists for this key. */
-  hasChart(chartKey: string): boolean {
-    return this.panels.has(chartKey);
-  }
-
   /** Whether this script's chart tab is currently open. */
   hasOpenChart(chartKey: string): boolean {
     return this.panels.get(chartKey)?.isOpen() === true;
@@ -515,6 +510,16 @@ export class ChartManager implements RunListener {
    * the same protocol as a live run, so ChartPanel records/replays them without
    * a separate rendering path. */
   openOutputPreview(chartKey: string, events: BridgeEvent[]): void {
+    // A persisted output that resolves back to a script is a normal script
+    // chart: in particular, its Data button must retain the real picker
+    // callback. Only orphan output files use the self-owned preview lifecycle.
+    if (isChartablePath(chartKey)) {
+      this.dataPreviews.delete(chartKey);
+      const panel = this.panelFor(chartKey);
+      for (const event of events) panel.handleEvent(event);
+      return;
+    }
+
     let panel = this.panels.get(chartKey);
     if (!panel) {
       panel = new ChartPanel(
