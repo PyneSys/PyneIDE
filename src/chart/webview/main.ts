@@ -15,6 +15,7 @@ import {
   init,
   dispose,
   registerIndicator,
+  registerOverlay,
   utils,
   type Chart,
   type KLineData,
@@ -67,6 +68,124 @@ const vscode = acquireVsCodeApi();
 
 const UI_TICK_MS = 400;
 const MAX_TRADE_ANNOTATIONS = 2000;
+const MEASURE_OVERLAY_NAME = 'PyneMeasure';
+
+function formatMeasureDuration(durationMs: number): string {
+  let seconds = Math.max(0, Math.round(durationMs / 1000));
+  const days = Math.floor(seconds / 86400);
+  seconds -= days * 86400;
+  const hours = Math.floor(seconds / 3600);
+  seconds -= hours * 3600;
+  const minutes = Math.floor(seconds / 60);
+  seconds -= minutes * 60;
+
+  const parts: string[] = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes && parts.length < 2) parts.push(`${minutes}m`);
+  if (seconds && parts.length < 2) parts.push(`${seconds}s`);
+  return parts.slice(0, 2).join(' ') || '0s';
+}
+
+registerOverlay({
+  name: MEASURE_OVERLAY_NAME,
+  totalStep: 3,
+  needDefaultPointFigure: true,
+  needDefaultXAxisFigure: true,
+  needDefaultYAxisFigure: true,
+  mode: 'weak_magnet',
+  modeSensitivity: 8,
+  createPointFigures: ({ chart, overlay, coordinates, bounding }) => {
+    if (coordinates.length < 2) return [];
+
+    const [a, b] = coordinates;
+    const [start, end] = overlay.points;
+    const startValue = start?.value;
+    const endValue = end?.value;
+    if (typeof startValue !== 'number' || typeof endValue !== 'number') return [];
+
+    const rising = endValue >= startValue;
+    const color = rising ? '#26a69a' : '#ef5350';
+    const fill = rising ? 'rgba(38, 166, 154, 0.14)' : 'rgba(239, 83, 80, 0.14)';
+    const pricePrecision = chart.getSymbol()?.pricePrecision ?? 2;
+    const delta = endValue - startValue;
+    const percent = startValue === 0 ? undefined : (delta / startValue) * 100;
+    const deltaText = `${delta >= 0 ? '+' : ''}${delta.toFixed(pricePrecision)}`;
+    const percentText = percent === undefined
+      ? '—'
+      : `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
+
+    const startIndex = typeof start.dataIndex === 'number' ? Math.round(start.dataIndex) : undefined;
+    const endIndex = typeof end.dataIndex === 'number' ? Math.round(end.dataIndex) : undefined;
+    const bars = startIndex === undefined || endIndex === undefined
+      ? undefined
+      : Math.abs(endIndex - startIndex);
+    const startTs = typeof start.timestamp === 'number'
+      ? start.timestamp
+      : startIndex === undefined ? undefined : chart.getDataList()[startIndex]?.timestamp;
+    const endTs = typeof end.timestamp === 'number'
+      ? end.timestamp
+      : endIndex === undefined ? undefined : chart.getDataList()[endIndex]?.timestamp;
+    const duration = startTs === undefined || endTs === undefined
+      ? undefined
+      : formatMeasureDuration(Math.abs(endTs - startTs));
+    const rangeText = [bars === undefined ? undefined : `${bars} bars`, duration]
+      .filter((part): part is string => !!part)
+      .join(' · ');
+    const label = `${deltaText} (${percentText})${rangeText ? ` · ${rangeText}` : ''}`;
+
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    const width = Math.abs(b.x - a.x);
+    const height = Math.abs(b.y - a.y);
+    const midX = Math.min(Math.max((a.x + b.x) / 2, 4), Math.max(4, bounding.width - 4));
+    const labelAbove = y >= 28;
+
+    return [
+      {
+        type: 'rect',
+        attrs: { x, y, width, height },
+        styles: {
+          style: 'stroke_fill',
+          color: fill,
+          borderColor: color,
+          borderSize: 1,
+          borderStyle: 'dashed',
+          borderDashedValue: [4, 3],
+        },
+      },
+      {
+        type: 'line',
+        attrs: { coordinates: [a, b] },
+        styles: { color, size: 1, style: 'solid' },
+      },
+      {
+        type: 'text',
+        attrs: {
+          x: midX,
+          y: labelAbove ? y - 4 : y + 4,
+          text: label,
+          align: 'center',
+          baseline: labelAbove ? 'bottom' : 'top',
+        },
+        styles: {
+          style: 'stroke_fill',
+          color: '#ffffff',
+          size: 11,
+          backgroundColor: color,
+          borderColor: color,
+          borderSize: 1,
+          borderRadius: 3,
+          paddingLeft: 5,
+          paddingTop: 3,
+          paddingRight: 5,
+          paddingBottom: 3,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+});
 
 const PLOT_COLORS = [
   '#2962ff',
@@ -214,6 +333,9 @@ function rowToBar(row: BarRow): PyneBar {
 }
 
 function startRun(start: StartEvent): void {
+  measureOverlayId = undefined;
+  measureDrawing = false;
+  tbMeasureEl?.classList.remove('active');
   if (state) {
     dispose(state.chart);
   }
@@ -1258,11 +1380,12 @@ tabBodyEl?.addEventListener('click', (event) => {
   if (ts > 0) state?.chart.scrollToTimestamp(ts, 200);
 });
 
-// --- Top toolbar: data / layers / go-to-date / CSV -------------------------
+// --- Top toolbar: data / layers / measure / go-to-date / CSV ---------------
 // Elements are absent in standalone test harnesses; every access is guarded.
 
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
+const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
 const gotoPopupEl = document.getElementById('goto-popup') as HTMLDivElement | null;
 const tbGotoInputEl = document.getElementById('tb-goto-input') as HTMLInputElement | null;
@@ -1281,6 +1404,7 @@ function dataLabel(dataPath?: string): string {
 function syncToolbar(): void {
   const st = state;
   if (tbDataEl) tbDataEl.textContent = dataLabel(st?.start.data);
+  if (tbMeasureEl) tbMeasureEl.disabled = !st;
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
     const hasTrades = st?.ended === true && st.trades.length > 0 && !!st.start.outputs.trades;
@@ -1295,6 +1419,55 @@ tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   togglePlotsPopup();
+});
+
+let measureOverlayId: string | undefined;
+let measureDrawing = false;
+
+function clearMeasureState(): void {
+  measureOverlayId = undefined;
+  measureDrawing = false;
+  tbMeasureEl?.classList.remove('active');
+}
+
+function removeMeasurement(): void {
+  const st = state;
+  const id = measureOverlayId;
+  clearMeasureState();
+  if (st && id) st.chart.removeOverlay({ id });
+}
+
+function toggleMeasureDrawing(): void {
+  if (measureOverlayId) {
+    removeMeasurement();
+    return;
+  }
+  const st = state;
+  if (!st) return;
+  closePlotsPopup();
+  closeGotoPopup();
+  const id = st.chart.createOverlay({
+    name: MEASURE_OVERLAY_NAME,
+    paneId: 'candle_pane',
+    onDrawEnd: ({ overlay }) => {
+      if (overlay.id === measureOverlayId) measureDrawing = false;
+    },
+    onRemoved: ({ overlay }) => {
+      if (overlay.id === measureOverlayId) clearMeasureState();
+    },
+  });
+  if (typeof id !== 'string') return;
+  measureOverlayId = id;
+  measureDrawing = true;
+  tbMeasureEl?.classList.add('active');
+}
+
+tbMeasureEl?.addEventListener('click', toggleMeasureDrawing);
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !measureDrawing) return;
+  event.preventDefault();
+  removeMeasurement();
 });
 
 // Close the plots popup on any click outside it (and outside its button).

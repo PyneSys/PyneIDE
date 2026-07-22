@@ -413,6 +413,8 @@ export class ChartPanel {
   <span class="sep"></span>
   <button id="tb-layers" title="Show/hide plots & volume">Layers</button>
   <span class="sep"></span>
+  <button id="tb-measure" title="Show/hide a price movement measurement">Measure</button>
+  <span class="sep"></span>
   <button id="tb-goto" title="Scroll the chart to a date/time">Go to date…</button>
   <span class="spacer"></span>
   <button id="tb-csv-plot" title="Open the plot output CSV" disabled>Plot CSV</button>
