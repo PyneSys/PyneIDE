@@ -313,9 +313,15 @@ class ProviderService:
             time_from = self._parse_from(params["from"])
             time_to = datetime.fromtimestamp(int(params["to"]), UTC)
 
-            # A dedicated instance: never the cached browse one, so a background
-            # download cannot mutate the symbol under the browser's cursor.
-            inst = self._make_provider(provider_name, broker)
+            # A dedicated instance built from the full "broker:symbol" (like the
+            # CLI): its constructor derives the broker-qualified .ohlcv path, so
+            # the exchange is not lost from the filename, and being a fresh
+            # instance a background download cannot mutate the browse one.
+            provider_class = self._resolve_provider_class(provider_name)
+            config = self._get_config(provider_class, provider_name)
+            full_symbol = f"{broker}:{symbol}" if broker else symbol
+            inst = provider_class(symbol=full_symbol, timeframe=timeframe,
+                                  ohlcv_dir=self.data_dir, config=config)
 
             def on_start(plan: DownloadPlan) -> None:
                 self.emitter.emit({
@@ -338,7 +344,6 @@ class ProviderService:
 
             result = download_to_file(
                 inst,
-                symbol=symbol, timeframe=timeframe, ohlcv_dir=self.data_dir,
                 time_from=time_from, time_to=time_to, truncate=truncate,
                 on_start=on_start, on_progress=on_progress,
                 on_conflict="abort", provider_string=provider_string,

@@ -37,10 +37,12 @@
   "contributes": {
     "configurationDefaults": {
       "explorer.fileNesting.enabled": true,
+      "explorer.fileNesting.expand": false,
       "explorer.fileNesting.patterns": {
         "*.pine": "${capture}.py, ${capture}.py.map, ${capture}.toml",
         "*.py": "${capture}.py.map, ${capture}.toml",
-        "*.ohlcv": "${capture}.toml"
+        "*.ohlcv": "${capture}.toml",
+        "*.csv": "${capture}_viz.ndjson, ${capture}_strat.csv, ${capture}_trade.csv"
       }
     },
     "commands": [
@@ -266,6 +268,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "pyneide.workspace.openOutputChart",
+        "title": "Open Chart",
+        "category": "PyneIDE",
+        "icon": "$(graph)"
+      },
+      {
         "command": "pyneide.workspace.revealInExplorer",
         "title": "Reveal in Explorer",
         "category": "PyneIDE"
@@ -275,7 +283,7 @@
         "title": "Edit Inputs…",
         "category": "PyneIDE",
         "icon": "$(settings-gear)",
-        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine || pyneide.chartHasInputs"
       }
     ],
     "menus": {
@@ -336,8 +344,13 @@
         },
         {
           "command": "pyneide.editInputs",
-          "when": "pyneide.isPyneScript",
+          "when": "activeWebviewPanelId != pyneideChart && pyneide.isPyneScript",
           "group": "navigation@3"
+        },
+        {
+          "command": "pyneide.editInputs",
+          "when": "activeWebviewPanelId == pyneideChart && pyneide.chartHasInputs",
+          "group": "navigation@-99"
         },
         {
           "command": "pyneide.toggleChartFullscreen",
@@ -451,13 +464,23 @@
           "group": "9_reveal@2"
         },
         {
+          "command": "pyneide.workspace.openOutputChart",
+          "when": "view == pyneide.workspace && viewItem == pyneChartOutput",
+          "group": "inline@1"
+        },
+        {
+          "command": "pyneide.workspace.openOutputChart",
+          "when": "view == pyneide.workspace && viewItem == pyneChartOutput",
+          "group": "pyneide@1"
+        },
+        {
           "command": "pyneide.workspace.revealInExplorer",
-          "when": "view == pyneide.workspace && viewItem == pyneOutput",
+          "when": "view == pyneide.workspace && (viewItem == pyneOutput || viewItem == pyneChartOutput)",
           "group": "9_reveal@1"
         },
         {
           "command": "pyneide.outputDelete",
-          "when": "view == pyneide.workspace && viewItem == pyneOutput",
+          "when": "view == pyneide.workspace && (viewItem == pyneOutput || viewItem == pyneChartOutput)",
           "group": "9_reveal@2"
         }
       ]

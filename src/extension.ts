@@ -144,10 +144,21 @@ export function activate(context: vscode.ExtensionContext): void {
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
 
   registerWorkspaceView(context, chartManager);
-  const inputsView = new InputsViewManager(context, manager, output);
+  const inputsView = new InputsViewManager(
+    context,
+    manager,
+    output,
+    (chartKey) => runService.refreshChartAfterInputsSave(chartKey)
+  );
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.editInputs', async (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
-      const uri = await editInputsUri(arg, compileService);
+      const explicitUri = arg instanceof vscode.Uri ? arg : arg?.uri;
+      const explicitScript = explicitUri && /\.(?:pine|py)$/i.test(explicitUri.fsPath)
+        ? explicitUri
+        : undefined;
+      const chartScript = chartManager.activeInputScriptPath();
+      const target = explicitScript ?? (chartScript ? vscode.Uri.file(chartScript) : undefined);
+      const uri = await editInputsUri(target, compileService);
       if (uri) void inputsView.open(uri);
     }),
     vscode.commands.registerCommand('pyneide.dataDownloadWizard', () =>

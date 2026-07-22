@@ -11,6 +11,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartManager } from '../chart/chartPanel';
 import { OhlcvEditorProvider } from '../data/ohlcvEditor';
 import { buildOutputPreview, resolveOutputPair } from '../data/outputPreview';
@@ -42,6 +43,8 @@ interface DataNode {
 interface OutputNode {
   type: 'output';
   uri: vscode.Uri;
+  /** Sidecars are nested below their `<stem>.csv` run output. */
+  sidecar?: boolean;
 }
 
 /** The compiled `.py` nested under its `.pine` parent. */
@@ -143,6 +146,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       ];
     }
     if (node.type === 'script') return this.companionChildren(node);
+    if (node.type === 'output' && !node.sidecar) return this.outputSidecarChildren(node);
     if (node.type !== 'section') return [];
     switch (node.kind) {
       case 'scripts':
@@ -336,38 +340,61 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
 
   private outputChildren(): OutputNode[] {
     const dir = path.join(this.workdir!, 'output');
-    let entries: fs.Dirent[];
+    let names: string[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      names = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
+        .map((entry) => entry.name);
     } catch {
       return [];
     }
-    return entries
-      .filter((e) => e.isFile() && !e.name.startsWith('.'))
-      .map((e): OutputNode => ({ type: 'output', uri: vscode.Uri.file(path.join(dir, e.name)) }))
+    const present = new Set(names);
+    const nested = new Set<string>();
+    for (const name of names) {
+      if (!/\.csv$/i.test(name)) continue;
+      const stem = name.slice(0, -4);
+      for (const suffix of ['_viz.ndjson', '_strat.csv', '_trade.csv']) {
+        const sidecar = `${stem}${suffix}`;
+        if (present.has(sidecar)) nested.add(sidecar);
+      }
+    }
+    return names
+      .filter((name) => !nested.has(name))
+      .map((name): OutputNode => ({
+        type: 'output',
+        uri: vscode.Uri.file(path.join(dir, name)),
+      }))
       .sort((a, b) => a.uri.fsPath.localeCompare(b.uri.fsPath));
   }
 
+  private outputSidecarChildren(node: OutputNode): OutputNode[] {
+    if (!/\.csv$/i.test(node.uri.fsPath)) return [];
+    const stem = node.uri.fsPath.slice(0, -4);
+    return ['_viz.ndjson', '_strat.csv', '_trade.csv']
+      .map((suffix) => `${stem}${suffix}`)
+      .filter((file) => fs.existsSync(file))
+      .map((file): OutputNode => ({ type: 'output', uri: vscode.Uri.file(file), sidecar: true }));
+  }
+
   private outputItem(node: OutputNode): vscode.TreeItem {
+    const collapsible =
+      !node.sidecar && this.outputSidecarChildren(node).length
+        ? vscode.TreeItemCollapsibleState.Collapsed
+        : vscode.TreeItemCollapsibleState.None;
     const item = new vscode.TreeItem(
       path.basename(node.uri.fsPath),
-      vscode.TreeItemCollapsibleState.None
+      collapsible
     );
     item.resourceUri = node.uri;
     item.iconPath = vscode.ThemeIcon.File;
-    const chartable = resolveOutputPair(node.uri.fsPath) !== undefined;
+    const chartable = !node.sidecar && resolveOutputPair(node.uri.fsPath) !== undefined;
     item.contextValue = chartable ? 'pyneChartOutput' : 'pyneOutput';
-    item.command = chartable
-      ? {
-          command: 'pyneide.workspace.openOutputChart',
-          title: 'Open chart',
-          arguments: [node],
-        }
-      : {
-          command: 'vscode.open',
-          title: 'Open',
-          arguments: [node.uri, { preserveFocus: true }],
-        };
+    item.command = {
+      command: 'vscode.open',
+      title: 'Open',
+      arguments: [node.uri, { preserveFocus: true }],
+    };
     return item;
   }
 }
@@ -391,6 +418,20 @@ function walkScripts(dir: string): string[] {
     }
   }
   return out;
+}
+
+/** Resolve an output CSV stem back to the script identity used by RunService.
+ * Output names are stem-based too, so this is the same one-to-one convention
+ * the writer already relies on. Prefer Pine when both source and compiled Pyne
+ * exist; canonicalChartKey performs the same fold for a `.py` fallback. */
+function outputChartKey(plotPath: string): string {
+  const workdir = path.dirname(path.dirname(plotPath));
+  const stem = path.basename(plotPath).replace(/\.csv$/i, '');
+  const matches = walkScripts(path.join(workdir, 'scripts')).filter(
+    (file) => path.parse(file).name === stem
+  );
+  const script = matches.find((file) => /\.pine$/i.test(file)) ?? matches[0];
+  return script ? canonicalChartKey(script) : plotPath;
 }
 
 /** Detect the @pyne kind of a `.py` file from its head; .pine is always Pyne. */
@@ -493,7 +534,7 @@ export function registerWorkspaceView(
       if (!pair || !chartManager) return;
       try {
         const preview = buildOutputPreview(pair);
-        chartManager.openOutputPreview(pair.plot, preview.events);
+        chartManager.openOutputPreview(outputChartKey(pair.plot), preview.events);
         if (preview.warnings.length) {
           void vscode.window.showWarningMessage(
             `PyneIDE: chart opened with ${preview.warnings.length} ignored output record(s).`

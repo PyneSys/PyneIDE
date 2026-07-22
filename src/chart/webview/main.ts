@@ -261,7 +261,7 @@ function startRun(start: StartEvent): void {
     showVolume: false,
   };
   renderTables();
-  renderLegend(state);
+  renderPlotList(state);
   const tables = document.getElementById('pyne-tables');
   if (tables) tables.innerHTML = '';
   const st = state;
@@ -920,11 +920,13 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
   return el;
 }
 
-// --- Legend: per-plot show/hide -------------------------------------------
-// A floating list of the script's plots (name + color + kind). Clicking a row
-// toggles that plot's visibility webview-locally: the plot is routed to the
-// 'hidden' pane and dropped from every layer on the next indicator rebuild, so
-// nothing re-runs and the accumulated bars/data stay put.
+// --- Layers popup: per-plot & built-in show/hide --------------------------
+// A dropdown (opened from the "Layers" toolbar button) listing the script's
+// plots (swatch + name + kind) plus a "Built-in" section with the chart-level
+// Volume toggle. Clicking a plot row toggles its visibility webview-locally:
+// the plot is routed to the 'hidden' pane and dropped from every layer on the
+// next indicator rebuild, so nothing re-runs and the accumulated bars/data stay
+// put. The Volume row instead drives the native VOL indicator via applyVolume.
 
 interface LegendEntry {
   id: string;
@@ -933,16 +935,12 @@ interface LegendEntry {
   color?: string;
 }
 
-const legendEl = ((): HTMLDivElement | null => {
-  const area = container?.parentElement;
-  if (!area) return null;
+const plotsPopupEl = ((): HTMLDivElement | null => {
+  if (!document.body) return null;
   const el = document.createElement('div');
-  el.id = 'pyne-legend';
-  el.style.cssText =
-    'position:absolute;left:8px;top:8px;z-index:6;display:none;' +
-    'flex-direction:column;gap:1px;max-width:60%;max-height:60%;overflow:auto;' +
-    'font-size:11px;pointer-events:auto;user-select:none;';
-  area.appendChild(el);
+  el.id = 'plots-popup';
+  el.hidden = true;
+  document.body.appendChild(el);
   return el;
 })();
 
@@ -969,44 +967,91 @@ function applyVisibility(st: RunState): void {
   st.chart.resetData();
 }
 
-function renderLegend(st: RunState): void {
-  if (!legendEl) return;
+/** Build one clickable show/hide row (swatch + name), dimmed + struck-through
+ * when `off`. */
+function makeLayerRow(
+  label: string, kind: string, off: boolean, color: string | undefined, onToggle: () => void,
+): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'plot-row';
+  row.style.opacity = off ? '0.4' : '1';
+  const swatch = document.createElement('span');
+  swatch.className = 'plot-swatch';
+  swatch.style.background = color ?? 'var(--vscode-foreground)';
+  if (off) swatch.style.outline = '1px solid var(--vscode-descriptionForeground)';
+  const name = document.createElement('span');
+  name.className = 'plot-name';
+  name.textContent = label;
+  name.style.color = 'var(--vscode-foreground)';
+  if (off) name.style.textDecoration = 'line-through';
+  row.title = `${label} (${kind}) — click to ${off ? 'show' : 'hide'}`;
+  row.appendChild(swatch);
+  row.appendChild(name);
+  // Keep the popup open across toggles (multi-select): stop the click from
+  // reaching the outside-click handler, which would otherwise close it — the
+  // re-render detaches this row before that handler runs its containment check.
+  row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    onToggle();
+  });
+  return row;
+}
+
+/** Fill the popup: one row per script plot, then a "Built-in" section with the
+ * chart-level Volume toggle. The button is always enabled — Volume is available
+ * even when the script has no plots. */
+function renderPlotList(st: RunState): void {
+  if (!plotsPopupEl) return;
+  plotsPopupEl.innerHTML = '';
   const entries = legendEntries(st);
-  if (entries.length === 0) {
-    legendEl.style.display = 'none';
-    legendEl.innerHTML = '';
-    return;
-  }
-  legendEl.style.display = 'flex';
-  legendEl.innerHTML = '';
   for (const entry of entries) {
     const off = st.hidden.has(entry.id);
-    const row = document.createElement('div');
-    row.style.cssText =
-      'display:flex;align-items:center;gap:5px;padding:1px 4px;cursor:pointer;border-radius:2px;' +
-      `opacity:${off ? '0.4' : '1'};` +
-      'background:var(--vscode-editorWidget-background, rgba(40,40,40,0.6));';
-    const swatch = document.createElement('span');
-    swatch.style.cssText =
-      'width:9px;height:9px;flex:0 0 auto;border-radius:2px;' +
-      `background:${entry.color ?? 'var(--vscode-foreground)'};` +
-      `${off ? 'outline:1px solid var(--vscode-descriptionForeground);' : ''}`;
-    const name = document.createElement('span');
-    name.textContent = entry.label;
-    name.style.cssText =
-      `color:var(--vscode-foreground);${off ? 'text-decoration:line-through;' : ''}` +
-      'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    row.title = `${entry.label} (${entry.kind}) — click to ${off ? 'show' : 'hide'}`;
-    row.appendChild(swatch);
-    row.appendChild(name);
-    row.addEventListener('click', () => {
+    plotsPopupEl.appendChild(makeLayerRow(entry.label, entry.kind, off, entry.color, () => {
       if (st.hidden.has(entry.id)) st.hidden.delete(entry.id);
       else st.hidden.add(entry.id);
       applyVisibility(st);
-      renderLegend(st);
-    });
-    legendEl.appendChild(row);
+      renderPlotList(st);
+    }));
   }
+  if (entries.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'plot-sep';
+    plotsPopupEl.appendChild(sep);
+  }
+  const section = document.createElement('div');
+  section.className = 'plot-section';
+  section.textContent = 'Built-in';
+  plotsPopupEl.appendChild(section);
+  plotsPopupEl.appendChild(makeLayerRow('Volume', 'built-in', !st.showVolume, undefined, () => {
+    applyVolume(st, !st.showVolume);
+    renderPlotList(st);
+  }));
+}
+
+/** Anchor the popup just below the "Layers" toolbar button. */
+function positionPlotsPopup(): void {
+  if (!plotsPopupEl || !tbLayersEl) return;
+  const r = tbLayersEl.getBoundingClientRect();
+  plotsPopupEl.style.left = `${Math.round(r.left)}px`;
+  plotsPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+}
+
+function openPlotsPopup(): void {
+  if (!plotsPopupEl || !state) return;
+  renderPlotList(state);
+  plotsPopupEl.hidden = false;
+  positionPlotsPopup();
+  tbLayersEl?.classList.add('active');
+}
+
+function closePlotsPopup(): void {
+  if (plotsPopupEl) plotsPopupEl.hidden = true;
+  tbLayersEl?.classList.remove('active');
+}
+
+function togglePlotsPopup(): void {
+  if (plotsPopupEl && !plotsPopupEl.hidden) closePlotsPopup();
+  else openPlotsPopup();
 }
 
 function ensureEquityIndicator(st: RunState): void {
@@ -1082,7 +1127,7 @@ function uiTick(): void {
     if (paneChange || st.metaDirty) {
       st.metaDirty = false;
       rebuildPlotIndicators(st);
-      renderLegend(st);
+      renderPlotList(st);
     }
     ensureEquityIndicator(st);
     ensureDrawingIndicators(st);
@@ -1213,13 +1258,13 @@ tabBodyEl?.addEventListener('click', (event) => {
   if (ts > 0) state?.chart.scrollToTimestamp(ts, 200);
 });
 
-// --- Top toolbar: volume / go-to-date / CSV --------------------------------
+// --- Top toolbar: data / layers / go-to-date / CSV -------------------------
 // Elements are absent in standalone test harnesses; every access is guarded.
 
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
-const tbVolumeEl = document.getElementById('tb-volume');
-const tbGotoEl = document.getElementById('tb-goto');
-const tbGotoBoxEl = document.getElementById('tb-goto-box');
+const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
+const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
+const gotoPopupEl = document.getElementById('goto-popup') as HTMLDivElement | null;
 const tbGotoInputEl = document.getElementById('tb-goto-input') as HTMLInputElement | null;
 const tbGotoDoEl = document.getElementById('tb-goto-do');
 const tbCsvPlotEl = document.getElementById('tb-csv-plot') as HTMLButtonElement | null;
@@ -1236,7 +1281,6 @@ function dataLabel(dataPath?: string): string {
 function syncToolbar(): void {
   const st = state;
   if (tbDataEl) tbDataEl.textContent = dataLabel(st?.start.data);
-  tbVolumeEl?.classList.toggle('active', st?.showVolume === true);
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
     const hasTrades = st?.ended === true && st.trades.length > 0 && !!st.start.outputs.trades;
@@ -1247,21 +1291,68 @@ function syncToolbar(): void {
 
 tbDataEl?.addEventListener('click', () => vscode.postMessage({ type: 'selectData' }));
 
-tbVolumeEl?.addEventListener('click', () => {
-  if (!state) return;
-  applyVolume(state, !state.showVolume);
-  syncToolbar();
+tbLayersEl?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeGotoPopup();
+  togglePlotsPopup();
 });
 
-tbGotoEl?.addEventListener('click', () => {
-  const open = tbGotoBoxEl?.classList.toggle('open');
-  if (open && tbGotoInputEl) {
+// Close the plots popup on any click outside it (and outside its button).
+document.addEventListener('click', (e) => {
+  if (!plotsPopupEl || plotsPopupEl.hidden) return;
+  const t = e.target as Node;
+  if (plotsPopupEl.contains(t) || tbLayersEl?.contains(t)) return;
+  closePlotsPopup();
+});
+
+window.addEventListener('resize', () => {
+  if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
+  if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
+});
+
+/** Anchor the date picker inside the chart, below the matching toolbar button. */
+function positionGotoPopup(): void {
+  if (!gotoPopupEl || !tbGotoEl) return;
+  const buttonRect = tbGotoEl.getBoundingClientRect();
+  const areaRect = container.parentElement?.getBoundingClientRect();
+  if (!areaRect) return;
+  const maxLeft = Math.max(6, areaRect.width - gotoPopupEl.offsetWidth - 6);
+  const left = Math.min(Math.max(6, buttonRect.left - areaRect.left), maxLeft);
+  gotoPopupEl.style.left = `${Math.round(left)}px`;
+  gotoPopupEl.style.top = '6px';
+}
+
+function openGotoPopup(): void {
+  if (!gotoPopupEl) return;
+  closePlotsPopup();
+  gotoPopupEl.hidden = false;
+  tbGotoEl?.classList.add('active');
+  positionGotoPopup();
+  if (tbGotoInputEl) {
     if (!tbGotoInputEl.value && state?.bars.length) {
       // Prefill with the first bar's time (UTC) as a sensible starting point.
       tbGotoInputEl.value = new Date(state.bars[0].timestamp).toISOString().slice(0, 19);
     }
     tbGotoInputEl.focus();
   }
+}
+
+function closeGotoPopup(): void {
+  if (gotoPopupEl) gotoPopupEl.hidden = true;
+  tbGotoEl?.classList.remove('active');
+}
+
+tbGotoEl?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (gotoPopupEl?.hidden) openGotoPopup();
+  else closeGotoPopup();
+});
+
+document.addEventListener('click', (e) => {
+  if (!gotoPopupEl || gotoPopupEl.hidden) return;
+  const target = e.target as Node;
+  if (gotoPopupEl.contains(target) || tbGotoEl?.contains(target)) return;
+  closeGotoPopup();
 });
 
 /** Parse the datetime-local value as a UTC instant to match bar timestamps. */
@@ -1274,12 +1365,17 @@ function gotoInputTimestamp(): number | undefined {
 
 function doGoto(): void {
   const ts = gotoInputTimestamp();
-  if (ts !== undefined) state?.chart.scrollToTimestamp(ts, 200);
+  if (ts !== undefined) {
+    state?.chart.scrollToTimestamp(ts, 200);
+    closeGotoPopup();
+  }
 }
 
 tbGotoDoEl?.addEventListener('click', doGoto);
 tbGotoInputEl?.addEventListener('keydown', (e) => {
-  if ((e as KeyboardEvent).key === 'Enter') doGoto();
+  const key = (e as KeyboardEvent).key;
+  if (key === 'Enter') doGoto();
+  else if (key === 'Escape') closeGotoPopup();
 });
 
 tbCsvPlotEl?.addEventListener('click', () => vscode.postMessage({ type: 'openCsv', which: 'plot' }));
@@ -1343,7 +1439,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         state.chart.resetData();
         state.chart.scrollToRealTime(0);
         rebuildPlotIndicators(state);
-        renderLegend(state);
+        renderPlotList(state);
         ensureEquityIndicator(state);
         ensureDrawingIndicators(state);
         renderDrawingTables(state);

@@ -27,7 +27,7 @@ import type {
   TradeRecord,
 } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
-import { openChartKeys } from './chartKey';
+import { isChartablePath, openChartKeys } from './chartKey';
 import type { ChartInMessage, ChartOutMessage } from './messages';
 
 /**
@@ -69,9 +69,15 @@ export class ChartPanel {
     private readonly context: vscode.ExtensionContext,
     chartKey: string,
     private readonly onSelectData: () => void,
-    private readonly onWebviewClosed?: () => void
+    private readonly onWebviewClosed?: () => void,
+    private readonly onViewStateChanged?: (active: boolean) => void
   ) {
     this.title = `${path.parse(chartKey).name} — Chart`;
+  }
+
+  /** Whether the chart currently has a live webview tab (not just a dormant snapshot). */
+  isOpen(): boolean {
+    return this.panel !== undefined;
   }
 
   /**
@@ -186,12 +192,15 @@ export class ChartPanel {
     );
     this.panel.webview.html = this.html(this.panel.webview, distRoot);
     this.panel.webview.onDidReceiveMessage((msg: ChartOutMessage) => this.handleOutMessage(msg));
+    this.panel.onDidChangeViewState((e) => this.onViewStateChanged?.(e.webviewPanel.active));
+    this.onViewStateChanged?.(this.panel.active);
     this.panel.onDidDispose(() => {
       // The webview is gone, but the snapshot lives on: this panel stays in the
       // manager's map (dormant) until reconcile retires it, so reopening the
       // chart replays the snapshot. Closing the tab is not "delete the chart".
       this.panel = undefined;
       this.ready = false;
+      this.onViewStateChanged?.(false);
       this.onWebviewClosed?.();
     });
   }
@@ -279,6 +288,7 @@ export class ChartPanel {
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 3px;
     cursor: pointer; padding: 2px 8px; font-size: 11px; height: 22px;
+    white-space: nowrap;
   }
   #toolbar button:hover:not(:disabled) {
     background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground, #333));
@@ -291,13 +301,51 @@ export class ChartPanel {
   }
   #toolbar .sep { width: 1px; height: 16px; background: var(--vscode-panel-border, #444); margin: 0 2px; }
   #toolbar .spacer { flex: 1; }
-  #toolbar .goto-box { display: none; align-items: center; gap: 4px; }
-  #toolbar .goto-box.open { display: flex; }
-  #toolbar input[type="datetime-local"] {
+  #goto-popup {
+    position: absolute; z-index: 20; display: flex; align-items: center; gap: 4px;
+    box-sizing: border-box; width: min(340px, calc(100% - 12px)); padding: 6px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); user-select: none;
+  }
+  #goto-popup[hidden] { display: none; }
+  #goto-popup input[type="datetime-local"] {
+    flex: 1 1 auto; width: 0; min-width: 0; box-sizing: border-box;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #444));
     border-radius: 3px; padding: 1px 4px; font-size: 11px; height: 22px;
     color-scheme: light dark;
+  }
+  #goto-popup button {
+    flex: 0 0 auto; white-space: nowrap; height: 22px; padding: 2px 8px;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 3px;
+    cursor: pointer; font-size: 11px;
+  }
+  #goto-popup button:hover {
+    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #plots-popup {
+    position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    min-width: 140px; max-width: 320px; max-height: 60%; overflow: auto;
+    padding: 4px; font-size: 11px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #plots-popup[hidden] { display: none; }
+  #plots-popup .plot-row {
+    display: flex; align-items: center; gap: 6px; padding: 2px 6px;
+    cursor: pointer; border-radius: 3px;
+  }
+  #plots-popup .plot-row:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #plots-popup .plot-swatch { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 2px; }
+  #plots-popup .plot-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #plots-popup .plot-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
+  #plots-popup .plot-section {
+    padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
   #chart-area { flex: 1; min-height: 0; position: relative; }
   #chart { position: absolute; inset: 0; }
@@ -363,19 +411,19 @@ export class ChartPanel {
 <div id="toolbar">
   <button id="tb-data" title="Select the OHLCV data for this script">Data</button>
   <span class="sep"></span>
-  <button id="tb-volume" title="Show/hide volume">Volume</button>
+  <button id="tb-layers" title="Show/hide plots & volume">Layers</button>
   <span class="sep"></span>
   <button id="tb-goto" title="Scroll the chart to a date/time">Go to date…</button>
-  <span class="goto-box" id="tb-goto-box">
-    <input type="datetime-local" id="tb-goto-input" step="1">
-    <button id="tb-goto-do">Go</button>
-  </span>
   <span class="spacer"></span>
   <button id="tb-csv-plot" title="Open the plot output CSV" disabled>Plot CSV</button>
   <button id="tb-csv-trades" title="Open the trades output CSV" disabled hidden>Trades CSV</button>
 </div>
 <div id="chart-area">
   <div id="chart"></div>
+  <div id="goto-popup" hidden>
+    <input type="datetime-local" id="tb-goto-input" step="1">
+    <button id="tb-goto-do">Go</button>
+  </div>
   <button id="to-realtime" title="Scroll to the latest bar" hidden>⇥</button>
 </div>
 <div id="bottom" class="collapsed">
@@ -400,6 +448,7 @@ export class ChartPanel {
  */
 export class ChartManager implements RunListener {
   private readonly panels = new Map<string, ChartPanel>();
+  private activeChartKey: string | undefined;
   /** Data-preview panels keyed by `.ohlcv` path: kept alive by their own
    * webview (not an editor tab), retired when that webview is closed. */
   private readonly dataPreviews = new Set<string>();
@@ -412,7 +461,18 @@ export class ChartManager implements RunListener {
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
+  /** Script backing the currently active chart tab, if that chart can own
+   * inputs. Raw data previews deliberately return no script. */
+  activeInputScriptPath(): string | undefined {
+    const key = this.activeChartKey;
+    return key && isChartablePath(key) ? key : undefined;
+  }
+
   onEvent(event: BridgeEvent, chartKey: string): void {
+    // A real run takes ownership of a chart that may have been created by
+    // opening its persisted output. From here on it follows normal script
+    // chart lifetime and the run updates the already-open tab in place.
+    this.dataPreviews.delete(chartKey);
     this.panelFor(chartKey).handleEvent(event);
   }
 
@@ -423,6 +483,11 @@ export class ChartManager implements RunListener {
   /** Whether a (possibly dormant) chart exists for this key. */
   hasChart(chartKey: string): boolean {
     return this.panels.has(chartKey);
+  }
+
+  /** Whether this script's chart tab is currently open. */
+  hasOpenChart(chartKey: string): boolean {
+    return this.panels.get(chartKey)?.isOpen() === true;
   }
 
   /**
@@ -437,7 +502,8 @@ export class ChartManager implements RunListener {
         this.context,
         filePath,
         () => {},
-        () => this.retirePreview(filePath)
+        () => this.retirePreview(filePath),
+        (active) => this.updateActiveChart(filePath, active)
       );
       this.panels.set(filePath, panel);
     }
@@ -448,18 +514,21 @@ export class ChartManager implements RunListener {
   /** Open a persisted CSV + native viz-NDJSON result. The supplied events use
    * the same protocol as a live run, so ChartPanel records/replays them without
    * a separate rendering path. */
-  openOutputPreview(filePath: string, events: BridgeEvent[]): void {
-    let panel = this.panels.get(filePath);
+  openOutputPreview(chartKey: string, events: BridgeEvent[]): void {
+    let panel = this.panels.get(chartKey);
     if (!panel) {
       panel = new ChartPanel(
         this.context,
-        filePath,
+        chartKey,
         () => {},
-        () => this.retirePreview(filePath)
+        () => {
+          if (this.dataPreviews.has(chartKey)) this.retirePreview(chartKey);
+        },
+        (active) => this.updateActiveChart(chartKey, active)
       );
-      this.panels.set(filePath, panel);
+      this.panels.set(chartKey, panel);
+      this.dataPreviews.add(chartKey);
     }
-    this.dataPreviews.add(filePath);
     for (const event of events) panel.handleEvent(event);
   }
 
@@ -501,9 +570,25 @@ export class ChartManager implements RunListener {
   private panelFor(chartKey: string): ChartPanel {
     let panel = this.panels.get(chartKey);
     if (!panel) {
-      panel = new ChartPanel(this.context, chartKey, () => this.onSelectData?.(chartKey));
+      panel = new ChartPanel(
+        this.context,
+        chartKey,
+        () => this.onSelectData?.(chartKey),
+        undefined,
+        (active) => this.updateActiveChart(chartKey, active)
+      );
       this.panels.set(chartKey, panel);
     }
     return panel;
+  }
+
+  private updateActiveChart(chartKey: string, active: boolean): void {
+    if (active) this.activeChartKey = chartKey;
+    else if (this.activeChartKey === chartKey) this.activeChartKey = undefined;
+    void vscode.commands.executeCommand(
+      'setContext',
+      'pyneide.chartHasInputs',
+      this.activeInputScriptPath() !== undefined
+    );
   }
 }

@@ -364,9 +364,9 @@ export class SymbolBrowserPanel {
   #progress-wrap { flex: 1 1 100%; display: none; align-items: center; gap: 8px; }
   #progress-wrap.on { display: flex; }
   #progress-track { flex: 1; height: 6px; border-radius: 3px;
-    background: var(--vscode-progressBar-background, rgba(128,128,128,0.3)); overflow: hidden; }
+    background: var(--vscode-input-background, rgba(128,128,128,0.3)); overflow: hidden; }
   #progress-fill { height: 100%; width: 0%;
-    background: var(--vscode-progressBar-foreground, var(--vscode-button-background, #0e639c));
+    background: var(--vscode-progressBar-background, var(--vscode-button-background, #0e639c));
     transition: width .1s linear; }
   #progress-fill.indeterminate { width: 40% !important; animation: slide 1.2s ease-in-out infinite; }
   @keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }

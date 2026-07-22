@@ -62,6 +62,9 @@ export class RunService {
     90
   );
   private activeRun: BridgeRun | undefined;
+  /** True while the active bridge run belongs to a debug launch, including
+   * the short interval before VSCode publishes its DebugSession. */
+  private activeRunIsDebug = false;
   private activeScriptName = '';
   private paused = false;
   private barsDone = 0;
@@ -329,6 +332,30 @@ export class RunService {
     const prepared = await this.prepareRun(doc);
     if (!prepared) return;
     await this.executeRun(prepared);
+  }
+
+  /** Re-run a visible script chart after its canonical input TOML was saved. */
+  async refreshChartAfterInputsSave(chartKey: string): Promise<void> {
+    if (
+      this.debugSession ||
+      this.activeRunIsDebug ||
+      !this.chartManager?.hasOpenChart(chartKey)
+    ) {
+      return;
+    }
+
+    if (this.activeRun) {
+      // Never interrupt an unrelated script just because another form was saved.
+      if (this.activeChartKey !== chartKey) return;
+      await this.drainActiveRun();
+    }
+
+    // State may have changed while the previous normal run was draining.
+    if (this.debugSession || this.activeRunIsDebug || !this.chartManager.hasOpenChart(chartKey)) {
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(chartKey));
+    await this.runDocument(doc);
   }
 
   /**
@@ -862,6 +889,7 @@ export class RunService {
     // A real run owns the chart: stop any data-only preview streaming to it.
     this.supersedePreview(chartKey);
     this.activeChartKey = chartKey;
+    this.activeRunIsDebug = opts.debug !== undefined;
     this.output.appendLine(
       `--- ${opts.debug ? 'Debug' : 'Run'}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
     );
@@ -966,6 +994,7 @@ export class RunService {
     const code = await run.exited;
     this.activeRun = undefined;
     this.activeChartKey = undefined;
+    this.activeRunIsDebug = false;
     this.debugControl?.setRunToBarTarget(undefined);
     this.flyToBar = undefined;
     this.setRunActive(false);

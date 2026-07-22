@@ -107,7 +107,6 @@ function fieldRow(spec: InputSpec): HTMLElement {
 
   const label = document.createElement('label');
   label.textContent = spec.title || spec.name;
-  if (spec.tooltip) label.title = spec.tooltip;
   label.htmlFor = `f_${spec.name}`;
   row.appendChild(label);
 
@@ -115,8 +114,85 @@ function fieldRow(spec: InputSpec): HTMLElement {
   control.className = 'control';
   control.appendChild(makeControl(spec));
   row.appendChild(control);
+
+  const help = document.createElement('span');
+  help.className = 'help';
+  if (spec.tooltip) {
+    help.textContent = '?';
+    help.setAttribute('role', 'button');
+    help.setAttribute('tabindex', '0');
+    help.setAttribute('aria-label', spec.tooltip);
+    attachTooltip(help, spec.tooltip);
+  } else {
+    help.classList.add('empty');
+  }
+  row.appendChild(help);
   return row;
 }
+
+let activeTip: HTMLElement | null = null;
+let pinned = false;
+
+function hideTip(): void {
+  if (activeTip) {
+    activeTip.remove();
+    activeTip = null;
+  }
+  pinned = false;
+}
+
+function showTip(anchor: HTMLElement, text: string): void {
+  if (activeTip) activeTip.remove();
+  const tip = document.createElement('div');
+  tip.className = 'tooltip-pop';
+  tip.textContent = text;
+  document.body.appendChild(tip);
+  const r = anchor.getBoundingClientRect();
+  const margin = 8;
+  // Prefer below the icon; flip above if it would overflow the viewport.
+  let top = r.bottom + 6;
+  if (top + tip.offsetHeight > window.innerHeight - margin) {
+    top = Math.max(margin, r.top - tip.offsetHeight - 6);
+  }
+  // Right-align the bubble to the icon, clamped into view.
+  let left = r.right - tip.offsetWidth;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tip.offsetWidth - margin));
+  tip.style.top = `${top}px`;
+  tip.style.left = `${left}px`;
+  activeTip = tip;
+}
+
+/** TradingView-style help: hover previews instantly, click pins it open. */
+function attachTooltip(anchor: HTMLElement, text: string): void {
+  anchor.addEventListener('mouseenter', () => {
+    if (!pinned) showTip(anchor, text);
+  });
+  anchor.addEventListener('mouseleave', () => {
+    if (!pinned) hideTip();
+  });
+  anchor.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (pinned && activeTip) {
+      hideTip();
+    } else {
+      showTip(anchor, text);
+      pinned = true;
+    }
+  });
+  anchor.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      showTip(anchor, text);
+      pinned = true;
+    } else if (ev.key === 'Escape') {
+      hideTip();
+    }
+  });
+}
+
+document.addEventListener('click', () => {
+  if (pinned) hideTip();
+});
 
 function makeControl(spec: InputSpec): HTMLElement {
   const id = `f_${spec.name}`;

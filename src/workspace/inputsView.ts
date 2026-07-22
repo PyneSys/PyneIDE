@@ -36,7 +36,8 @@ export class InputsViewManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly manager: EnvManager,
-    private readonly output: vscode.OutputChannel
+    private readonly output: vscode.OutputChannel,
+    private readonly onDidSave?: (chartKey: string) => Promise<void>
   ) {}
 
   /**
@@ -120,6 +121,11 @@ export class InputsViewManager {
             void vscode.window.showInformationMessage(
               `PyneIDE: saved inputs for ${displayName}.`
             );
+            void this.onDidSave?.(key).catch((err: unknown) => {
+              this.output.appendLine(
+                `Input-triggered chart refresh failed: ${err instanceof Error ? err.message : String(err)}`
+              );
+            });
           })
           .catch((err: unknown) => {
             void panel.webview.postMessage({
@@ -281,8 +287,23 @@ export class InputsViewManager {
   .group > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--vscode-descriptionForeground); margin: 0 0 6px; font-weight: 600; }
   .field { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
-  .field > label { flex: 0 0 46%; min-width: 0;
+  .field > label { flex: 0 0 44%; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .help { flex: 0 0 18px; width: 18px; height: 18px; box-sizing: border-box;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%; border: 1px solid var(--vscode-descriptionForeground);
+    color: var(--vscode-descriptionForeground);
+    font-size: 11px; line-height: 1; font-weight: 600; cursor: pointer;
+    user-select: none; opacity: 0.7; }
+  .help:hover { opacity: 1; color: var(--vscode-foreground);
+    border-color: var(--vscode-foreground); }
+  .help.empty { border: none; cursor: default; }
+  .tooltip-pop { position: fixed; z-index: 100; max-width: 320px;
+    background: var(--vscode-editorHoverWidget-background, #252526);
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+    border-radius: 4px; padding: 8px 10px; font-size: 13px; line-height: 1.45;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
   .field > .control { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; }
   input[type=text], input[type=number], select {
     width: 100%; box-sizing: border-box;
