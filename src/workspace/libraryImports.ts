@@ -15,6 +15,10 @@ export interface ImportFragment {
   text: string;
 }
 
+export interface LibraryMemberFragment extends ImportFragment {
+  alias: string;
+}
+
 export type LibraryImportSyntax = 'pine' | 'pyne';
 
 export interface WorkspaceLibraryImport {
@@ -24,6 +28,27 @@ export interface WorkspaceLibraryImport {
   alias: string;
   pathStart: number;
   pathEnd: number;
+}
+
+export type WorkspaceLibraryExportKind = 'function' | 'method';
+
+export interface WorkspaceLibraryExport {
+  name: string;
+  kind: WorkspaceLibraryExportKind;
+  signature: string;
+  documentation?: string;
+}
+
+export interface ParsedLibraryDocumentation {
+  summary?: string;
+  parameters: Readonly<Record<string, string>>;
+  returns?: string;
+}
+
+export interface ActiveLibraryCall {
+  alias: string;
+  member: string;
+  activeParameter: number;
 }
 
 const LIBRARY_SEGMENT = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -110,6 +135,50 @@ export function pyneImportFragment(linePrefix: string): ImportFragment | undefin
   return { start: match[1].length, text };
 }
 
+/** The imported alias and partial member after the last `alias.` in code. */
+export function libraryMemberFragment(
+  linePrefix: string,
+  syntax: LibraryImportSyntax
+): LibraryMemberFragment | undefined {
+  if (!cursorIsInLineCode(linePrefix, syntax)) return undefined;
+  const match = /(?:^|[^A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)?$/.exec(
+    linePrefix
+  );
+  if (!match) return undefined;
+  return {
+    alias: match[1],
+    start: linePrefix.length - (match[2]?.length ?? 0),
+    text: match[2] ?? '',
+  };
+}
+
+function cursorIsInLineCode(linePrefix: string, syntax: LibraryImportSyntax): boolean {
+  let quote: string | undefined;
+  let escaped = false;
+  for (let index = 0; index < linePrefix.length; index += 1) {
+    const char = linePrefix[index];
+    const next = linePrefix[index + 1];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if ((syntax === 'pine' && char === '/' && next === '/') || (syntax === 'pyne' && char === '#')) {
+      return false;
+    }
+  }
+  return quote === undefined;
+}
+
 /**
  * Whether a Pine line is a syntactically plausible, unfinished library import.
  *
@@ -161,6 +230,17 @@ export function parseWorkspaceLibraryImport(
   };
 }
 
+/** Collect complete workspace-library imports from a source document. */
+export function collectWorkspaceLibraryImports(
+  source: string,
+  syntax: LibraryImportSyntax
+): WorkspaceLibraryImport[] {
+  return source
+    .split(/\r?\n/)
+    .map((line) => parseWorkspaceLibraryImport(line, syntax))
+    .filter((entry): entry is WorkspaceLibraryImport => entry !== undefined);
+}
+
 /**
  * Resolve a workspace import to its source file.
  *
@@ -184,6 +264,426 @@ export function resolveWorkspaceLibraryFile(
   );
   const extensions = syntax === 'pine' ? ['.pine', '.py'] : ['.py', '.pine'];
   return extensions.map((extension) => stem + extension).find((file) => fs.existsSync(file));
+}
+
+/** Read callable exports from an authored Pine or native/compiled Pyne library. */
+export function readWorkspaceLibraryExports(file: string): WorkspaceLibraryExport[] {
+  let source: string;
+  try {
+    source = fs.readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  return path.extname(file).toLowerCase() === '.pine'
+    ? parsePineLibraryExports(source)
+    : parsePyneLibraryExports(source);
+}
+
+/** Extract `export f(...)` and `export method f(...)` declarations. */
+export function parsePineLibraryExports(source: string): WorkspaceLibraryExport[] {
+  const exports: WorkspaceLibraryExport[] = [];
+  const declaration =
+    /^[ \t]*export[ \t]+(?:(method)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(\()/gm;
+  for (const match of source.matchAll(declaration)) {
+    const open = (match.index ?? 0) + match[0].lastIndexOf('(');
+    const close = matchingParen(source, open, false);
+    if (close === undefined) continue;
+    const name = match[2];
+    exports.push({
+      name,
+      kind: match[1] ? 'method' : 'function',
+      signature: normalizeSignature(source.slice((match.index ?? 0) + match[0].indexOf(name), close + 1)),
+      documentation: precedingComment(source, match.index ?? 0, '//'),
+    });
+  }
+  return deduplicateExports(exports);
+}
+
+/**
+ * Extract callable names from a static module-level `__all__`.
+ *
+ * Native `@pyne lib` modules expose top-level functions. Compiled Pine
+ * libraries expose `Exported()` proxies typed by a Protocol whose `__call__`
+ * carries the original signature, so both forms remain useful as a fallback
+ * when only a `.py` library source exists.
+ */
+export function parsePyneLibraryExports(source: string): WorkspaceLibraryExport[] {
+  const publicNames = staticPythonAll(source);
+  if (publicNames.size === 0) return [];
+
+  const exports: WorkspaceLibraryExport[] = [];
+  const topLevelDef = /^(?:async[ \t]+)?def[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*(\()/gm;
+  for (const match of source.matchAll(topLevelDef)) {
+    const name = match[1];
+    if (!publicNames.has(name)) continue;
+    const open = (match.index ?? 0) + match[0].lastIndexOf('(');
+    const close = matchingParen(source, open, true);
+    if (close === undefined) continue;
+    exports.push({
+      name,
+      kind: 'function',
+      signature: pythonSignature(source, name, close, open),
+      documentation:
+        pythonFunctionDocstring(source, close) ??
+        precedingComment(source, match.index ?? 0, '#'),
+    });
+  }
+
+  const proxy =
+    /^([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*Exported\s*\(/gm;
+  for (const match of source.matchAll(proxy)) {
+    const name = match[1];
+    if (!publicNames.has(name) || exports.some((entry) => entry.name === name)) continue;
+    const call = protocolCallSignature(source, match[2], name);
+    exports.push({
+      name,
+      kind: call?.kind ?? 'function',
+      signature: call?.signature ?? `${name}(…)`,
+    });
+  }
+  return deduplicateExports(exports);
+}
+
+/** Split a callable signature into parameter labels without splitting nested defaults. */
+export function librarySignatureParameters(signature: string): string[] {
+  const open = signature.indexOf('(');
+  if (open < 0) return [];
+  const close = matchingParen(signature, open, false);
+  if (close === undefined) return [];
+  const body = signature.slice(open + 1, close);
+  const parameters: string[] = [];
+  let start = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  const brackets: string[] = [];
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === '(' || char === '[' || char === '{') brackets.push(char);
+    if (char === ')' || char === ']' || char === '}') brackets.pop();
+    if (char === ',' && brackets.length === 0) {
+      const parameter = body.slice(start, index).trim();
+      if (parameter) parameters.push(parameter);
+      start = index + 1;
+    }
+  }
+  const last = body.slice(start).trim();
+  if (last) parameters.push(last);
+  return parameters;
+}
+
+/** Recover a parameter's identifier from a Pine or Python signature label. */
+export function libraryParameterName(
+  label: string,
+  syntax: LibraryImportSyntax
+): string | undefined {
+  const beforeDefault = label.split('=', 1)[0].trim();
+  if (syntax === 'pyne') {
+    return /^([A-Za-z_][A-Za-z0-9_]*)/.exec(beforeDefault)?.[1];
+  }
+  const identifiers = beforeDefault.match(/[A-Za-z_][A-Za-z0-9_]*/g);
+  return identifiers?.at(-1);
+}
+
+/** Parse Pine doc tags (and plain Pyne prose) into help-friendly sections. */
+export function parseLibraryDocumentation(
+  documentation: string | undefined
+): ParsedLibraryDocumentation {
+  const parameters: Record<string, string> = {};
+  const summary: string[] = [];
+  let returns: string | undefined;
+  let continuation:
+    | { kind: 'summary' }
+    | { kind: 'parameter'; name: string }
+    | { kind: 'returns' }
+    | undefined;
+
+  for (const rawLine of documentation?.split(/\r?\n/) ?? []) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const functionTag = /^@(?:function|description)\s*(.*)$/i.exec(line);
+    if (functionTag) {
+      if (functionTag[1]) summary.push(functionTag[1]);
+      continuation = { kind: 'summary' };
+      continue;
+    }
+    const parameterTag = /^@param\s+([A-Za-z_][A-Za-z0-9_]*)\s*(.*)$/i.exec(line);
+    if (parameterTag) {
+      parameters[parameterTag[1]] = parameterTag[2];
+      continuation = { kind: 'parameter', name: parameterTag[1] };
+      continue;
+    }
+    const returnsTag = /^@returns?\s*(.*)$/i.exec(line);
+    if (returnsTag) {
+      returns = returnsTag[1];
+      continuation = { kind: 'returns' };
+      continue;
+    }
+    if (line.startsWith('@')) {
+      continuation = undefined;
+      continue;
+    }
+    if (continuation?.kind === 'parameter') {
+      parameters[continuation.name] =
+        `${parameters[continuation.name]} ${line}`.trim();
+    } else if (continuation?.kind === 'returns') {
+      returns = `${returns ?? ''} ${line}`.trim();
+    } else {
+      summary.push(line);
+      continuation = { kind: 'summary' };
+    }
+  }
+  return {
+    summary: summary.join(' ').trim() || undefined,
+    parameters,
+    returns: returns?.trim() || undefined,
+  };
+}
+
+/**
+ * Find the innermost unfinished `alias.member(` call before the cursor and
+ * count its top-level arguments for VS Code signature help.
+ */
+export function activeLibraryCall(
+  sourcePrefix: string,
+  syntax: LibraryImportSyntax
+): ActiveLibraryCall | undefined {
+  const code = maskLineStringsAndComments(sourcePrefix, syntax);
+  const call = /\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  let active: ActiveLibraryCall | undefined;
+  let match: RegExpExecArray | null;
+  while ((match = call.exec(code))) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const parameter = activeCallParameter(code, open);
+    if (parameter === undefined) continue;
+    active = {
+      alias: match[1],
+      member: match[2],
+      activeParameter: parameter,
+    };
+  }
+  return active;
+}
+
+function staticPythonAll(source: string): Set<string> {
+  const match = /^__all__[ \t]*=[ \t]*\[([\s\S]*?)\]/m.exec(source);
+  if (!match) return new Set();
+  const names = new Set<string>();
+  for (const literal of match[1].matchAll(/(['"])([A-Za-z_][A-Za-z0-9_]*)\1/g)) {
+    names.add(literal[2]);
+  }
+  return names;
+}
+
+function protocolCallSignature(
+  source: string,
+  protocol: string,
+  exportName: string
+): Pick<WorkspaceLibraryExport, 'kind' | 'signature'> | undefined {
+  const classMatch = new RegExp(
+    `^class[ \\t]+${escapeRegExp(protocol)}\\([^\\n]*\\):[ \\t]*$`,
+    'm'
+  ).exec(source);
+  if (!classMatch) return undefined;
+  const classStart = (classMatch.index ?? 0) + classMatch[0].length;
+  const rest = source.slice(classStart);
+  const nextTopLevel = /^\S/m.exec(rest);
+  const classBody = nextTopLevel ? rest.slice(0, nextTopLevel.index) : rest;
+  const call = /^[ \t]+def[ \t]+__call__[ \t]*(\()/m.exec(classBody);
+  if (!call) return undefined;
+  const open = classStart + (call.index ?? 0) + call[0].lastIndexOf('(');
+  const close = matchingParen(source, open, true);
+  if (close === undefined) return undefined;
+  const rawArgs = source.slice(open + 1, close).replace(
+    /^[ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*(?:,[ \t]*)?/,
+    ''
+  );
+  const suffix = pythonReturnAnnotation(source, close);
+  return {
+    kind: /@[ \t]*method\b/.test(classBody) ? 'method' : 'function',
+    signature: normalizeSignature(`${exportName}(${rawArgs})${suffix}`),
+  };
+}
+
+function pythonSignature(source: string, name: string, close: number, open: number): string {
+  return normalizeSignature(
+    `${name}${source.slice(open, close + 1)}${pythonReturnAnnotation(source, close)}`
+  );
+}
+
+function pythonReturnAnnotation(source: string, close: number): string {
+  const lineEnd = source.indexOf('\n', close + 1);
+  const tail = source.slice(close + 1, lineEnd < 0 ? source.length : lineEnd);
+  const match = /^[ \t]*(->[ \t]*[^:]+)?[ \t]*:/.exec(tail);
+  return match?.[1] ? ` ${match[1].trim()}` : '';
+}
+
+function pythonFunctionDocstring(source: string, close: number): string | undefined {
+  const lineEnd = source.indexOf('\n', close + 1);
+  if (lineEnd < 0) return undefined;
+  const body = source.slice(lineEnd + 1);
+  const match =
+    /^(?:[ \t]*(?:#.*)?\r?\n)*[ \t]+(?:"""([\s\S]*?)"""|'''([\s\S]*?)'''|"([^"\r\n]*)"|'([^'\r\n]*)')/.exec(
+      body
+    );
+  const documentation = match?.slice(1).find((value) => value !== undefined)?.trim();
+  return documentation || undefined;
+}
+
+function matchingParen(
+  source: string,
+  open: number,
+  pythonComments: boolean
+): number | undefined {
+  let depth = 0;
+  let quote: string | undefined;
+  let escaped = false;
+  let lineComment = false;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (lineComment) {
+      if (char === '\n') lineComment = false;
+      continue;
+    }
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if ((char === '/' && next === '/') || (pythonComments && char === '#')) {
+      lineComment = true;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    if (char === ')' && --depth === 0) return index;
+  }
+  return undefined;
+}
+
+function precedingComment(
+  source: string,
+  declarationStart: number,
+  marker: '//' | '#'
+): string | undefined {
+  const lines = source.slice(0, declarationStart).split(/\r?\n/);
+  if (lines.at(-1)?.trim() === '') lines.pop();
+  const comments: string[] = [];
+  while (lines.length > 0) {
+    const line = lines.pop() ?? '';
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(marker)) break;
+    comments.unshift(trimmed.slice(marker.length).trim());
+  }
+  const documentation = comments.join('\n').trim();
+  return documentation || undefined;
+}
+
+function normalizeSignature(signature: string): string {
+  return signature
+    .replace(/\s+/g, ' ')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .trim();
+}
+
+function deduplicateExports(exports: WorkspaceLibraryExport[]): WorkspaceLibraryExport[] {
+  const seen = new Set<string>();
+  return exports
+    .filter((entry) => {
+      if (seen.has(entry.name)) return false;
+      seen.add(entry.name);
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function maskLineStringsAndComments(
+  source: string,
+  syntax: LibraryImportSyntax
+): string {
+  const chars = [...source];
+  let quote: string | undefined;
+  let escaped = false;
+  let lineComment = false;
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    const next = chars[index + 1];
+    if (lineComment) {
+      if (char === '\n') {
+        lineComment = false;
+      } else {
+        chars[index] = ' ';
+      }
+      continue;
+    }
+    if (quote) {
+      chars[index] = ' ';
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      chars[index] = ' ';
+      continue;
+    }
+    if ((syntax === 'pine' && char === '/' && next === '/') || (syntax === 'pyne' && char === '#')) {
+      lineComment = true;
+      chars[index] = ' ';
+    }
+  }
+  return chars.join('');
+}
+
+function activeCallParameter(source: string, open: number): number | undefined {
+  const brackets: string[] = [];
+  let activeParameter = 0;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '(' || char === '[' || char === '{') {
+      brackets.push(char);
+      continue;
+    }
+    if (char === ')' || char === ']' || char === '}') {
+      brackets.pop();
+      if (brackets.length === 0) return undefined;
+      continue;
+    }
+    if (char === ',' && brackets.length === 1) activeParameter += 1;
+  }
+  return brackets.length > 0 ? activeParameter : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function childDirectories(dir: string): string[] {

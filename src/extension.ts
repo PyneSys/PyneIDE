@@ -36,6 +36,7 @@ import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
+import { registerLibraryHelp } from './workspace/libraryHelp';
 import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
@@ -148,6 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
   registerLibraryCompletion(context);
   registerLibraryDefinition(context);
+  registerLibraryHelp(context);
 
   registerWorkspaceView(context, chartManager);
   const inputsView = new InputsViewManager(
