@@ -994,7 +994,7 @@ function rebuildPlotIndicators(st: RunState): void {
     overlay: boolean
   ) => ({
     name,
-    shortName: name,
+    shortName: '',
     figures: [],
     calc: () => [],
     styles: { tooltip: { showRule: 'none' } },
@@ -1564,7 +1564,14 @@ const tabPerformanceEl = document.getElementById('tab-performance');
 const tabTradesEl = document.getElementById('tab-trades');
 const tabStatsEl = document.getElementById('tab-stats');
 const tabToggleEl = document.getElementById('tab-toggle');
+const panelSplitterEl = document.getElementById('panel-splitter');
 let activeTab: 'performance' | 'trades' | 'stats' = 'trades';
+let bottomPanelHeight: number | undefined;
+let panelResizeFrame: number | undefined;
+
+const MIN_CHART_HEIGHT = 120;
+const MIN_BOTTOM_PANEL_HEIGHT = 120;
+const PANEL_KEYBOARD_STEP = 20;
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -1660,12 +1667,85 @@ function drawPerformance(): void {
   });
 }
 
+function bottomPanelLimits(): { min: number; max: number } {
+  const toolbarHeight = document.getElementById('toolbar')?.getBoundingClientRect().height ?? 0;
+  const splitterHeight = panelSplitterEl?.getBoundingClientRect().height ?? 0;
+  const max = Math.max(
+    27,
+    document.body.clientHeight - toolbarHeight - splitterHeight - MIN_CHART_HEIGHT
+  );
+  return { min: Math.min(MIN_BOTTOM_PANEL_HEIGHT, max), max };
+}
+
+function resizeChartAndPerformance(): void {
+  if (panelResizeFrame !== undefined) return;
+  panelResizeFrame = requestAnimationFrame(() => {
+    panelResizeFrame = undefined;
+    state?.chart.resize();
+    drawPerformance();
+  });
+}
+
+function setBottomPanelHeight(height: number): void {
+  if (!bottomEl) return;
+  const { min, max } = bottomPanelLimits();
+  bottomPanelHeight = Math.round(Math.min(max, Math.max(min, height)));
+  bottomEl.style.setProperty('--bottom-height', `${bottomPanelHeight}px`);
+  panelSplitterEl?.setAttribute('aria-valuemin', String(Math.round(min)));
+  panelSplitterEl?.setAttribute('aria-valuemax', String(Math.round(max)));
+  panelSplitterEl?.setAttribute('aria-valuenow', String(bottomPanelHeight));
+  resizeChartAndPerformance();
+}
+
 function setCollapsed(collapsed: boolean): void {
   if (!bottomEl) return;
   bottomEl.classList.toggle('collapsed', collapsed);
+  if (panelSplitterEl) panelSplitterEl.hidden = collapsed;
   if (tabToggleEl) tabToggleEl.textContent = collapsed ? '▴' : '▾';
-  state?.chart.resize();
+  if (!collapsed) {
+    const currentHeight = bottomPanelHeight ?? bottomEl.getBoundingClientRect().height;
+    setBottomPanelHeight(currentHeight);
+  } else {
+    resizeChartAndPerformance();
+  }
 }
+
+panelSplitterEl?.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || !bottomEl || bottomEl.classList.contains('collapsed')) return;
+  event.preventDefault();
+  const pointerId = event.pointerId;
+  const startY = event.clientY;
+  const startHeight = bottomEl.getBoundingClientRect().height;
+  panelSplitterEl.setPointerCapture(pointerId);
+  document.body.classList.add('panel-resizing');
+
+  const move = (moveEvent: PointerEvent): void => {
+    if (moveEvent.pointerId !== pointerId) return;
+    setBottomPanelHeight(startHeight + startY - moveEvent.clientY);
+  };
+  const finish = (finishEvent: PointerEvent): void => {
+    if (finishEvent.pointerId !== pointerId) return;
+    panelSplitterEl.removeEventListener('pointermove', move);
+    panelSplitterEl.removeEventListener('pointerup', finish);
+    panelSplitterEl.removeEventListener('pointercancel', finish);
+    document.body.classList.remove('panel-resizing');
+    if (panelSplitterEl.hasPointerCapture(pointerId)) {
+      panelSplitterEl.releasePointerCapture(pointerId);
+    }
+  };
+
+  panelSplitterEl.addEventListener('pointermove', move);
+  panelSplitterEl.addEventListener('pointerup', finish);
+  panelSplitterEl.addEventListener('pointercancel', finish);
+});
+
+panelSplitterEl?.addEventListener('keydown', (event) => {
+  if (!bottomEl || bottomEl.classList.contains('collapsed')) return;
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+  event.preventDefault();
+  const direction = event.key === 'ArrowUp' ? 1 : -1;
+  setBottomPanelHeight(bottomEl.getBoundingClientRect().height + direction * PANEL_KEYBOARD_STEP);
+});
 
 function renderTrades(): string {
   const st = state;
@@ -2185,8 +2265,11 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
 });
 
 window.addEventListener('resize', () => {
-  state?.chart.resize();
-  drawPerformance();
+  if (bottomPanelHeight !== undefined && !bottomEl?.classList.contains('collapsed')) {
+    setBottomPanelHeight(bottomPanelHeight);
+  } else {
+    resizeChartAndPerformance();
+  }
 });
 
 vscode.postMessage({ type: 'ready' });

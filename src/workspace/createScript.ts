@@ -126,9 +126,13 @@ export async function createNewScript(context: vscode.ExtensionContext): Promise
       choice.language === 'pyne' && choice.scriptKind === 'library'
         ? rawSnippet
         : withScriptName(rawSnippet, name);
-    const uri = vscode.Uri.file(target).with({ scheme: 'untitled' });
+    fs.closeSync(fs.openSync(target, 'wx'));
+    const uri = vscode.Uri.file(target);
     const document = await vscode.workspace.openTextDocument(uri);
-    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const editor = await vscode.window.showTextDocument(document, {
+      preview: false,
+      preserveFocus: false,
+    });
     const inserted = await editor.insertSnippet(new vscode.SnippetString(snippet));
     if (!inserted) {
       throw new Error('the editor rejected the script template');
@@ -136,6 +140,10 @@ export async function createNewScript(context: vscode.ExtensionContext): Promise
     if (!(await document.save())) {
       throw new Error('the new script could not be saved');
     }
+    await vscode.window.showTextDocument(document, {
+      preview: false,
+      preserveFocus: false,
+    });
   } catch (err) {
     void vscode.window.showErrorMessage(
       `PyneIDE: could not create the script — ${

@@ -454,13 +454,30 @@ export class ChartPanel {
   }
   #to-realtime[hidden] { display: none; }
   #bottom {
-    flex: 0 0 auto; height: min(300px, 42vh); display: flex; flex-direction: column;
-    border-top: 1px solid var(--vscode-panel-border, #444);
+    flex: 0 0 auto; height: var(--bottom-height, min(300px, 42vh));
+    min-height: 0; display: flex; flex-direction: column;
     background: var(--vscode-editor-background);
     color: var(--vscode-editor-foreground);
   }
-  #bottom.collapsed { height: 27px; }
+  #bottom.collapsed {
+    height: 27px; border-top: 1px solid var(--vscode-panel-border, #444);
+  }
   #bottom.collapsed .tab-body { display: none; }
+  #panel-splitter {
+    position: relative; flex: 0 0 5px; cursor: row-resize; touch-action: none;
+    background: var(--vscode-editor-background); outline: none;
+  }
+  #panel-splitter::after {
+    content: ""; position: absolute; inset: 2px 0 auto; height: 1px;
+    background: var(--vscode-panel-border, #444);
+  }
+  #panel-splitter:hover::after, #panel-splitter:focus-visible::after,
+  body.panel-resizing #panel-splitter::after {
+    top: 1px; height: 3px;
+    background: var(--vscode-focusBorder, #007fd4);
+  }
+  #panel-splitter[hidden] { display: none; }
+  body.panel-resizing { cursor: row-resize; user-select: none; }
   .tab-bar {
     flex: 0 0 26px; display: flex; align-items: center; gap: 2px;
     padding: 0 6px; user-select: none;
@@ -549,6 +566,8 @@ export class ChartPanel {
   </div>
   <button id="to-realtime" title="Scroll to the latest bar" hidden>⇥</button>
 </div>
+<div id="panel-splitter" role="separator" aria-orientation="horizontal"
+     aria-label="Resize chart and bottom panel" tabindex="0" hidden></div>
 <div id="bottom" class="collapsed">
   <div class="tab-bar">
     <button id="tab-performance" hidden>Performance</button>
