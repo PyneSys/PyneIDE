@@ -75,13 +75,14 @@ class LibrarySignatureHelpProvider implements vscode.SignatureHelpProvider {
     if (!resolved) return undefined;
 
     const parsed = parseLibraryDocumentation(resolved.entry.documentation);
+    const signatureSyntax = resolved.entry.signatureSyntax ?? syntax;
     const signature = new vscode.SignatureInformation(
       resolved.entry.signature,
       signatureDocumentation(parsed.summary, parsed.returns)
     );
     signature.parameters = librarySignatureParameters(resolved.entry.signature).map(
       (label) => {
-        const name = libraryParameterName(label, syntax);
+        const name = libraryParameterName(label, signatureSyntax);
         return new vscode.ParameterInformation(
           label,
           name ? parsed.parameters[name] : undefined
@@ -136,13 +137,17 @@ export function libraryExportMarkdown(
   syntax: LibraryImportSyntax
 ): vscode.MarkdownString {
   const parsed = parseLibraryDocumentation(entry.documentation);
+  const signatureSyntax = entry.signatureSyntax ?? syntax;
   const markdown = new vscode.MarkdownString();
-  markdown.appendCodeblock(entry.signature, syntax === 'pine' ? 'pine' : 'python');
+  markdown.appendCodeblock(
+    entry.signature,
+    signatureSyntax === 'pine' ? 'pine' : 'python'
+  );
   if (parsed.summary) markdown.appendMarkdown(parsed.summary);
 
   const documentedParameters = librarySignatureParameters(entry.signature)
     .map((label) => {
-      const name = libraryParameterName(label, syntax);
+      const name = libraryParameterName(label, signatureSyntax);
       return {
         name,
         documentation: name ? parsed.parameters[name] : undefined,

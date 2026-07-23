@@ -28,6 +28,7 @@ import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPineVersion } from '../pineVersion';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
 import { getRememberedData, pickRunData } from './dataSelect';
 
@@ -111,7 +112,8 @@ export class RunService {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly manager: EnvManager,
-    private readonly compile: CompileService
+    private readonly compile: CompileService,
+    private readonly libraryDiagnostics?: LibraryCallDiagnostics
   ) {}
 
   register(): void {
@@ -593,6 +595,17 @@ export class RunService {
       return undefined;
     }
     if (doc.isDirty) await doc.save();
+    const libraryErrors = this.libraryDiagnostics?.checkNow(doc) ?? [];
+    if (libraryErrors.length > 0) {
+      void vscode.window.showErrorMessage(
+        `PyneIDE: fix ${libraryErrors.length} workspace-library argument ` +
+          `error${libraryErrors.length === 1 ? '' : 's'} before running.`
+      );
+      this.output.appendLine(
+        `Run stopped: ${libraryErrors.length} workspace-library argument error(s).`
+      );
+      return undefined;
+    }
 
     // Resolve the runnable .py: a Pine run always compiles in the background
     // (content-hash cache skips the API when nothing changed).

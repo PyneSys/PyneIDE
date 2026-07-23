@@ -16,6 +16,8 @@ import {
   pineImportFragment,
   pyneImportFragment,
   resolveWorkspaceLibraryFile,
+  validateWorkspaceLibraryCall,
+  workspaceLibraryCalls,
 } from '../../src/workspace/libraryImports';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -83,6 +85,7 @@ library("TestLib")
 
 // @function Smooth the source
 // @param source Input series
+// @returns Smoothed series
 export smooth(
     series float source,
     simple int length = input.int(14, "Length")) =>
@@ -110,7 +113,7 @@ helper(float source) => source
   assert(
     documentation.summary === 'Smooth the source' &&
       documentation.parameters.source === 'Input series' &&
-      documentation.returns === undefined,
+      documentation.returns === 'Smoothed series',
     `structured Pine documentation: ${JSON.stringify(documentation)}`
   );
   const signatureParameters = librarySignatureParameters(pineExports[1].signature);
@@ -119,6 +122,12 @@ helper(float source) => source
       libraryParameterName(signatureParameters[0], 'pine') === 'source' &&
       libraryParameterName(signatureParameters[1], 'pine') === 'length',
     `Pine signature parameters: ${JSON.stringify(signatureParameters)}`
+  );
+  assert(
+    librarySignatureParameters(
+      'lookup(map<string, array<float>> values, string key)'
+    ).length === 2,
+    'commas inside Pine generic types do not split parameters'
   );
   assert(
     activeLibraryCall(
@@ -130,6 +139,52 @@ helper(float source) => source
   assert(
     activeLibraryCall('value = tl.smooth(src)', 'pine') === undefined,
     'a completed call does not keep signature help active'
+  );
+
+  const callSource = `
+valid = tl.smooth(close)
+missing = tl.smooth()
+extra = tl.smooth(close, 14, 2)
+unknown = tl.smooth(source=close, nope=1)
+duplicate = tl.smooth(close, source=close)
+nested = tl.smooth(ta.sma(close, 2), length=10)
+ordered = tl.smooth(length=10, close)
+text = "tl.smooth()"
+// tl.smooth()
+`;
+  const calls = workspaceLibraryCalls(callSource, 'pine').filter(
+    (call) => call.alias === 'tl'
+  );
+  assert(calls.length === 7, `expected 7 real library calls, got ${calls.length}`);
+  const callIssues = calls.map((call) =>
+    validateWorkspaceLibraryCall(call, pineExports[1], 'pine')
+  );
+  assert(callIssues[0].length === 0, 'required + defaulted arguments are valid');
+  assert(
+    callIssues[1].length === 1 &&
+      callIssues[1][0].message.includes('source'),
+    `missing required argument: ${JSON.stringify(callIssues[1])}`
+  );
+  assert(
+    callIssues[2].length === 1 &&
+      callIssues[2][0].code === 'pyne-lib-argument-count',
+    `too many arguments: ${JSON.stringify(callIssues[2])}`
+  );
+  assert(
+    callIssues[3].length === 1 &&
+      callIssues[3][0].code === 'pyne-lib-argument-name',
+    `unknown named argument: ${JSON.stringify(callIssues[3])}`
+  );
+  assert(
+    callIssues[4].length === 1 &&
+      callIssues[4][0].code === 'pyne-lib-argument-duplicate',
+    `duplicate argument: ${JSON.stringify(callIssues[4])}`
+  );
+  assert(callIssues[5].length === 0, 'nested and named arguments bind correctly');
+  assert(
+    callIssues[6].length === 1 &&
+      callIssues[6][0].code === 'pyne-lib-argument-order',
+    `positional-after-named argument: ${JSON.stringify(callIssues[6])}`
   );
 
   const pyneExports = parsePyneLibraryExports(`"""
@@ -156,6 +211,76 @@ def helper() -> None:
     `Pyne callable exports: ${JSON.stringify(pyneExports)}`
   );
   assert(pyneExports[0].documentation === 'Smooth the source.', 'Pyne export documentation');
+  const pyneCall = workspaceLibraryCalls(
+    'value = tl.smooth(source=close)',
+    'pyne'
+  )[0];
+  assert(
+    validateWorkspaceLibraryCall(pyneCall, pyneExports[0], 'pyne').length === 0,
+    'Pyne named + defaulted arguments are valid'
+  );
+  assert(
+    validateWorkspaceLibraryCall(
+      workspaceLibraryCalls('value = tl.smooth(close)', 'pine')[0],
+      pyneExports[0],
+      'pine'
+    ).length === 0,
+    'a Pine importer binds a .py-only library signature by its source syntax'
+  );
+  assert(
+    workspaceLibraryCalls(
+      '"""Docs mention tl.smooth() and "quotes"."""\nvalue = tl.smooth(close)',
+      'pyne'
+    ).length === 1,
+    'Pyne calls inside triple-quoted strings are ignored'
+  );
+
+  const variadicExport = {
+    name: 'flex',
+    kind: 'function' as const,
+    signature:
+      'flex(a: int, /, b: int = 0, *args: float, c: int, **kwargs: object)',
+  };
+  const variadicCalls = workspaceLibraryCalls(
+    [
+      'ok = tl.flex(1, 2, 3, c=4, extra=5)',
+      'posonly = tl.flex(a=1, c=2)',
+      'missing = tl.flex(1)',
+      'dynamic = tl.flex(*items)',
+    ].join('\n'),
+    'pyne'
+  );
+  assert(
+    validateWorkspaceLibraryCall(variadicCalls[0], variadicExport, 'pyne').length === 0,
+    'Pyne variadic and keyword-only arguments bind correctly'
+  );
+  assert(
+    validateWorkspaceLibraryCall(variadicCalls[1], variadicExport, 'pyne')[0]?.code ===
+      'pyne-lib-argument-name',
+    'Pyne positional-only arguments reject names'
+  );
+  assert(
+    validateWorkspaceLibraryCall(variadicCalls[2], variadicExport, 'pyne')[0]?.message.includes(
+      'c'
+    ),
+    'Pyne keyword-only required arguments are checked'
+  );
+  assert(
+    validateWorkspaceLibraryCall(variadicCalls[3], variadicExport, 'pyne').length === 0,
+    'dynamic spreads are conservatively skipped'
+  );
+
+  const overloaded = {
+    name: 'pick',
+    kind: 'function' as const,
+    signature: 'pick(float value)',
+    overloads: ['pick(float value)', 'pick(float value, int offset)'],
+  };
+  const overloadCall = workspaceLibraryCalls('value = tl.pick(close, 1)', 'pine')[0];
+  assert(
+    validateWorkspaceLibraryCall(overloadCall, overloaded, 'pine').length === 0,
+    'a call matching any overload is valid'
+  );
 
   const compiledExports = parsePyneLibraryExports(`from typing import Protocol, Any
 from pynecore.core.pine_export import Exported
@@ -195,7 +320,7 @@ smooth: _ProtocolSmooth = Exported()
     assert(!isIncompletePineLibraryImport(line), `should not be incomplete: ${JSON.stringify(line)}`);
   }
 
-  console.log('library import/member completion, definition and transient-diagnostic rules OK');
+  console.log('library imports, member help, call diagnostics and definitions OK');
 } finally {
   fs.rmSync(workdir, { recursive: true, force: true });
 }

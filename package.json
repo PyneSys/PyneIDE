@@ -43,6 +43,9 @@
         "*.py": "${capture}.py.map, ${capture}.toml",
         "*.ohlcv": "${capture}.toml",
         "*.csv": "${capture}_viz.ndjson, ${capture}_strat.csv, ${capture}_trade.csv"
+      },
+      "workbench.editor.customLabels.patterns": {
+        "**/scripts/lib/*/*/v*.{pine,py}": "${dirname}/${filename}.${extname}"
       }
     },
     "commands": [

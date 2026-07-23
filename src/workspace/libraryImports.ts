@@ -36,6 +36,8 @@ export interface WorkspaceLibraryExport {
   name: string;
   kind: WorkspaceLibraryExportKind;
   signature: string;
+  signatureSyntax?: LibraryImportSyntax;
+  overloads?: readonly string[];
   documentation?: string;
 }
 
@@ -49,6 +51,40 @@ export interface ActiveLibraryCall {
   alias: string;
   member: string;
   activeParameter: number;
+}
+
+export interface WorkspaceLibraryCallArgument {
+  start: number;
+  end: number;
+  name?: string;
+  spread: boolean;
+}
+
+export interface WorkspaceLibraryCall {
+  alias: string;
+  member: string;
+  memberStart: number;
+  memberEnd: number;
+  arguments: readonly WorkspaceLibraryCallArgument[];
+}
+
+export interface LibraryCallIssue {
+  start: number;
+  end: number;
+  code:
+    | 'pyne-lib-argument-count'
+    | 'pyne-lib-argument-name'
+    | 'pyne-lib-argument-duplicate'
+    | 'pyne-lib-argument-order';
+  message: string;
+}
+
+interface LibraryParameterSpec {
+  name: string;
+  required: boolean;
+  positional: boolean;
+  keyword: boolean;
+  variadic?: 'positional' | 'keyword';
 }
 
 const LIBRARY_SEGMENT = /^[A-Za-z_][A-Za-z0-9_-]*$/;
@@ -293,6 +329,7 @@ export function parsePineLibraryExports(source: string): WorkspaceLibraryExport[
       name,
       kind: match[1] ? 'method' : 'function',
       signature: normalizeSignature(source.slice((match.index ?? 0) + match[0].indexOf(name), close + 1)),
+      signatureSyntax: 'pine',
       documentation: precedingComment(source, match.index ?? 0, '//'),
     });
   }
@@ -323,6 +360,7 @@ export function parsePyneLibraryExports(source: string): WorkspaceLibraryExport[
       name,
       kind: 'function',
       signature: pythonSignature(source, name, close, open),
+      signatureSyntax: 'pyne',
       documentation:
         pythonFunctionDocstring(source, close) ??
         precedingComment(source, match.index ?? 0, '#'),
@@ -339,6 +377,7 @@ export function parsePyneLibraryExports(source: string): WorkspaceLibraryExport[
       name,
       kind: call?.kind ?? 'function',
       signature: call?.signature ?? `${name}(…)`,
+      signatureSyntax: 'pyne',
     });
   }
   return deduplicateExports(exports);
@@ -373,7 +412,14 @@ export function librarySignatureParameters(signature: string): string[] {
       continue;
     }
     if (char === '(' || char === '[' || char === '{') brackets.push(char);
+    if (
+      char === '<' &&
+      /\b(?:array|matrix|map)\s*$/.test(body.slice(0, index))
+    ) {
+      brackets.push(char);
+    }
     if (char === ')' || char === ']' || char === '}') brackets.pop();
+    if (char === '>' && brackets.at(-1) === '<') brackets.pop();
     if (char === ',' && brackets.length === 0) {
       const parameter = body.slice(start, index).trim();
       if (parameter) parameters.push(parameter);
@@ -392,7 +438,7 @@ export function libraryParameterName(
 ): string | undefined {
   const beforeDefault = label.split('=', 1)[0].trim();
   if (syntax === 'pyne') {
-    return /^([A-Za-z_][A-Za-z0-9_]*)/.exec(beforeDefault)?.[1];
+    return /^\*{0,2}([A-Za-z_][A-Za-z0-9_]*)/.exec(beforeDefault)?.[1];
   }
   const identifiers = beforeDefault.match(/[A-Za-z_][A-Za-z0-9_]*/g);
   return identifiers?.at(-1);
@@ -476,6 +522,279 @@ export function activeLibraryCall(
     };
   }
   return active;
+}
+
+/** Find completed direct calls through imported aliases, excluding comments and strings. */
+export function workspaceLibraryCalls(
+  source: string,
+  syntax: LibraryImportSyntax
+): WorkspaceLibraryCall[] {
+  const code = maskLineStringsAndComments(source, syntax);
+  const pattern =
+    /\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+  const calls: WorkspaceLibraryCall[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(code))) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    const parsed = completedCallArguments(code, source, open, syntax);
+    if (!parsed) continue;
+    const memberStart = (match.index ?? 0) + match[1].length + 1;
+    calls.push({
+      alias: match[1],
+      member: match[2],
+      memberStart,
+      memberEnd: memberStart + match[2].length,
+      arguments: parsed,
+    });
+  }
+  return calls;
+}
+
+/** Bind one direct library call to its exported signature and report safe static errors. */
+export function validateWorkspaceLibraryCall(
+  call: WorkspaceLibraryCall,
+  exported: WorkspaceLibraryExport,
+  syntax: LibraryImportSyntax
+): LibraryCallIssue[] {
+  if (exported.overloads && exported.overloads.length > 1) {
+    const candidates = exported.overloads.map((signature) =>
+      validateWorkspaceLibraryCall(
+        call,
+        { ...exported, signature, overloads: undefined },
+        syntax
+      )
+    );
+    if (candidates.some((issues) => issues.length === 0)) return [];
+    return candidates.reduce((best, issues) =>
+      issues.length < best.length ? issues : best
+    );
+  }
+  if (call.arguments.some((argument) => argument.spread)) return [];
+  const parameters = libraryParameterSpecs(
+    exported.signature,
+    exported.signatureSyntax ?? syntax
+  );
+  const issues: LibraryCallIssue[] = [];
+  const assigned = new Set<string>();
+  let positionalCursor = 0;
+  let namedSeen = false;
+
+  for (const argument of call.arguments) {
+    if (argument.name) {
+      namedSeen = true;
+      const parameter = parameters.find(
+        (candidate) => candidate.name === argument.name
+      );
+      const keywordVariadic = parameters.find(
+        (candidate) => candidate.variadic === 'keyword'
+      );
+      if (!parameter && !keywordVariadic) {
+        issues.push({
+          start: argument.start,
+          end: argument.end,
+          code: 'pyne-lib-argument-name',
+          message: `Unknown argument '${argument.name}' for '${call.member}'.`,
+        });
+        continue;
+      }
+      if (!parameter) continue;
+      if (!parameter.keyword) {
+        issues.push({
+          start: argument.start,
+          end: argument.end,
+          code: 'pyne-lib-argument-name',
+          message: `Argument '${argument.name}' of '${call.member}' cannot be passed by name.`,
+        });
+        assigned.add(parameter.name);
+        continue;
+      }
+      if (assigned.has(parameter.name)) {
+        issues.push({
+          start: argument.start,
+          end: argument.end,
+          code: 'pyne-lib-argument-duplicate',
+          message: `Argument '${argument.name}' is provided more than once to '${call.member}'.`,
+        });
+        continue;
+      }
+      assigned.add(parameter.name);
+      continue;
+    }
+
+    if (namedSeen) {
+      issues.push({
+        start: argument.start,
+        end: argument.end,
+        code: 'pyne-lib-argument-order',
+        message: `Positional arguments must precede named arguments in '${call.member}'.`,
+      });
+    }
+    while (
+      positionalCursor < parameters.length &&
+      (!parameters[positionalCursor].positional ||
+        assigned.has(parameters[positionalCursor].name))
+    ) {
+      positionalCursor += 1;
+    }
+    const parameter = parameters[positionalCursor];
+    if (!parameter) {
+      const variadic = parameters.find(
+        (candidate) => candidate.variadic === 'positional'
+      );
+      if (!variadic) {
+        issues.push({
+          start: argument.start,
+          end: argument.end,
+          code: 'pyne-lib-argument-count',
+          message: `Too many positional arguments for '${call.member}'.`,
+        });
+      }
+      continue;
+    }
+    if (parameter.variadic === 'positional') continue;
+    assigned.add(parameter.name);
+    positionalCursor += 1;
+  }
+
+  const missing = parameters
+    .filter(
+      (parameter) =>
+        parameter.required &&
+        parameter.variadic === undefined &&
+        !assigned.has(parameter.name)
+    )
+    .map((parameter) => parameter.name);
+  if (missing.length > 0) {
+    issues.push({
+      start: call.memberStart,
+      end: call.memberEnd,
+      code: 'pyne-lib-argument-count',
+      message:
+        `'${call.member}' is missing required argument` +
+        `${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}.`,
+    });
+  }
+  return issues;
+}
+
+function libraryParameterSpecs(
+  signature: string,
+  syntax: LibraryImportSyntax
+): LibraryParameterSpec[] {
+  const labels = librarySignatureParameters(signature);
+  if (syntax === 'pine') {
+    return labels.flatMap((label) => {
+      const name = libraryParameterName(label, syntax);
+      if (!name) return [];
+      return [{
+        name,
+        required: !label.includes('='),
+        positional: true,
+        keyword: true,
+      }];
+    });
+  }
+
+  const parameters: LibraryParameterSpec[] = [];
+  let keywordOnly = false;
+  for (const label of labels) {
+    if (label === '/') {
+      for (const parameter of parameters) parameter.keyword = false;
+      continue;
+    }
+    if (label === '*') {
+      keywordOnly = true;
+      continue;
+    }
+    const name = libraryParameterName(label, syntax);
+    if (!name) continue;
+    const keywordVariadic = label.trimStart().startsWith('**');
+    const positionalVariadic =
+      !keywordVariadic && label.trimStart().startsWith('*');
+    parameters.push({
+      name,
+      required: !label.includes('=') && !keywordVariadic && !positionalVariadic,
+      positional: !keywordOnly && !keywordVariadic,
+      keyword: !positionalVariadic,
+      variadic: keywordVariadic
+        ? 'keyword'
+        : positionalVariadic
+          ? 'positional'
+          : undefined,
+    });
+    if (positionalVariadic) keywordOnly = true;
+  }
+  return parameters;
+}
+
+function completedCallArguments(
+  code: string,
+  source: string,
+  open: number,
+  syntax: LibraryImportSyntax
+): WorkspaceLibraryCallArgument[] | undefined {
+  const brackets: string[] = [];
+  const arguments_: WorkspaceLibraryCallArgument[] = [];
+  let argumentStart = open + 1;
+  for (let index = open; index < code.length; index += 1) {
+    const char = code[index];
+    if (char === '(' || char === '[' || char === '{') {
+      brackets.push(char);
+      continue;
+    }
+    if (char === ')' || char === ']' || char === '}') {
+      brackets.pop();
+      if (brackets.length === 0) {
+        appendCallArgument(
+          arguments_,
+          code,
+          source,
+          argumentStart,
+          index,
+          syntax
+        );
+        return arguments_;
+      }
+      continue;
+    }
+    if (char === ',' && brackets.length === 1) {
+      appendCallArgument(
+        arguments_,
+        code,
+        source,
+        argumentStart,
+        index,
+        syntax
+      );
+      argumentStart = index + 1;
+    }
+  }
+  return undefined;
+}
+
+function appendCallArgument(
+  target: WorkspaceLibraryCallArgument[],
+  code: string,
+  source: string,
+  rawStart: number,
+  rawEnd: number,
+  syntax: LibraryImportSyntax
+): void {
+  let start = rawStart;
+  let end = rawEnd;
+  while (start < end && /\s/.test(code[start])) start += 1;
+  while (end > start && /\s/.test(code[end - 1])) end -= 1;
+  if (start === end) return;
+  const masked = code.slice(start, end);
+  const named = /^([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=|>)/.exec(masked);
+  target.push({
+    start,
+    end,
+    name: named?.[1],
+    spread:
+      syntax === 'pyne' &&
+      /^\*{1,2}(?!\*)/.test(source.slice(start, end).trimStart()),
+  });
 }
 
 function staticPythonAll(source: string): Set<string> {
@@ -610,21 +929,26 @@ function normalizeSignature(signature: string): string {
 }
 
 function deduplicateExports(exports: WorkspaceLibraryExport[]): WorkspaceLibraryExport[] {
-  const seen = new Set<string>();
-  return exports
-    .filter((entry) => {
-      if (seen.has(entry.name)) return false;
-      seen.add(entry.name);
-      return true;
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const unique = new Map<string, WorkspaceLibraryExport>();
+  for (const entry of exports) {
+    const existing = unique.get(entry.name);
+    if (!existing) {
+      unique.set(entry.name, entry);
+      continue;
+    }
+    const overloads = existing.overloads ?? [existing.signature];
+    if (!overloads.includes(entry.signature)) {
+      existing.overloads = [...overloads, entry.signature];
+    }
+  }
+  return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function maskLineStringsAndComments(
   source: string,
   syntax: LibraryImportSyntax
 ): string {
-  const chars = [...source];
+  const chars = source.split('');
   let quote: string | undefined;
   let escaped = false;
   let lineComment = false;
@@ -641,6 +965,15 @@ function maskLineStringsAndComments(
     }
     if (quote) {
       chars[index] = ' ';
+      if (quote.length === 3) {
+        if (source.startsWith(quote, index)) {
+          chars[index + 1] = ' ';
+          chars[index + 2] = ' ';
+          index += 2;
+          quote = undefined;
+        }
+        continue;
+      }
       if (escaped) {
         escaped = false;
       } else if (char === '\\') {
@@ -648,6 +981,15 @@ function maskLineStringsAndComments(
       } else if (char === quote) {
         quote = undefined;
       }
+      continue;
+    }
+    const triple = source.slice(index, index + 3);
+    if (syntax === 'pyne' && (triple === '"""' || triple === "'''")) {
+      quote = triple;
+      chars[index] = ' ';
+      chars[index + 1] = ' ';
+      chars[index + 2] = ' ';
+      index += 2;
       continue;
     }
     if (char === '"' || char === "'") {

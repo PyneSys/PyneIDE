@@ -36,6 +36,7 @@ import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
+import { LibraryCallDiagnostics } from './workspace/libraryDiagnostics';
 import { registerLibraryHelp } from './workspace/libraryHelp';
 import { registerWorkspaceView } from './workspace/tree';
 
@@ -90,7 +91,14 @@ export function activate(context: vscode.ExtensionContext): void {
   compileService.register();
   registerStrictCompileToggle(context);
 
-  const runService = new RunService(context, manager, compileService);
+  const libraryDiagnostics = new LibraryCallDiagnostics(context);
+  libraryDiagnostics.register();
+  const runService = new RunService(
+    context,
+    manager,
+    compileService,
+    libraryDiagnostics
+  );
   runService.register();
   registerPyneDebug(context, runService);
   const chartManager = new ChartManager(context);
