@@ -274,6 +274,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "pyneide.scriptDelete",
+        "title": "Delete",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
         "command": "pyneide.outputDelete",
         "title": "Delete",
         "category": "PyneIDE",
@@ -446,6 +452,11 @@
           "command": "pyneide.workspace.revealInExplorer",
           "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
           "group": "9_reveal@1"
+        },
+        {
+          "command": "pyneide.scriptDelete",
+          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
+          "group": "9_reveal@2"
         },
         {
           "command": "pyneide.dataPreviewChart",

@@ -666,6 +666,10 @@ export function registerWorkspaceView(
       const uri = nodeUri(node ?? view.selection[0]);
       if (uri) void vscode.commands.executeCommand('revealInExplorer', uri);
     }),
+    vscode.commands.registerCommand('pyneide.scriptDelete', (node?: PyneNode) => {
+      const target = node ?? view.selection[0];
+      if (isDeletableScriptNode(target)) void deleteScriptNode(target);
+    }),
     vscode.commands.registerCommand('pyneide.dataDelete', (node?: PyneNode) => {
       const target = node ?? view.selection[0];
       if (target?.type === 'data') void deleteDataFile(target.uri);
@@ -679,7 +683,8 @@ export function registerWorkspaceView(
     // target type is resolved from the current selection.
     vscode.commands.registerCommand('pyneide.workspace.deleteSelected', (node?: PyneNode) => {
       const target = node ?? view.selection[0];
-      if (target?.type === 'data') void deleteDataFile(target.uri);
+      if (isDeletableScriptNode(target)) void deleteScriptNode(target);
+      else if (target?.type === 'data') void deleteDataFile(target.uri);
       else if (target?.type === 'output') void deleteOutputFile(target.uri);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -694,6 +699,72 @@ export function registerWorkspaceView(
 function nodeUri(node?: PyneNode): vscode.Uri | undefined {
   if (node && node.type !== 'section') return node.uri;
   return undefined;
+}
+
+type DeletableScriptNode = ScriptNode | CompanionNode | LibraryFolderNode;
+
+function isDeletableScriptNode(node: PyneNode | undefined): node is DeletableScriptNode {
+  return (
+    node?.type === 'script' ||
+    node?.type === 'companion' ||
+    node?.type === 'libraryFolder'
+  );
+}
+
+/**
+ * Delete a script family or an entire library group after a modal confirm.
+ * Selecting a Pine parent removes its compiled Pyne companion and shared
+ * metadata too; selecting the companion itself keeps the Pine source and its
+ * input metadata. Library folders are removed recursively.
+ */
+async function deleteScriptNode(node: DeletableScriptNode): Promise<void> {
+  if (node.type === 'libraryFolder') {
+    const name = node.depth === 0 ? 'Libraries' : path.basename(node.uri.fsPath);
+    const choice = await vscode.window.showWarningMessage(
+      `Delete ${name} and everything in it?`,
+      { modal: true, detail: 'The folder and all its contents are moved to the trash.' },
+      'Delete'
+    );
+    if (choice !== 'Delete') return;
+    await deleteToTrash(node.uri, true);
+    return;
+  }
+
+  const targets = scriptDeletionTargets(node);
+  const associatedCount = targets.length - 1;
+  const name = path.basename(node.uri.fsPath);
+  const choice = await vscode.window.showWarningMessage(
+    associatedCount > 0
+      ? `Delete ${name} and its ${associatedCount} associated file${associatedCount === 1 ? '' : 's'}?`
+      : `Delete ${name}?`,
+    {
+      modal: true,
+      detail:
+        targets.length === 1
+          ? 'The file is moved to the trash.'
+          : 'The script files are moved to the trash.',
+    },
+    'Delete'
+  );
+  if (choice !== 'Delete') return;
+  for (const target of targets) {
+    await deleteToTrash(vscode.Uri.file(target));
+  }
+}
+
+function scriptDeletionTargets(node: ScriptNode | CompanionNode): string[] {
+  const file = node.uri.fsPath;
+  const targets = [file];
+  if (/\.pine$/i.test(file)) {
+    const stem = file.replace(/\.pine$/i, '');
+    targets.push(`${stem}.py`, `${stem}.py.map`, `${stem}.toml`);
+  } else if (/\.py$/i.test(file)) {
+    targets.push(`${file}.map`);
+    if (node.type === 'script') {
+      targets.push(file.replace(/\.py$/i, '.toml'));
+    }
+  }
+  return targets.filter((target, index) => index === 0 || fs.existsSync(target));
 }
 
 /**
@@ -727,9 +798,9 @@ async function deleteOutputFile(uri: vscode.Uri): Promise<void> {
   await deleteToTrash(uri);
 }
 
-async function deleteToTrash(uri: vscode.Uri): Promise<void> {
+async function deleteToTrash(uri: vscode.Uri, recursive = false): Promise<void> {
   try {
-    await vscode.workspace.fs.delete(uri, { useTrash: true });
+    await vscode.workspace.fs.delete(uri, { recursive, useTrash: true });
   } catch (err) {
     void vscode.window.showErrorMessage(
       `PyneIDE: could not delete ${path.basename(uri.fsPath)} — ${
