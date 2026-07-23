@@ -6,6 +6,9 @@ import {
   type ServerOptions,
 } from 'vscode-languageclient/node';
 
+import { workspaceLibraryReferenceAt } from '../workspace/libraryDefinition';
+import { isIncompletePineLibraryImport } from '../workspace/libraryImports';
+
 /**
  * Lifecycle wrapper around the LanguageClient talking LSP/stdio to the
  * native pynesys-pine-ls executable (GPL/proprietary process boundary:
@@ -43,6 +46,32 @@ export class PineLsClient {
       documentSelector: [{ language: 'pine' }],
       outputChannel: this.output,
       revealOutputChannelOn: RevealOutputChannelOn.Never,
+      middleware: {
+        handleDiagnostics: (uri, diagnostics, next) => {
+          const document = vscode.workspace.textDocuments.find(
+            (candidate) => candidate.uri.toString() === uri.toString()
+          );
+          if (!document) {
+            next(uri, diagnostics);
+            return;
+          }
+          next(
+            uri,
+            diagnostics.filter((diagnostic) => {
+              if (diagnostic.code !== 'PYNE_SYNTAX_ERROR') return true;
+              const line = diagnostic.range.start.line;
+              if (line >= document.lineCount) return true;
+              return !isIncompletePineLibraryImport(document.lineAt(line).text);
+            })
+          );
+        },
+        provideDefinition: (document, position, token, next) => {
+          if (workspaceLibraryReferenceAt(document, position, 'pine')) {
+            return undefined;
+          }
+          return next(document, position, token);
+        },
+      },
     });
     this.client = client;
     this.executablePath = executablePath;

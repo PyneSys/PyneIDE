@@ -815,6 +815,7 @@
     "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
+    "test:library-imports": "node esbuild.mjs --smoke-library-imports && node dist/library-imports-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

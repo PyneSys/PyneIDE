@@ -34,6 +34,8 @@ import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import { InputsViewManager } from './workspace/inputsView';
+import { registerLibraryCompletion } from './workspace/libraryCompletion';
+import { registerLibraryDefinition } from './workspace/libraryDefinition';
 import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
@@ -144,6 +146,8 @@ export function activate(context: vscode.ExtensionContext): void {
   // Declared-type hovers when Pylance (or another pyright) supersedes the
   // bundled server — there is no LSP middleware to rewrite through then.
   new PyneHoverProvider(seriesAnalyzer, () => !pyright.running).register(context);
+  registerLibraryCompletion(context);
+  registerLibraryDefinition(context);
 
   registerWorkspaceView(context, chartManager);
   const inputsView = new InputsViewManager(
