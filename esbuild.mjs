@@ -10,6 +10,7 @@ const smokePyright = process.argv.includes('--smoke-pyright');
 const smokeChecker = process.argv.includes('--smoke-checker');
 const smokeEdgeCorpus = process.argv.includes('--smoke-edge-corpus');
 const smokeBridgeViz = process.argv.includes('--smoke-bridge-viz');
+const smokeChartBreakpoints = process.argv.includes('--smoke-chart-breakpoints');
 
 const common = {
   bundle: true,
@@ -102,6 +103,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/bridgeVizSmoke.ts'],
     outfile: 'dist/bridge-viz-smoke.js',
+    minify: false,
+  });
+} else if (smokeChartBreakpoints) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/chartBreakpointConditionSmoke.ts'],
+    outfile: 'dist/chart-breakpoint-condition-smoke.js',
     minify: false,
   });
 } else {

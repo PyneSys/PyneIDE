@@ -28,7 +28,7 @@ import type {
 } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
 import { isChartablePath, openChartKeys } from './chartKey';
-import type { ChartInMessage, ChartOutMessage } from './messages';
+import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
 
 /**
  * Everything needed to rebuild a chart's webview from scratch. plotKeys is the
@@ -58,6 +58,8 @@ interface ChartSnapshot {
 export class ChartPanel {
   private panel: vscode.WebviewPanel | undefined;
   private ready = false;
+  private breakpointTargets: ChartBreakpointTarget[] = [];
+  private breakpointSelectionLabel: string | undefined;
   /** Host-side stream snapshot; survives the webview being closed so reopening
    * replays the same chart. Undefined until the first `start` event. */
   private snap: ChartSnapshot | undefined;
@@ -70,7 +72,10 @@ export class ChartPanel {
     chartKey: string,
     private readonly onSelectData: () => void,
     private readonly onWebviewClosed?: () => void,
-    private readonly onViewStateChanged?: (active: boolean) => void
+    private readonly onViewStateChanged?: (active: boolean) => void,
+    private readonly onSelectBreakpointBar?: (timestamp: number) => void,
+    private readonly onRemoveBreakpointBar?: (timestamp: number) => void,
+    private readonly onCancelBreakpointSelection?: () => void
   ) {
     this.title = `${path.parse(chartKey).name} — Chart`;
   }
@@ -78,6 +83,22 @@ export class ChartPanel {
   /** Whether the chart currently has a live webview tab (not just a dormant snapshot). */
   isOpen(): boolean {
     return this.panel !== undefined;
+  }
+
+  setBreakpointTargets(targets: ChartBreakpointTarget[]): void {
+    this.breakpointTargets = targets;
+    this.post({ type: 'breakpoints', targets });
+  }
+
+  beginBreakpointSelection(label: string): void {
+    this.breakpointSelectionLabel = label;
+    this.post({ type: 'breakpointSelection', label });
+  }
+
+  endBreakpointSelection(): void {
+    if (!this.breakpointSelectionLabel) return;
+    this.breakpointSelectionLabel = undefined;
+    this.post({ type: 'breakpointSelection' });
   }
 
   /**
@@ -200,6 +221,10 @@ export class ChartPanel {
       // chart replays the snapshot. Closing the tab is not "delete the chart".
       this.panel = undefined;
       this.ready = false;
+      if (this.breakpointSelectionLabel) {
+        this.breakpointSelectionLabel = undefined;
+        this.onCancelBreakpointSelection?.();
+      }
       this.onViewStateChanged?.(false);
       this.onWebviewClosed?.();
     });
@@ -218,6 +243,10 @@ export class ChartPanel {
         // so nothing was delivered before this point — no duplicates).
         this.ready = true;
         this.replayFromSnapshot();
+        this.post({ type: 'breakpoints', targets: this.breakpointTargets });
+        if (this.breakpointSelectionLabel) {
+          this.post({ type: 'breakpointSelection', label: this.breakpointSelectionLabel });
+        }
         break;
       case 'openCsv': {
         const file =
@@ -227,6 +256,17 @@ export class ChartPanel {
       }
       case 'selectData':
         this.onSelectData();
+        break;
+      case 'selectBreakpointBar':
+        this.breakpointSelectionLabel = undefined;
+        this.onSelectBreakpointBar?.(msg.timestamp);
+        break;
+      case 'removeBreakpointBar':
+        this.onRemoveBreakpointBar?.(msg.timestamp);
+        break;
+      case 'cancelBreakpointSelection':
+        this.breakpointSelectionLabel = undefined;
+        this.onCancelBreakpointSelection?.();
         break;
     }
   }
@@ -347,8 +387,54 @@ export class ChartPanel {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
+  #breakpoints-popup {
+    position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    min-width: 250px; max-width: min(420px, calc(100% - 12px)); max-height: 60%;
+    overflow: auto; padding: 4px; font-size: 11px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #breakpoints-popup[hidden] { display: none; }
+  #breakpoints-popup .breakpoint-row {
+    display: flex; align-items: center; gap: 7px; padding: 3px 4px 3px 7px;
+    cursor: pointer; border-radius: 3px;
+  }
+  #breakpoints-popup .breakpoint-row:hover {
+    background: var(--vscode-list-hoverBackground, #333);
+  }
+  #breakpoints-popup .breakpoint-dot {
+    width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%;
+  }
+  #breakpoints-popup .breakpoint-label {
+    flex: 1 1 auto; min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  #breakpoints-popup .breakpoint-delete {
+    flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none;
+    border-radius: 3px; background: transparent; color: var(--vscode-foreground);
+    cursor: pointer; font-size: 14px; line-height: 20px;
+  }
+  #breakpoints-popup .breakpoint-delete:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
   #chart-area { flex: 1; min-height: 0; position: relative; }
   #chart { position: absolute; inset: 0; }
+  #breakpoint-pick {
+    position: absolute; z-index: 12; top: 8px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px);
+    box-sizing: border-box; padding: 5px 8px; border-radius: 4px;
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-focusBorder, #007fd4);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); font-size: 11px; user-select: none;
+  }
+  #breakpoint-pick[hidden] { display: none; }
+  #breakpoint-pick-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #breakpoint-pick button {
+    flex: 0 0 auto; border: none; background: transparent; cursor: pointer;
+    color: var(--vscode-foreground); padding: 1px 3px; font-size: 13px;
+  }
   #to-realtime {
     position: absolute; right: 68px; top: 10px; z-index: 5;
     width: 22px; height: 22px; border-radius: 50%;
@@ -416,12 +502,18 @@ export class ChartPanel {
   <button id="tb-measure" title="Show/hide a price movement measurement">Measure</button>
   <span class="sep"></span>
   <button id="tb-goto" title="Scroll the chart to a date/time">Go to date…</button>
+  <span id="tb-breakpoints-sep" class="sep" hidden></span>
+  <button id="tb-breakpoints" title="Jump to or remove chart breakpoints" hidden>Breakpoints</button>
   <span class="spacer"></span>
   <button id="tb-csv-plot" title="Open the plot output CSV" disabled>Plot CSV</button>
   <button id="tb-csv-trades" title="Open the trades output CSV" disabled hidden>Trades CSV</button>
 </div>
 <div id="chart-area">
   <div id="chart"></div>
+  <div id="breakpoint-pick" hidden>
+    <span id="breakpoint-pick-label"></span>
+    <button id="breakpoint-pick-cancel" title="Cancel (Escape)">×</button>
+  </div>
   <div id="goto-popup" hidden>
     <input type="datetime-local" id="tb-goto-input" step="1">
     <button id="tb-goto-do">Go</button>
@@ -457,6 +549,11 @@ export class ChartManager implements RunListener {
   /** Set by the host: invoked when a panel's Data button is clicked, with the
    * script's chart key, to re-pick and reload that chart's data. */
   onSelectData: ((chartKey: string) => void) | undefined;
+  /** Native source breakpoints projected into visual timestamps for a script. */
+  breakpointTargetsForChart: ((chartKey: string) => ChartBreakpointTarget[]) | undefined;
+  onSelectBreakpointBar: ((chartKey: string, timestamp: number) => void) | undefined;
+  onRemoveBreakpointBar: ((chartKey: string, timestamp: number) => void) | undefined;
+  onCancelBreakpointSelection: ((chartKey: string) => void) | undefined;
   /** Set by the host: a chart is pinned (kept alive with no open source tab)
    * while a run/preview/debug is streaming to it. */
   isPinned: ((chartKey: string) => boolean) | undefined;
@@ -485,6 +582,27 @@ export class ChartManager implements RunListener {
   /** Whether this script's chart tab is currently open. */
   hasOpenChart(chartKey: string): boolean {
     return this.panels.get(chartKey)?.isOpen() === true;
+  }
+
+  refreshBreakpointTargets(): void {
+    for (const [chartKey, panel] of this.panels) {
+      if (!isChartablePath(chartKey)) continue;
+      panel.setBreakpointTargets(this.breakpointTargetsForChart?.(chartKey) ?? []);
+    }
+  }
+
+  beginBreakpointSelection(chartKey: string, label: string): boolean {
+    const panel = this.panels.get(chartKey);
+    if (!panel?.isOpen()) return false;
+    this.endBreakpointSelection();
+    panel.beginBreakpointSelection(label);
+    panel.reveal();
+    return true;
+  }
+
+  endBreakpointSelection(chartKey?: string): void {
+    if (chartKey) this.panels.get(chartKey)?.endBreakpointSelection();
+    else for (const panel of this.panels.values()) panel.endBreakpointSelection();
   }
 
   /**
@@ -582,8 +700,12 @@ export class ChartManager implements RunListener {
         chartKey,
         () => this.onSelectData?.(chartKey),
         undefined,
-        (active) => this.updateActiveChart(chartKey, active)
+        (active) => this.updateActiveChart(chartKey, active),
+        (timestamp) => this.onSelectBreakpointBar?.(chartKey, timestamp),
+        (timestamp) => this.onRemoveBreakpointBar?.(chartKey, timestamp),
+        () => this.onCancelBreakpointSelection?.(chartKey)
       );
+      panel.setBreakpointTargets(this.breakpointTargetsForChart?.(chartKey) ?? []);
       this.panels.set(chartKey, panel);
     }
     return panel;

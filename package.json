@@ -152,6 +152,12 @@
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
+        "command": "pyneide.selectBreakpointBar",
+        "title": "Choose Bar on Chart…",
+        "category": "PyneIDE",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
         "command": "pyneide.toggleChartFullscreen",
         "title": "Toggle Chart Fullscreen",
         "category": "PyneIDE",
@@ -287,6 +293,13 @@
       }
     ],
     "menus": {
+      "editor/lineNumber/context": [
+        {
+          "command": "pyneide.selectBreakpointBar",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@1"
+        }
+      ],
       "editor/context": [
         {
           "command": "pyneide.compilePine",
@@ -779,6 +792,7 @@
     "test:checker": "node esbuild.mjs --smoke-checker && node dist/checker-smoke.js",
     "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
+    "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

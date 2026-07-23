@@ -10,6 +10,7 @@ import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { buildOhlcvPreview } from './data/ohlcvPreview';
 import { SymbolBrowserPanel } from './data/symbolBrowserPanel';
+import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
@@ -92,6 +93,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const chartManager = new ChartManager(context);
   runService.attachChart(chartManager);
   chartManager.onSelectData = (chartKey) => void runService.reselectChartData(chartKey);
+  new ChartBreakpointService(context, chartManager).register();
   // A chart lives as long as its script (the .pine OR its compiled .py) is open
   // in a tab, or a run/debug is streaming to it. Closing the last such tab
   // retires the chart; closing only the chart's own tab keeps it dormant so it

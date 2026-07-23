@@ -91,6 +91,8 @@ export class RunService {
   private flyToBar: { target: number } | undefined;
   /** Breakpoint toggle on the active debug proxy (run-to-bar fast path). */
   private debugControl: DebugBreakpointControl | undefined;
+  /** Pure chart breakpoint timestamps scheduled by the bridge without tracing. */
+  private fastChartBreakpointTimestamps: number[] = [];
   /** External subscriber (chart webview) for the live event stream. */
   listener: RunListener | undefined;
   /** Typed handle to the same object as `listener`, for revealing panels and
@@ -151,6 +153,7 @@ export class RunService {
         this.debugThreadId = undefined;
         this.flyToBar = undefined;
         this.debugControl = undefined;
+        this.fastChartBreakpointTimestamps = [];
         // Stopping the debug session stops the run: a detached-but-running
         // backtest with no debugger and no chart control would be a trap.
         this.activeRun?.cancel();
@@ -685,6 +688,15 @@ export class RunService {
   /** The active debug proxy registers here so run-to-bar can toggle breakpoints. */
   setDebugControl(control: DebugBreakpointControl): void {
     this.debugControl = control;
+    this.fastChartBreakpointTimestamps = [];
+    this.activeRun?.setChartBreakpointTimestamps([]);
+  }
+
+  /** The proxy publishes only chart-managed breakpoints with no base/hit/log
+   * condition; the bridge can park exactly at these bars at native run speed. */
+  onFastChartBreakpointsChanged(timestamps: number[]): void {
+    this.fastChartBreakpointTimestamps = timestamps;
+    this.activeRun?.setChartBreakpointTimestamps(timestamps);
   }
 
   /**
@@ -725,6 +737,29 @@ export class RunService {
     // feed is released, or the target bar's main() runs untraced and flies past.
     await this.debugControl.restoreBreakpoints();
     run.resume();
+  }
+
+  /** While the feed is silently parked at a chart-bar boundary, swap the
+   * matching source breakpoints into/out of debugpy before releasing it. */
+  private async handoffChartBreakpoint(
+    run: BridgeRun,
+    phase: 'enter' | 'leave',
+    timestamp: number
+  ): Promise<void> {
+    try {
+      // Explicit Run to bar already owns breakpoint scheduling and skips every
+      // intermediate stop, including visual chart targets on the way.
+      if (!this.flyToBar) {
+        if (phase === 'enter') await this.debugControl?.armChartBreakpoints(timestamp);
+        else await this.debugControl?.disarmChartBreakpoints();
+      }
+    } catch (error) {
+      this.output.appendLine(
+        `Chart breakpoint handoff failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      if (this.activeRun === run) run.resume();
+    }
   }
 
   private async continueDebugger(): Promise<void> {
@@ -965,6 +1000,12 @@ export class RunService {
             // of the user's breakpoints.
             this.debugControl?.setBarStopLocation(event.file, event.line);
             break;
+          case 'chartBreakpoint':
+            // The Python feed is parked immediately before/after the target
+            // bar. The DAP swap completes before resume, so pydevd traces only
+            // that bar and the native source breakpoint still owns the stop.
+            void this.handoffChartBreakpoint(run, event.phase, event.time);
+            break;
           case 'trades':
             trades.push(...event.d);
             break;
@@ -1024,6 +1065,7 @@ export class RunService {
       onLog: (line) => this.output.appendLine(line),
     });
     this.activeRun = run;
+    if (opts.debug) run.setChartBreakpointTimestamps(this.fastChartBreakpointTimestamps);
 
     const code = await run.exited;
     this.activeRun = undefined;

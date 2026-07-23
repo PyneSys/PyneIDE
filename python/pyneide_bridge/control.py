@@ -5,6 +5,7 @@ Commands are JSON lines on stdin:
     {"cmd": "pause"}
     {"cmd": "resume"}
     {"cmd": "step", "bars": 1}   # while paused: advance N bars, pause again
+    {"cmd": "chartBreakpoints", "timestamps": [1710000000000]}
     {"cmd": "cancel"}
 
 The per-bar hot path is a single attribute check (``control.idle``); the
@@ -32,6 +33,15 @@ class Control:
         # every thread suspended at a breakpoint — it is race-free: the debugger
         # sets it via an `evaluate` before releasing the run (see request_runto).
         self._runto: int | None = None
+        # Pure chart breakpoints are scheduled outside pydevd. The runner reads
+        # this immutable snapshot before each chart bar and parks only at a
+        # matching timestamp; replacing a frozenset is atomic under the GIL, so
+        # the per-bar hot path needs neither this condition lock nor tracing.
+        self._chart_breakpoints: frozenset[int] = frozenset()
+        # A chart-breakpoint park is internal handoff state. It must not flash
+        # the regular paused/running UI while the IDE installs/removes the real
+        # line breakpoint around the one matching bar.
+        self._silent_pause = False
         # True whenever the main loop must leave the hot path.
         self.idle = False
         self._on_state = on_state
@@ -43,6 +53,30 @@ class Control:
     def set_runto(self, bar: int | None) -> None:
         with self._cond:
             self._runto = bar
+
+    def set_chart_breakpoints(self, timestamps: object) -> None:
+        if not isinstance(timestamps, list):
+            self._chart_breakpoints = frozenset()
+            return
+        self._chart_breakpoints = frozenset(
+            value for value in timestamps
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        )
+
+    def has_chart_breakpoint(self, timestamp: int) -> bool:
+        """Lock-free hot-path lookup for a chart bar timestamp."""
+        return timestamp in self._chart_breakpoints
+
+    def park_chart_breakpoint(self) -> bool:
+        """Silently park the feed while the IDE changes debugpy breakpoints."""
+        with self._cond:
+            if self._cancelled or self._paused:
+                return False
+            self._paused = True
+            self._step_budget = 0
+            self._silent_pause = True
+            self._wake()
+            return True
 
     def note_bar(self, bars_done: int) -> None:
         """Feed-thread hook, called after each processed bar. Self-pauses the
@@ -64,6 +98,7 @@ class Control:
             if not self._paused:
                 self._paused = True
                 self._step_budget = 0
+                self._silent_pause = False
                 self._wake()
                 if self._on_state:
                     self._on_state("paused")
@@ -72,10 +107,12 @@ class Control:
         with self._cond:
             self._runto = None
             if self._paused:
+                silent = self._silent_pause
                 self._paused = False
                 self._step_budget = 0
+                self._silent_pause = False
                 self._wake()
-                if self._on_state:
+                if self._on_state and not silent:
                     self._on_state("running")
 
     def step(self, bars: int) -> None:
@@ -149,6 +186,8 @@ def start_stdin_reader(control: Control) -> threading.Thread:
                         control.step(int(msg.get("bars", 1)))
                     except (TypeError, ValueError):
                         control.step(1)
+                elif cmd == "chartBreakpoints":
+                    control.set_chart_breakpoints(msg.get("timestamps"))
                 elif cmd == "cancel":
                     control.cancel()
                     break

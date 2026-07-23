@@ -552,7 +552,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         return _stream_run(runner, emitter, control,
                            total_bars=size,
                            is_strategy=is_strategy,
-                           batch_size=args.batch_size)
+                           batch_size=args.batch_size,
+                           chart_breakpoints=args.debugpy_port is not None)
 
 
 def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
@@ -630,8 +631,48 @@ def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
         return 0
 
 
+def _chart_breakpoint_iter(source: Any, emitter: Emitter, control: Control):
+    """Park exactly around chart-target bars without enabling pydevd tracing.
+
+    ``ScriptRunner`` peeks one candle ahead: code after ``yield candle`` runs
+    immediately before that candle's ``main()``. That gives the bridge a safe
+    boundary to ask the IDE to install the real source-line breakpoint, then a
+    second boundary after the bar to remove it again. Consecutive target bars
+    switch directly from one timestamp to the next.
+    """
+    active_timestamp: int | None = None
+
+    def handoff(phase: str, timestamp: int) -> bool:
+        # A visible user/run-to pause wins first. Once it is released, park
+        # again for this internal handoff instead of racing two owners of the
+        # same gate and two breakpoint-set updates.
+        while not control.park_chart_breakpoint():
+            if not control.gate():
+                return False
+        emitter.emit({
+            "e": "chartBreakpoint",
+            "phase": phase,
+            "time": timestamp,
+        })
+        return control.gate()
+
+    for candle in source:
+        yield candle
+
+        timestamp = int(candle.timestamp) * 1000
+        if control.has_chart_breakpoint(timestamp):
+            if not handoff("enter", timestamp):
+                return
+            active_timestamp = timestamp
+        elif active_timestamp is not None:
+            if not handoff("leave", active_timestamp):
+                return
+            active_timestamp = None
+
+
 def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
-                total_bars: int, is_strategy: bool, batch_size: int) -> int:
+                total_bars: int, is_strategy: bool, batch_size: int,
+                chart_breakpoints: bool) -> int:
     from pynecore import lib
 
     plot_keys: list[str] = []
@@ -660,6 +701,9 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
         emitter.emit({"e": "progress", "done": bars_done, "total": total_bars})
         last_flush = time.monotonic()
 
+    if chart_breakpoints:
+        runner.ohlcv_iter = _chart_breakpoint_iter(
+            runner.ohlcv_iter, emitter, control)
     gen = runner.run_iter()
     try:
         for item in gen:

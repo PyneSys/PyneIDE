@@ -174,6 +174,7 @@ export type BridgeEvent =
   | { e: 'hello'; protocol: number; pid: number }
   | { e: 'debugpy'; host: string; port: number }
   | { e: 'debugMain'; file: string; line: number }
+  | { e: 'chartBreakpoint'; phase: 'enter' | 'leave'; time: number }
   | StartEvent
   | { e: 'bars'; d: BarRow[] }
   | { e: 'plotKeys'; keys: string[] }
@@ -315,6 +316,11 @@ export class BridgeRun {
   /** Graceful stop: the runner finishes the current bar and cleans up. */
   cancel(): void {
     this.send({ cmd: 'cancel' });
+  }
+
+  /** Pure chart-breakpoint timestamps handled at the bridge's bar boundary. */
+  setChartBreakpointTimestamps(timestamps: readonly number[]): void {
+    this.send({ cmd: 'chartBreakpoints', timestamps });
   }
 
   /** Hard stop; prefer cancel(). */

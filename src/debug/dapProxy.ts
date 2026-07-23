@@ -33,6 +33,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { pureChartBreakpointTimestamps } from './chartBreakpointCondition';
 import { demangleVariables } from './demangle';
 import type { PineSourceMapper } from './sourceMapper';
 
@@ -121,9 +122,27 @@ interface PineEntry {
   type: string;
 }
 
+interface FastChartBreakpoint {
+  breakpoint: Record<string, unknown>;
+  timestamps: number[];
+}
+
+interface StoredBreakpointSet {
+  args: Record<string, unknown>;
+  fast: FastChartBreakpoint[];
+}
+
+interface FastBreakpointResponse {
+  source: { path?: string; name?: string } | undefined;
+  /** undefined = consume the next debugpy response; otherwise synthesize this fast BP. */
+  order: (Record<string, unknown> | undefined)[];
+}
+
 export interface PyneDapProxyHooks {
   /** Debugger execution state: stopped (with thread + stop reason) or resumed. */
   onExecState(stopped: boolean, threadId?: number, reason?: string): void;
+  /** Pure chart-breakpoint timestamps the bridge can schedule without tracing. */
+  onFastChartBreakpointsChanged(timestamps: number[]): void;
 }
 
 /**
@@ -139,6 +158,10 @@ export interface DebugBreakpointControl {
   hasBreakpoints(): boolean;
   suppressBreakpoints(): Promise<void>;
   restoreBreakpoints(): Promise<void>;
+  /** Install only the pure chart breakpoints belonging to this target bar. */
+  armChartBreakpoints(timestamp: number): Promise<void>;
+  /** Remove the target-bar breakpoints while preserving every normal one. */
+  disarmChartBreakpoints(): Promise<void>;
   /**
    * Location of the script's `main` first executable line, reported by the
    * bridge (`debugMain`). Enables the synthetic "bar stop" breakpoint below.
@@ -231,10 +254,16 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   private syntheticRef = SYNTHETIC_REF_BASE;
   private syntheticSeq = SYNTHETIC_SEQ_BASE;
 
-  // Last breakpoint requests the client sent, replayed to toggle the debuggee's
-  // breakpoints for the run-to-bar fast path (source path -> setBreakpoints args).
-  private readonly clientBreakpoints = new Map<string, Record<string, unknown>>();
+  // Last breakpoint requests the client sent. Pure chart-only conditions are
+  // retained here for VSCode's native breakpoint model but normally withheld
+  // from debugpy; the bridge arms them only around their target bar.
+  private readonly clientBreakpoints = new Map<string, StoredBreakpointSet>();
+  // setBreakpoints requests can withhold fast entries from debugpy. Responses
+  // are expanded back to the client's one-to-one order with verified synthetic
+  // entries before Pine source mapping is applied.
+  private readonly pendingFastBreakpoints = new Map<number, FastBreakpointResponse>();
   private clientExceptionBreakpoints: Record<string, unknown> | undefined;
+  private armedChartTimestamp: number | undefined;
 
   // "Run to bar N": set while a run-to-bar is in flight (see setRunToBarTarget).
   private runToBarTarget: number | undefined;
@@ -441,6 +470,14 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         // (condition wrapping, the stored replay args, the bar-stop merge)
         // uniformly sees the .py form.
         this.translatePineBreakpoints(msg);
+        const translatedBreakpoints = Array.isArray(args.breakpoints)
+          ? (args.breakpoints as Record<string, unknown>[])
+          : [];
+        const fastTimestamps = new Map<Record<string, unknown>, number[]>();
+        for (const breakpoint of translatedBreakpoints) {
+          const timestamps = fastChartTimestamps(breakpoint);
+          if (timestamps) fastTimestamps.set(breakpoint, timestamps);
+        }
         // Rewrite each condition so bare Pine builtins resolve live (see
         // wrapBreakpointConditions). Mutated in place BEFORE the args are
         // stored + forwarded, so the run-to-bar restore replays the wrapped
@@ -448,7 +485,35 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         wrapBreakpointConditions(args);
         const source = args.source as { path?: string; name?: string } | undefined;
         const key = source?.path ?? source?.name;
-        if (key) this.clientBreakpoints.set(key, args);
+        if (key) {
+          const breakpoints = Array.isArray(args.breakpoints)
+            ? (args.breakpoints as Record<string, unknown>[])
+            : [];
+          const fast = breakpoints.flatMap((breakpoint): FastChartBreakpoint[] => {
+            const timestamps = fastTimestamps.get(breakpoint);
+            return timestamps ? [{ breakpoint, timestamps }] : [];
+          });
+          const fastSet = new Set(fast.map((entry) => entry.breakpoint));
+          const storedArgs = {
+            ...args,
+            breakpoints: [...breakpoints],
+            lines: breakpoints.map((breakpoint) => breakpoint.line),
+          };
+          this.clientBreakpoints.set(key, { args: storedArgs, fast });
+
+          if (fast.length > 0) {
+            this.pendingFastBreakpoints.set(msg.seq, {
+              source,
+              order: breakpoints.map((breakpoint) =>
+                fastSet.has(breakpoint) ? breakpoint : undefined
+              ),
+            });
+            const forwarded = breakpoints.filter((breakpoint) => !fastSet.has(breakpoint));
+            args.breakpoints = forwarded;
+            args.lines = forwarded.map((breakpoint) => breakpoint.line);
+          }
+          this.publishFastChartBreakpoints();
+        }
         break;
       }
       case 'setExceptionBreakpoints':
@@ -651,6 +716,24 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           }
         }
       }
+      const fastBps = this.pendingFastBreakpoints.get(seq);
+      if (fastBps !== undefined) {
+        this.pendingFastBreakpoints.delete(seq);
+        if (msg.success && msg.body) {
+          const serverBps = Array.isArray(msg.body.breakpoints)
+            ? (msg.body.breakpoints as Record<string, unknown>[])
+            : [];
+          let next = 0;
+          msg.body.breakpoints = fastBps.order.map((fastBreakpoint) => {
+            if (fastBreakpoint === undefined) return serverBps[next++] ?? { verified: false };
+            return {
+              verified: true,
+              line: fastBreakpoint.line,
+              source: fastBps.source,
+            };
+          });
+        }
+      }
       const pineBps = this.pendingPineBreakpoints.get(seq);
       if (pineBps !== undefined) {
         this.pendingPineBreakpoints.delete(seq);
@@ -789,7 +872,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     if (!bp || bp.line !== this.barStopLine) return false;
     const source = bp.source?.path;
     if (source !== undefined && !this.isMainFileKey(source)) return false;
-    const clientBps = this.mainFileClientArgs()?.breakpoints;
+    const clientBps = this.mainFileClientArgs()?.args.breakpoints;
     if (Array.isArray(clientBps)) {
       for (const cb of clientBps as { line?: number }[]) {
         if (cb.line === this.barStopLine) return false; // the user owns this line
@@ -1182,9 +1265,8 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 
   /** True if any source has active line breakpoints (something to land on). */
   hasBreakpoints(): boolean {
-    for (const args of this.clientBreakpoints.values()) {
-      const bps = args.breakpoints;
-      if (Array.isArray(bps) && bps.length > 0) return true;
+    for (const stored of this.clientBreakpoints.values()) {
+      if (this.activeBreakpoints(stored).length > 0) return true;
     }
     return false;
   }
@@ -1193,8 +1275,14 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   async suppressBreakpoints(): Promise<void> {
     const reqs: Promise<unknown>[] = [];
     let mainCovered = false;
-    for (const [key, args] of this.clientBreakpoints) {
-      reqs.push(this.request('setBreakpoints', { ...args, breakpoints: [] }).catch(() => {}));
+    for (const [key, stored] of this.clientBreakpoints) {
+      reqs.push(
+        this.request('setBreakpoints', {
+          ...stored.args,
+          breakpoints: [],
+          lines: [],
+        }).catch(() => {})
+      );
       if (this.isMainFileKey(key)) mainCovered = true;
     }
     // The synthetic bar-stop breakpoint may live in the main file even when the
@@ -1221,19 +1309,22 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     await Promise.all(reqs);
   }
 
-  /** Re-arm the breakpoints exactly as the client last set them (plus the
-   * bar-stop breakpoint when it is armed, so the run-to-bar crawl lands). */
+  /** Re-arm normal breakpoints plus any currently targeted chart breakpoint
+   * and the hidden bar-stop when armed. Pure chart breakpoints stay withheld
+   * everywhere except their own bar. */
   async restoreBreakpoints(): Promise<void> {
     const reqs: Promise<unknown>[] = [];
     let mainCovered = false;
-    for (const [key, args] of this.clientBreakpoints) {
+    for (const [key, stored] of this.clientBreakpoints) {
       if (this.isMainFileKey(key)) {
         reqs.push(
           this.request('setBreakpoints', this.mainFileBreakpoints(this.barStopArmed)).catch(() => {})
         );
         mainCovered = true;
       } else {
-        reqs.push(this.request('setBreakpoints', args).catch(() => {}));
+        reqs.push(
+          this.request('setBreakpoints', this.breakpointArgs(stored)).catch(() => {})
+        );
       }
     }
     if (this.barStopArmed && this.barStopFile !== undefined && !mainCovered) {
@@ -1245,6 +1336,17 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       );
     }
     await Promise.all(reqs);
+  }
+
+  async armChartBreakpoints(timestamp: number): Promise<void> {
+    this.armedChartTimestamp = timestamp;
+    await this.restoreBreakpoints();
+  }
+
+  async disarmChartBreakpoints(): Promise<void> {
+    if (this.armedChartTimestamp === undefined) return;
+    this.armedChartTimestamp = undefined;
+    await this.restoreBreakpoints();
   }
 
   // --- bar-stop breakpoint (Next bar / Run to bar) -----------------------------
@@ -1281,9 +1383,9 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   }
 
   /** The client's stored setBreakpoints args for the main file, if any. */
-  private mainFileClientArgs(): Record<string, unknown> | undefined {
-    for (const [key, args] of this.clientBreakpoints) {
-      if (this.isMainFileKey(key)) return args;
+  private mainFileClientArgs(): StoredBreakpointSet | undefined {
+    for (const [key, stored] of this.clientBreakpoints) {
+      if (this.isMainFileKey(key)) return stored;
     }
     return undefined;
   }
@@ -1294,10 +1396,9 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
    * Reuses the client's `source` object so pydevd keys the same file.
    */
   private mainFileBreakpoints(withSynthetic: boolean): Record<string, unknown> {
-    const clientArgs = this.mainFileClientArgs();
-    const clientBps = Array.isArray(clientArgs?.breakpoints)
-      ? (clientArgs.breakpoints as Record<string, unknown>[])
-      : [];
+    const stored = this.mainFileClientArgs();
+    const clientArgs = stored?.args;
+    const clientBps = stored ? this.activeBreakpoints(stored) : [];
     const breakpoints = withSynthetic
       ? [...clientBps, { line: this.barStopLine }]
       : [...clientBps];
@@ -1307,6 +1408,49 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       lines: breakpoints.map((b) => b.line),
       sourceModified: false,
     };
+  }
+
+  /** Breakpoints active for the current execution phase. Fast entries are
+   * condition-free because the bridge has already matched their exact bar. */
+  private activeBreakpoints(stored: StoredBreakpointSet): Record<string, unknown>[] {
+    const all = Array.isArray(stored.args.breakpoints)
+      ? (stored.args.breakpoints as Record<string, unknown>[])
+      : [];
+    const fast = new Map(stored.fast.map((entry) => [entry.breakpoint, entry.timestamps]));
+    const active: Record<string, unknown>[] = [];
+    for (const breakpoint of all) {
+      const timestamps = fast.get(breakpoint);
+      if (!timestamps) {
+        active.push(breakpoint);
+      } else if (
+        this.armedChartTimestamp !== undefined &&
+        timestamps.includes(this.armedChartTimestamp)
+      ) {
+        const unconditioned = { ...breakpoint };
+        delete unconditioned.condition;
+        active.push(unconditioned);
+      }
+    }
+    return active;
+  }
+
+  private breakpointArgs(stored: StoredBreakpointSet): Record<string, unknown> {
+    const breakpoints = this.activeBreakpoints(stored);
+    return {
+      ...stored.args,
+      breakpoints,
+      lines: breakpoints.map((breakpoint) => breakpoint.line),
+    };
+  }
+
+  private publishFastChartBreakpoints(): void {
+    const timestamps = new Set<number>();
+    for (const stored of this.clientBreakpoints.values()) {
+      for (const fast of stored.fast) {
+        for (const timestamp of fast.timestamps) timestamps.add(timestamp);
+      }
+    }
+    this.hooks.onFastChartBreakpointsChanged([...timestamps].sort((a, b) => a - b));
   }
 
   /** Own-seq setBreakpoints for the main file (with/without the bar stop). */
@@ -1355,6 +1499,20 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
 function slotExpression(slot: PineSlot): string {
   if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(slot.param)) return `${slot.param}[${slot.slot}]`;
   return `locals()[${JSON.stringify(slot.param)}][${slot.slot}]`;
+}
+
+/** A chart-only stopping breakpoint can be scheduled outside pydevd. Numeric
+ * hit counts and log messages remain normal breakpoints because withholding
+ * their non-target hits would change debugger semantics. */
+function fastChartTimestamps(breakpoint: Record<string, unknown>): number[] | undefined {
+  const hasHitCondition =
+    typeof breakpoint.hitCondition === 'string' && breakpoint.hitCondition.trim() !== '';
+  const hasLogMessage =
+    typeof breakpoint.logMessage === 'string' && breakpoint.logMessage.trim() !== '';
+  if (hasHitCondition || hasLogMessage) return undefined;
+  return typeof breakpoint.condition === 'string'
+    ? pureChartBreakpointTimestamps(breakpoint.condition)
+    : undefined;
 }
 
 /**

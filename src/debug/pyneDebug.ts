@@ -58,6 +58,8 @@ export function registerPyneDebug(
           ep.port,
           {
             onExecState: (stopped, threadId) => runService.onDebugExecState(stopped, threadId),
+            onFastChartBreakpointsChanged: (timestamps) =>
+              runService.onFastChartBreakpointsChanged(timestamps),
           },
           mapper
         );

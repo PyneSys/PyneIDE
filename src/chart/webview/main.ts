@@ -26,7 +26,7 @@ import {
 } from 'klinecharts';
 
 import type { BarRow, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
-import type { ChartInMessage, ChartOutMessage } from '../messages';
+import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
 import { ColorTrack } from './colorTrack';
 import {
   DrawingStore,
@@ -69,6 +69,10 @@ const vscode = acquireVsCodeApi();
 const UI_TICK_MS = 400;
 const MAX_TRADE_ANNOTATIONS = 2000;
 const MEASURE_OVERLAY_NAME = 'PyneMeasure';
+const BREAKPOINT_OVERLAY_NAME = 'PyneBreakpoint';
+const BREAKPOINT_CLICK_DRAG_THRESHOLD_PX = 4;
+
+interface BreakpointOverlayData extends ChartBreakpointTarget {}
 
 function formatMeasureDuration(durationMs: number): string {
   let seconds = Math.max(0, Math.round(durationMs / 1000));
@@ -187,6 +191,57 @@ registerOverlay({
   },
 });
 
+registerOverlay<BreakpointOverlayData>({
+  name: BREAKPOINT_OVERLAY_NAME,
+  totalStep: 2,
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
+    const point = coordinates[0];
+    if (!point) return [];
+    const data = overlay.extendData;
+    const color = data.enabled
+      ? cssVar('--vscode-debugIcon-breakpointForeground', '#e51400')
+      : cssVar('--vscode-debugIcon-breakpointDisabledForeground', '#848484');
+    const label = data.count > 1 ? `BP ×${data.count}` : 'BP';
+    return [
+      {
+        type: 'line',
+        attrs: {
+          coordinates: [
+            { x: point.x, y: 0 },
+            { x: point.x, y: bounding.height },
+          ],
+        },
+        styles: { color, size: 1, style: 'dashed', dashedValue: [4, 3] },
+      },
+      {
+        type: 'text',
+        attrs: { x: point.x, y: 4, text: label, align: 'center', baseline: 'top' },
+        styles: {
+          style: 'stroke_fill',
+          color: '#ffffff',
+          size: 10,
+          backgroundColor: color,
+          borderColor: color,
+          borderSize: 1,
+          borderRadius: 3,
+          paddingLeft: 4,
+          paddingTop: 2,
+          paddingRight: 4,
+          paddingBottom: 2,
+        },
+      },
+    ];
+  },
+  onClick: ({ overlay }) => selectBreakpointTimestamp(overlay.extendData.timestamp),
+  onRightClick: ({ overlay, preventDefault }) => {
+    preventDefault?.();
+    vscode.postMessage({
+      type: 'removeBreakpointBar',
+      timestamp: overlay.extendData.timestamp,
+    });
+  },
+});
+
 const PLOT_COLORS = [
   '#2962ff',
   '#ff6d00',
@@ -243,9 +298,15 @@ interface RunState {
   equityIndicatorId?: string;
   showVolume: boolean;
   volumeIndicatorId?: string;
+  breakpointOverlays: Map<number, { id: string; enabled: boolean; count: number }>;
 }
 
 let state: RunState | undefined;
+let chartBreakpointTargets: ChartBreakpointTarget[] = [];
+let breakpointSelectionLabel: string | undefined;
+let breakpointPointerGesture:
+  | { pointerId: number; startX: number; startY: number; dragged: boolean }
+  | undefined;
 
 const container = document.getElementById('chart') as HTMLDivElement;
 
@@ -381,6 +442,7 @@ function startRun(start: StartEvent): void {
     plotPane: new Map(),
     hidden: new Set(),
     showVolume: false,
+    breakpointOverlays: new Map(),
   };
   renderTables();
   renderPlotList(state);
@@ -405,8 +467,53 @@ function startRun(start: StartEvent): void {
     updateRealtimeButton(data as VisibleRange)
   );
   applyVolume(state, false);
+  syncBreakpointOverlays(state);
   syncToolbar();
   updateRealtimeButton();
+}
+
+function syncBreakpointOverlays(st: RunState): void {
+  const wanted = new Map(chartBreakpointTargets.map((target) => [target.timestamp, target]));
+  for (const [timestamp, rendered] of [...st.breakpointOverlays]) {
+    const target = wanted.get(timestamp);
+    if (target && target.enabled === rendered.enabled && target.count === rendered.count) continue;
+    st.chart.removeOverlay({ id: rendered.id });
+    st.breakpointOverlays.delete(timestamp);
+  }
+
+  for (const target of chartBreakpointTargets) {
+    if (st.breakpointOverlays.has(target.timestamp)) continue;
+    const dataIndex = st.tsToIndex.get(target.timestamp);
+    const bar = dataIndex === undefined ? undefined : st.bars[dataIndex];
+    if (dataIndex === undefined || !bar) continue;
+    const id = st.chart.createOverlay({
+      name: BREAKPOINT_OVERLAY_NAME,
+      paneId: 'candle_pane',
+      points: [{ timestamp: target.timestamp, dataIndex, value: bar.high }],
+      extendData: target,
+      lock: true,
+      zLevel: 100,
+    });
+    if (typeof id === 'string') {
+      st.breakpointOverlays.set(target.timestamp, {
+        id,
+        enabled: target.enabled,
+        count: target.count,
+      });
+    }
+  }
+}
+
+function selectBreakpointTimestamp(timestamp: number): void {
+  if (
+    breakpointPointerGesture?.dragged ||
+    !breakpointSelectionLabel ||
+    !Number.isSafeInteger(timestamp) ||
+    timestamp < 0
+  ) return;
+  breakpointSelectionLabel = undefined;
+  syncBreakpointSelectionUi();
+  vscode.postMessage({ type: 'selectBreakpointBar', timestamp });
 }
 
 // --- "Back to realtime" floating button ------------------------------------
@@ -1066,6 +1173,15 @@ const plotsPopupEl = ((): HTMLDivElement | null => {
   return el;
 })();
 
+const breakpointsPopupEl = ((): HTMLDivElement | null => {
+  if (!document.body) return null;
+  const el = document.createElement('div');
+  el.id = 'breakpoints-popup';
+  el.hidden = true;
+  document.body.appendChild(el);
+  return el;
+})();
+
 /** Collect one legend entry per plot id: every meta (plotcandle/plotbar's four
  * columns share one id, so they collapse to one row) plus any plot column that
  * arrived without a meta (pynecore < 6.6). */
@@ -1160,6 +1276,7 @@ function positionPlotsPopup(): void {
 
 function openPlotsPopup(): void {
   if (!plotsPopupEl || !state) return;
+  closeBreakpointsPopup();
   renderPlotList(state);
   plotsPopupEl.hidden = false;
   positionPlotsPopup();
@@ -1253,6 +1370,7 @@ function uiTick(): void {
     }
     ensureEquityIndicator(st);
     ensureDrawingIndicators(st);
+    syncBreakpointOverlays(st);
     renderDrawingTables(st);
     elapsed = performance.now() - t0;
   }
@@ -1387,11 +1505,151 @@ const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
+const tbBreakpointsEl = document.getElementById('tb-breakpoints') as HTMLButtonElement | null;
+const tbBreakpointsSepEl = document.getElementById('tb-breakpoints-sep');
 const gotoPopupEl = document.getElementById('goto-popup') as HTMLDivElement | null;
 const tbGotoInputEl = document.getElementById('tb-goto-input') as HTMLInputElement | null;
 const tbGotoDoEl = document.getElementById('tb-goto-do');
 const tbCsvPlotEl = document.getElementById('tb-csv-plot') as HTMLButtonElement | null;
 const tbCsvTradesEl = document.getElementById('tb-csv-trades') as HTMLButtonElement | null;
+const breakpointPickEl = document.getElementById('breakpoint-pick') as HTMLDivElement | null;
+const breakpointPickLabelEl = document.getElementById('breakpoint-pick-label');
+const breakpointPickCancelEl = document.getElementById('breakpoint-pick-cancel');
+
+function syncBreakpointSelectionUi(): void {
+  if (!breakpointPickEl) return;
+  breakpointPickEl.hidden = !breakpointSelectionLabel;
+  if (breakpointPickLabelEl) {
+    breakpointPickLabelEl.textContent = breakpointSelectionLabel
+      ? `Select a bar for ${breakpointSelectionLabel}`
+      : '';
+  }
+}
+
+function renderBreakpointList(): void {
+  if (!breakpointsPopupEl) return;
+  breakpointsPopupEl.innerHTML = '';
+  for (const target of chartBreakpointTargets) {
+    const row = document.createElement('div');
+    row.className = 'breakpoint-row';
+    row.title = 'Jump to this breakpoint';
+
+    const dot = document.createElement('span');
+    dot.className = 'breakpoint-dot';
+    dot.style.background = target.enabled
+      ? cssVar('--vscode-debugIcon-breakpointForeground', '#e51400')
+      : cssVar('--vscode-debugIcon-breakpointDisabledForeground', '#848484');
+
+    const label = document.createElement('span');
+    label.className = 'breakpoint-label';
+    const dataIndex = state?.tsToIndex.get(target.timestamp);
+    label.textContent = `${fmtTime(target.timestamp)}${
+      dataIndex === undefined ? '' : ` · bar ${dataIndex}`
+    }${target.count > 1 ? ` · ${target.count} breakpoints` : ''}`;
+
+    const remove = document.createElement('button');
+    remove.className = 'breakpoint-delete';
+    remove.type = 'button';
+    remove.title = 'Remove this chart breakpoint';
+    remove.setAttribute('aria-label', `Remove breakpoint at ${fmtTime(target.timestamp)}`);
+    remove.textContent = '×';
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      remove.disabled = true;
+      vscode.postMessage({ type: 'removeBreakpointBar', timestamp: target.timestamp });
+    });
+
+    row.append(dot, label, remove);
+    row.addEventListener('click', (event) => {
+      event.stopPropagation();
+      state?.chart.scrollToTimestamp(target.timestamp, 200);
+    });
+    breakpointsPopupEl.appendChild(row);
+  }
+}
+
+function positionBreakpointsPopup(): void {
+  if (!breakpointsPopupEl || !tbBreakpointsEl) return;
+  const r = tbBreakpointsEl.getBoundingClientRect();
+  const maxLeft = Math.max(6, window.innerWidth - breakpointsPopupEl.offsetWidth - 6);
+  breakpointsPopupEl.style.left = `${Math.round(Math.min(Math.max(6, r.left), maxLeft))}px`;
+  breakpointsPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+}
+
+function openBreakpointsPopup(): void {
+  if (!breakpointsPopupEl || !chartBreakpointTargets.length) return;
+  closePlotsPopup();
+  closeGotoPopup();
+  renderBreakpointList();
+  breakpointsPopupEl.hidden = false;
+  tbBreakpointsEl?.classList.add('active');
+  positionBreakpointsPopup();
+}
+
+function closeBreakpointsPopup(): void {
+  if (breakpointsPopupEl) breakpointsPopupEl.hidden = true;
+  tbBreakpointsEl?.classList.remove('active');
+}
+
+function syncBreakpointControls(): void {
+  const visible = chartBreakpointTargets.length > 0;
+  if (tbBreakpointsEl) {
+    tbBreakpointsEl.hidden = !visible;
+    tbBreakpointsEl.textContent = visible
+      ? `Breakpoints (${chartBreakpointTargets.length})`
+      : 'Breakpoints';
+  }
+  if (tbBreakpointsSepEl) tbBreakpointsSepEl.hidden = !visible;
+  if (!visible) closeBreakpointsPopup();
+  else if (breakpointsPopupEl && !breakpointsPopupEl.hidden) {
+    renderBreakpointList();
+    positionBreakpointsPopup();
+  }
+}
+
+function cancelBreakpointSelection(): void {
+  if (!breakpointSelectionLabel) return;
+  breakpointSelectionLabel = undefined;
+  syncBreakpointSelectionUi();
+  vscode.postMessage({ type: 'cancelBreakpointSelection' });
+}
+
+breakpointPickCancelEl?.addEventListener('click', cancelBreakpointSelection);
+container.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) {
+    breakpointPointerGesture = undefined;
+    return;
+  }
+  breakpointPointerGesture = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    dragged: false,
+  };
+}, true);
+container.addEventListener('pointermove', (event) => {
+  const gesture = breakpointPointerGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId || gesture.dragged) return;
+  gesture.dragged =
+    Math.abs(event.clientX - gesture.startX) > BREAKPOINT_CLICK_DRAG_THRESHOLD_PX ||
+    Math.abs(event.clientY - gesture.startY) > BREAKPOINT_CLICK_DRAG_THRESHOLD_PX;
+}, true);
+container.addEventListener('pointercancel', () => {
+  breakpointPointerGesture = undefined;
+}, true);
+container.addEventListener('click', (event) => {
+  const dragged = breakpointPointerGesture?.dragged === true;
+  breakpointPointerGesture = undefined;
+  if (dragged || !breakpointSelectionLabel || !state) return;
+
+  const bounds = container.getBoundingClientRect();
+  const converted = state.chart.convertFromPixel(
+    [{ x: event.clientX - bounds.left }],
+    { paneId: 'candle_pane' }
+  );
+  const point = Array.isArray(converted) ? converted[0] : converted;
+  if (typeof point?.timestamp === 'number') selectBreakpointTimestamp(point.timestamp);
+});
 
 /** The data name shown on the Data button (bare stem of the .ohlcv path). */
 function dataLabel(dataPath?: string): string {
@@ -1421,6 +1679,12 @@ tbLayersEl?.addEventListener('click', (e) => {
   togglePlotsPopup();
 });
 
+tbBreakpointsEl?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (breakpointsPopupEl?.hidden) openBreakpointsPopup();
+  else closeBreakpointsPopup();
+});
+
 let measureOverlayId: string | undefined;
 let measureDrawing = false;
 
@@ -1446,6 +1710,7 @@ function toggleMeasureDrawing(): void {
   if (!st) return;
   closePlotsPopup();
   closeGotoPopup();
+  closeBreakpointsPopup();
   const id = st.chart.createOverlay({
     name: MEASURE_OVERLAY_NAME,
     paneId: 'candle_pane',
@@ -1465,7 +1730,18 @@ function toggleMeasureDrawing(): void {
 tbMeasureEl?.addEventListener('click', toggleMeasureDrawing);
 
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !measureDrawing) return;
+  if (event.key !== 'Escape') return;
+  if (breakpointSelectionLabel) {
+    event.preventDefault();
+    cancelBreakpointSelection();
+    return;
+  }
+  if (breakpointsPopupEl && !breakpointsPopupEl.hidden) {
+    event.preventDefault();
+    closeBreakpointsPopup();
+    return;
+  }
+  if (!measureDrawing) return;
   event.preventDefault();
   removeMeasurement();
 });
@@ -1478,8 +1754,16 @@ document.addEventListener('click', (e) => {
   closePlotsPopup();
 });
 
+document.addEventListener('click', (event) => {
+  if (!breakpointsPopupEl || breakpointsPopupEl.hidden) return;
+  const target = event.target as Node;
+  if (breakpointsPopupEl.contains(target) || tbBreakpointsEl?.contains(target)) return;
+  closeBreakpointsPopup();
+});
+
 window.addEventListener('resize', () => {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
+  if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
 });
 
@@ -1498,6 +1782,7 @@ function positionGotoPopup(): void {
 function openGotoPopup(): void {
   if (!gotoPopupEl) return;
   closePlotsPopup();
+  closeBreakpointsPopup();
   gotoPopupEl.hidden = false;
   tbGotoEl?.classList.add('active');
   positionGotoPopup();
@@ -1604,6 +1889,16 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'stats':
       if (state) state.stats = msg.stats;
       break;
+    case 'breakpoints':
+      chartBreakpointTargets = msg.targets;
+      if (state) syncBreakpointOverlays(state);
+      syncBreakpointControls();
+      break;
+    case 'breakpointSelection':
+      breakpointSelectionLabel = msg.label;
+      breakpointPointerGesture = undefined;
+      syncBreakpointSelectionUi();
+      break;
     case 'end':
       if (state) {
         state.ended = true;
@@ -1615,6 +1910,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         renderPlotList(state);
         ensureEquityIndicator(state);
         ensureDrawingIndicators(state);
+        syncBreakpointOverlays(state);
         renderDrawingTables(state);
         addTradeAnnotations(state);
         if (state.trades.length) setCollapsed(false);
