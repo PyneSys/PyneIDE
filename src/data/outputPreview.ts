@@ -3,7 +3,7 @@
  *
  * - `<stem>.csv` contains OHLCV + plot values;
  * - `<stem>_viz.ndjson` contains the native visual header, plot metadata,
- *   dynamic color deltas and final drawing snapshot.
+ *   dynamic color deltas, strategy equity and final drawing snapshot.
  *
  * The files are deliberately joined best-effort. Unknown visual records,
  * colors for timestamps absent from the CSV and metadata without a matching
@@ -26,9 +26,11 @@ import type {
 interface NativeRecord {
   t?: string;
   data?: string;
+  initialCapital?: number | null;
   id?: string | number;
   kind?: string;
   time?: number;
+  equity?: number | null;
   c?: Record<string, ColorEnc>;
   script?: Record<string, unknown>;
   syminfo?: Record<string, unknown>;
@@ -206,19 +208,27 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   const hdr = records.find((record) => record.t === 'hdr');
   const metas = new Map<string, PlotMetaRecord>();
   const colors: ColorDeltaRow[] = [];
+  const equityByTime = new Map<number, number>();
   let drawings: NativeRecord | undefined;
   let complete = false;
   for (const record of records) {
     if (record.t === 'meta' && typeof record.id === 'string' && typeof record.kind === 'string') {
       const { t: _t, ...meta } = record;
       metas.set(record.id, meta as PlotMetaRecord);
-    } else if (record.t === 'bar' && typeof record.time === 'number' && record.c) {
-      colors.push([record.time, record.c]);
+    } else if (record.t === 'bar' && typeof record.time === 'number') {
+      if (record.c) colors.push([record.time, record.c]);
+      if (typeof record.equity === 'number' && Number.isFinite(record.equity)) {
+        equityByTime.set(record.time, record.equity);
+      }
     } else if (record.t === 'drawings') {
       drawings = record;
     } else if (record.t === 'end') {
       complete = true;
     }
+  }
+  for (const bar of bars) {
+    const equity = equityByTime.get(bar[0]);
+    if (equity !== undefined) bar[7] = equity;
   }
 
   const script = hdr?.script ?? {};
@@ -233,6 +243,10 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
     script: pair.plot,
     scriptType: script.type === 'strategy' ? 'strategy' : 'indicator',
     overlay: script.overlay === true,
+    initialCapital:
+      typeof hdr?.initialCapital === 'number' && Number.isFinite(hdr.initialCapital)
+        ? hdr.initialCapital
+        : undefined,
     syminfo,
     // New bridge output persists the exact OHLCV path in the viz header. For
     // older files, script-owned callers supply the IDE's persisted data

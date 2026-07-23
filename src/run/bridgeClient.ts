@@ -53,6 +53,8 @@ export interface StartEvent {
   scriptType: 'indicator' | 'strategy' | 'library';
   /** Script-level `overlay=` from indicator()/strategy(): plots default to the price pane. */
   overlay: boolean;
+  /** Strategy starting balance; absent for indicators and legacy persisted outputs. */
+  initialCapital?: number;
   /** True for a data-only chart preview (raw candles, no script/plots). */
   dataOnly?: boolean;
   syminfo: Record<string, string | number | boolean | null>;

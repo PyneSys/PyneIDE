@@ -17,7 +17,7 @@ import { ensurePyrightConfig } from '../env/workdir';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
-import { isSeriesAccess, seriesSpanIndex } from './seriesFilter';
+import { isExactSpan, isSeriesAccess, seriesSpanIndex } from './seriesFilter';
 
 /** Pylance's language server is driven by `python.languageServer`. */
 export const PYLANCE_EXTENSION = 'ms-python.vscode-pylance';
@@ -66,7 +66,9 @@ type PyrightStatus =
  *   cannot express, so the accesses pynecomp rewrites into series-buffer reads
  *   are dropped and the rest are kept with a Pyne-specific hint. While no
  *   analysis is available the whole rule is dropped, as in L5b. Non-Pyne
- *   Python files keep the rule untouched.
+ *   Python files keep the rule untouched. The same analyzer removes
+ *   `reportUnusedFunction` only from library API defs linked by `__all__` or
+ *   PyneCore's runtime `@export`; dead internal helpers remain visible.
  * - provideHover: puts the declared `Series[...]` back into hovers, which the
  *   transparent alias otherwise renders as the bare element type.
  */
@@ -417,14 +419,13 @@ export class PyrightService {
     diagnostics: vscode.Diagnostic[]
   ): vscode.Diagnostic[] {
     if (this.isForeignSource(uri)) return syntaxOnly(diagnostics);
-    if (!diagnostics.some((d) => FILTERED_RULES.has(diagnosticRule(d) ?? ''))) return diagnostics;
-    if (!this.isPyneUri(uri)) return diagnostics;
+    if (!needsAnalysis(diagnostics) || !this.isPyneUri(uri)) return diagnostics;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropFilteredRules(diagnostics);
+    if (text === undefined) return dropUnavailableRules(diagnostics);
     const analysis = this.analyzer.cached(uri, text);
     if (analysis) return applySeriesAnalysis(diagnostics, analysis, text);
     void this.analyzeAndRepublish(uri, text);
-    return dropFilteredRules(diagnostics);
+    return dropUnavailableRules(diagnostics);
   }
 
   /**
@@ -438,12 +439,11 @@ export class PyrightService {
     items: vscode.Diagnostic[]
   ): Promise<vscode.Diagnostic[]> {
     if (this.isForeignSource(uri)) return syntaxOnly(items);
-    if (!items.some((d) => FILTERED_RULES.has(diagnosticRule(d) ?? ''))) return items;
-    if (!this.isPyneUri(uri)) return items;
+    if (!needsAnalysis(items) || !this.isPyneUri(uri)) return items;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropFilteredRules(items);
+    if (text === undefined) return dropUnavailableRules(items);
     const analysis = await this.analyzer.analyze(uri, text);
-    if (!analysis) return dropFilteredRules(items);
+    if (!analysis) return dropUnavailableRules(items);
     return applySeriesAnalysis(items, analysis, text);
   }
 
@@ -560,7 +560,15 @@ const INDEX_RULE = 'reportIndexIssue';
  */
 const REDECL_RULE = 'reportRedeclaration';
 
-const FILTERED_RULES = new Set([INDEX_RULE, REDECL_RULE]);
+/**
+ * A compiler-shaped library export is a nested function consumed through
+ * PyneCore's runtime `@export` linkage, not called locally. Pyright cannot see
+ * that linkage, so its unused-function hint is a false positive on the public
+ * API. Native module-level `__all__` exports are included too for consistency.
+ */
+const UNUSED_FUNCTION_RULE = 'reportUnusedFunction';
+
+const FILTERED_RULES = new Set([INDEX_RULE, REDECL_RULE, UNUSED_FUNCTION_RULE]);
 
 /**
  * Appended to index errors we keep, because pyright's own wording
@@ -571,7 +579,14 @@ const INDEX_HINT =
   'Pyne: history indexing (`x[1]`) only works on series values — ' +
   'declare the variable as `Series[...]` or index a lib series directly.';
 
-function dropFilteredRules(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
+function needsAnalysis(diagnostics: vscode.Diagnostic[]): boolean {
+  return diagnostics.some((diagnostic) => {
+    const rule = diagnosticRule(diagnostic);
+    return rule !== undefined && FILTERED_RULES.has(rule);
+  });
+}
+
+function dropUnavailableRules(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
   return diagnostics.filter((d) => {
     const rule = diagnosticRule(d);
     return rule === undefined || !FILTERED_RULES.has(rule);
@@ -584,8 +599,9 @@ function syntaxOnly(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
 }
 
 /**
- * Keep the index errors whose subscript base is not a series access, and the
- * redeclarations that are not pynecore `@overload` implementations.
+ * Keep index errors whose base is not a series access, redeclarations that are
+ * not pynecore `@overload` implementations, and unused-function reports that
+ * are not attached to a public library export.
  */
 function applySeriesAnalysis(
   diagnostics: vscode.Diagnostic[],
@@ -595,16 +611,27 @@ function applySeriesAnalysis(
   const lines = text.split(/\r?\n/);
   const index = seriesSpanIndex(analysis.spans);
   const overloads = seriesSpanIndex(analysis.overloads);
+  const exports = seriesSpanIndex(analysis.exports);
   const kept: vscode.Diagnostic[] = [];
   for (const diagnostic of diagnostics) {
     const rule = diagnosticRule(diagnostic);
     const { start, end } = diagnostic.range;
+    if (rule === UNUSED_FUNCTION_RULE) {
+      if (
+        start.line === end.line &&
+        isExactSpan(exports, start.line, start.character, end.character)
+      ) {
+        continue;
+      }
+      kept.push(diagnostic);
+      continue;
+    }
     if (rule === REDECL_RULE) {
       // pyright anchors the redeclaration on the obscured def's name, which
       // is exactly the span the analyzer reports for an @overload def.
       if (
         start.line === end.line &&
-        overloads.has([start.line, start.character, end.character].join(':'))
+        isExactSpan(overloads, start.line, start.character, end.character)
       ) {
         continue;
       }

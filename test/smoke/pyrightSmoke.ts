@@ -19,7 +19,12 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { ensurePyrightConfig } from '../../src/env/workdir';
-import { isSeriesAccess, seriesSpanIndex, type Span } from '../../src/typing/seriesFilter';
+import {
+  isExactSpan,
+  isSeriesAccess,
+  seriesSpanIndex,
+  type Span,
+} from '../../src/typing/seriesFilter';
 import { LspStdio } from './lspStdio';
 
 const log = (msg: string): void => console.log(msg);
@@ -55,6 +60,22 @@ def main() -> None:
     scalar = 42
     broken = scalar[0]
     print(hist, lib_hist, broken)
+`;
+
+const LIB_SCRIPT = `"""
+@pyne
+"""
+
+from pynecore.core.pine_export import export
+
+
+def main() -> None:
+    @export
+    def myFunction() -> int:
+        return 1
+
+    def helper() -> int:
+        return 2
 `;
 
 /**
@@ -114,6 +135,7 @@ async function main(): Promise<void> {
 
   await checkPreciseFilter(serverModule);
   await checkPullDiagnostics(serverModule);
+  await checkLibraryExports(serverModule);
   log('PYRIGHT SMOKE OK');
 }
 
@@ -292,8 +314,66 @@ async function checkPreciseFilter(serverModule: string): Promise<void> {
   fs.rmSync(workdir, { recursive: true, force: true });
 }
 
+/**
+ * Library exports are intentionally consumed by importers, so pyright's local
+ * unused-function hint is dropped only for names the analyzer found through
+ * `__all__` or `@export`; a genuinely dead helper stays visible.
+ */
+async function checkLibraryExports(serverModule: string): Promise<void> {
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-lib-'));
+  ensurePyrightConfig(workdir, { preciseIndexFilter: true });
+  const configPath = path.join(workdir, 'pyrightconfig.json');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  config.reportUnusedFunction = 'warning';
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  const scriptPath = path.join(workdir, 'scripts', 'lib', 'me', 'probe', 'v1.py');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, LIB_SCRIPT);
+  const scriptUri = pathToFileURL(scriptPath).toString();
+
+  const diag = await diagnose(
+    serverModule,
+    workdir,
+    scriptPath,
+    scriptUri,
+    LIB_SCRIPT,
+    (p) => p.diagnostics.filter((d) => d.code === 'reportUnusedFunction').length >= 2
+  );
+  const unused = diag.diagnostics.filter((d) => d.code === 'reportUnusedFunction');
+  if (unused.length !== 2) {
+    throw new Error(
+      `expected two raw unused-function diagnostics, got ${JSON.stringify(diag.diagnostics)}`
+    );
+  }
+
+  const analysis = await analyzeSource(LIB_SCRIPT);
+  const exports = seriesSpanIndex(analysis.exports);
+  const kept = unused.filter(({ range }) => {
+    const { start, end } = range;
+    return (
+      start.line !== end.line ||
+      !isExactSpan(exports, start.line, start.character, end.character)
+    );
+  });
+  if (
+    kept.length !== 1 ||
+    LIB_SCRIPT.split('\n')[kept[0].range.start.line] !== '    def helper() -> int:'
+  ) {
+    throw new Error(
+      `library export filter kept the wrong diagnostics: ${JSON.stringify(kept)}`
+    );
+  }
+  log('Library exports OK (public function suppressed, unused helper kept)');
+  fs.rmSync(workdir, { recursive: true, force: true });
+}
+
 /** Drive the real analyzer worker over one source and return its spans. */
-function analyzeSpans(source: string): Promise<Span[]> {
+async function analyzeSpans(source: string): Promise<Span[]> {
+  return (await analyzeSource(source)).spans;
+}
+
+/** Drive the real analyzer worker over one source. */
+function analyzeSource(source: string): Promise<{ spans: Span[]; exports: Span[] }> {
   const script = path.resolve('python/pyneide_series.py');
   return new Promise((resolve, reject) => {
     const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -311,9 +391,13 @@ function analyzeSpans(source: string): Promise<Span[]> {
       if (newline < 0) return;
       clearTimeout(timer);
       worker.kill();
-      const response = JSON.parse(out.slice(0, newline)) as { ok?: boolean; spans?: Span[] };
+      const response = JSON.parse(out.slice(0, newline)) as {
+        ok?: boolean;
+        spans?: Span[];
+        exports?: Span[];
+      };
       if (!response.ok) reject(new Error(`series analyzer failed: ${out.slice(0, newline)}`));
-      else resolve(response.spans ?? []);
+      else resolve({ spans: response.spans ?? [], exports: response.exports ?? [] });
     });
     worker.stderr.on('data', (chunk: Buffer) => {
       err += chunk.toString();

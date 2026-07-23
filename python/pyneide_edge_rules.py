@@ -19,6 +19,14 @@ classes only as bases-less ``@udt`` field lists; ``lambda`` only as a
 parameters (with defaults) only; subscripts in Load context only. A few
 trivially portable extras are allowed on top and marked below.
 
+Library emission (pynecomp v6.0.46+, ``@script.library``) additionally
+produces: ``from typing import Protocol, Any``, a module-level
+``__all__ = [...]`` string list, per-export ``class _Protocol...(Protocol)``
+signature shims (ellipsis-body ``__call__`` only), ``name: _Protocol... =
+Exported()`` assignments, and ``@export`` on nested defs. All static-typing
+scaffolding, erased or trivial at runtime — allowed as narrow special cases
+(see the worker's ``_EdgeChecker``), not as general syntax.
+
 Additional source material (provenance only, no dependency):
 ``PyneSys/work/edge-python-pynecore-requirements.md`` and
 ``PyneSys/work/pynecore-wasm-feature-audit.md``.
@@ -26,7 +34,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.07'
+EDGE_RULES_VERSION = '2026.07.1'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -63,6 +71,10 @@ ALLOWED_IMPORT_PREFIXES = ('pynecore', 'lib')
 ALLOWED_FROM_MODULES = {
     'dataclasses': frozenset({'dataclass', 'field'}),
     '__future__': frozenset({'annotations'}),  # lexical only, changes nothing
+    # Static-typing-only names the pynecomp library emitter uses for its
+    # export shims (`class _Protocol...(Protocol)` + `-> Any`); erased at
+    # runtime, trivially portable.
+    'typing': frozenset({'Protocol', 'Any'}),
 }
 
 # --- decorators ------------------------------------------------------------
@@ -73,6 +85,8 @@ ALLOWED_FROM_MODULES = {
 # `pynecore.lib.script` chain (SCRIPT_DECORATORS in the worker).
 ALLOWED_FUNC_DECORATORS = frozenset({
     ('pynecore.core.pine_method', 'method'),
+    # Library exports (`@export def myFunction(...)` inside `main()`).
+    ('pynecore.core.pine_export', 'export'),
 })
 ALLOWED_CLASS_DECORATORS = frozenset({
     ('pynecore.core.pine_udt', 'udt'),

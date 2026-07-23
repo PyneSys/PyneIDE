@@ -8,12 +8,14 @@
  * with its pynecore PlotMeta (color/linewidth/style/force_overlay, per-bar
  * dynamic colors via ColorTrack — see plotStyles.ts), falling back to the
  * legacy palette-by-index lines when no meta arrives (pynecore < 6.6).
- * Strategy equity gets its own pane; closed trades become annotation
- * overlays at run end.
+ * Strategy performance is rendered as a full-run equity curve in its own
+ * bottom-panel tab; trades become TradingView-style, background-free markers
+ * at run end.
  */
 import {
   init,
   dispose,
+  registerFigure,
   registerIndicator,
   registerOverlay,
   utils,
@@ -28,6 +30,11 @@ import {
 import type { BarRow, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
 import { ColorTrack } from './colorTrack';
+import {
+  calculateEquitySummary,
+  drawEquityCurve,
+  type EquitySummary,
+} from './equityCurve';
 import {
   DrawingStore,
   drawDrawings,
@@ -67,12 +74,39 @@ declare function acquireVsCodeApi(): { postMessage(msg: ChartOutMessage): void }
 const vscode = acquireVsCodeApi();
 
 const UI_TICK_MS = 400;
-const MAX_TRADE_ANNOTATIONS = 2000;
+const MAX_TRADE_MARKERS = 2000;
 const MEASURE_OVERLAY_NAME = 'PyneMeasure';
 const BREAKPOINT_OVERLAY_NAME = 'PyneBreakpoint';
+const TRADE_MARKER_OVERLAY_NAME = 'PyneTradeMarker';
+const TRADE_MARKER_FIGURE_NAME = 'pyneTradeMarker';
+const TRADE_EXIT_OVERLAY_NAME = 'PyneTradeExit';
+const TRADE_EXIT_FIGURE_NAME = 'pyneTradeExit';
 const BREAKPOINT_CLICK_DRAG_THRESHOLD_PX = 4;
 
 interface BreakpointOverlayData extends ChartBreakpointTarget {}
+
+interface TradeMarkerOverlayData {
+  direction: 'up' | 'down';
+  title: string;
+  detail?: string;
+  color: string;
+}
+
+interface TradeMarkerFigureAttrs extends TradeMarkerOverlayData {
+  x: number;
+  y: number;
+  textColor: string;
+  fontFamily: string;
+}
+
+interface TradeExitOverlayData {
+  color: string;
+}
+
+interface TradeExitFigureAttrs extends TradeExitOverlayData {
+  x: number;
+  y: number;
+}
 
 function formatMeasureDuration(durationMs: number): string {
   let seconds = Math.max(0, Math.round(durationMs / 1000));
@@ -242,6 +276,118 @@ registerOverlay<BreakpointOverlayData>({
   },
 });
 
+registerFigure<TradeMarkerFigureAttrs, Record<string, never>>({
+  name: TRADE_MARKER_FIGURE_NAME,
+  checkEventOn: () => false,
+  draw: (ctx, attrs) => {
+    const pointsUp = attrs.direction === 'up';
+    const tipY = attrs.y + (pointsUp ? 16 : -16);
+    const tailY = attrs.y + (pointsUp ? 34 : -34);
+    const titleY = attrs.y + (pointsUp ? 44 : -44);
+    const detailY = attrs.y + (pointsUp ? 59 : -59);
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = attrs.color;
+    ctx.fillStyle = attrs.color;
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetY = 1;
+    ctx.beginPath();
+    ctx.moveTo(attrs.x, tailY);
+    ctx.lineTo(attrs.x, tipY);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(attrs.x, tipY);
+    ctx.lineTo(attrs.x - 6, tipY + (pointsUp ? 7 : -7));
+    ctx.lineTo(attrs.x + 6, tipY + (pointsUp ? 7 : -7));
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.font = `500 12px ${attrs.fontFamily}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = pointsUp ? 'top' : 'bottom';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillStyle = attrs.textColor;
+    ctx.shadowBlur = 3;
+    const drawText = (text: string, y: number): void => {
+      ctx.strokeText(text, attrs.x, y);
+      ctx.fillText(text, attrs.x, y);
+    };
+    drawText(attrs.title, titleY);
+    if (attrs.detail) drawText(attrs.detail, detailY);
+    ctx.restore();
+  },
+});
+
+registerOverlay<TradeMarkerOverlayData>({
+  name: TRADE_MARKER_OVERLAY_NAME,
+  totalStep: 2,
+  createPointFigures: ({ overlay, coordinates }) => {
+    const point = coordinates[0];
+    if (!point) return [];
+    return [{
+      type: TRADE_MARKER_FIGURE_NAME,
+      attrs: {
+        x: point.x,
+        y: point.y,
+        ...overlay.extendData,
+        textColor: cssVar(
+          '--vscode-editor-foreground',
+          isDark() ? '#b2b5be' : '#434651',
+        ),
+        fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
+      },
+      styles: {},
+      ignoreEvent: true,
+    }];
+  },
+});
+
+registerFigure<TradeExitFigureAttrs, Record<string, never>>({
+  name: TRADE_EXIT_FIGURE_NAME,
+  checkEventOn: () => false,
+  draw: (ctx, attrs) => {
+    const tipX = attrs.x;
+    const backX = tipX - 8;
+
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.fillStyle = attrs.color;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 2;
+    ctx.shadowOffsetY = 1;
+    ctx.beginPath();
+    ctx.moveTo(tipX, attrs.y);
+    ctx.lineTo(backX, attrs.y - 5);
+    ctx.lineTo(backX, attrs.y + 5);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  },
+});
+
+registerOverlay<TradeExitOverlayData>({
+  name: TRADE_EXIT_OVERLAY_NAME,
+  totalStep: 2,
+  createPointFigures: ({ overlay, coordinates }) => {
+    const point = coordinates[0];
+    if (!point) return [];
+    return [{
+      type: TRADE_EXIT_FIGURE_NAME,
+      attrs: { x: point.x, y: point.y, ...overlay.extendData },
+      styles: {},
+      ignoreEvent: true,
+    }];
+  },
+});
+
 const PLOT_COLORS = [
   '#2962ff',
   '#ff6d00',
@@ -295,7 +441,6 @@ interface RunState {
   overlayDrawIndicatorId?: string;
   paneDrawIndicatorId?: string;
   barcolorIndicatorId?: string;
-  equityIndicatorId?: string;
   showVolume: boolean;
   volumeIndicatorId?: string;
   breakpointOverlays: Map<number, { id: string; enabled: boolean; count: number }>;
@@ -397,6 +542,7 @@ function startRun(start: StartEvent): void {
   measureOverlayId = undefined;
   measureDrawing = false;
   tbMeasureEl?.classList.remove('active');
+  activeTab = start.scriptType === 'strategy' ? 'performance' : 'trades';
   if (state) {
     dispose(state.chart);
   }
@@ -1198,11 +1344,12 @@ function legendEntries(st: RunState): LegendEntry[] {
 }
 
 /** Recompute panes and rebuild the plot indicators from the current `hidden`
- * set, then reload the (retained) bars — no script re-run, no data reset. */
+ * set. Indicator creation recalculates against KLineChart's retained data, so
+ * resetting the data here is unnecessary and would jump the viewport to the
+ * latest bar. */
 function applyVisibility(st: RunState): void {
   assignPlotPanes(st);
   rebuildPlotIndicators(st);
-  st.chart.resetData();
 }
 
 /** Build one clickable show/hide row (swatch + name), dimmed + struck-through
@@ -1293,57 +1440,85 @@ function togglePlotsPopup(): void {
   else openPlotsPopup();
 }
 
-function ensureEquityIndicator(st: RunState): void {
-  if (st.equityIndicatorId) return;
-  if (st.start.scriptType !== 'strategy') return;
-  if (!st.bars.some((b) => typeof b.equity === 'number')) return;
-  registerIndicator({
-    name: 'PyneEquity',
-    shortName: 'Equity',
-    precision: 2,
-    figures: [
-      {
-        key: 'equity',
-        title: 'Equity: ',
-        type: 'line',
-        styles: () => ({ color: '#00bfa5' }),
-      },
-    ],
-    calc: (dataList: PyneBar[]) => dataList.map((d) => ({ equity: d.equity ?? null })),
-  } as never);
-  st.equityIndicatorId = st.chart.createIndicator('PyneEquity') ?? undefined;
+function tradeEntryTitle(long: boolean, entryId: string | null): string {
+  const side = long ? 'Long' : 'Short';
+  const id = entryId?.trim();
+  if (!id || id.toLowerCase() === side.toLowerCase()) return side;
+  return `${side} ${id}`;
+}
+
+function signedTradeSize(size: number | null): string | undefined {
+  if (size == null || !Number.isFinite(size) || size === 0) return undefined;
+  const rounded = Number(size.toFixed(6));
+  if (rounded === 0) return undefined;
+  return `${rounded > 0 ? '+' : ''}${rounded}`;
+}
+
+function tradeEntryPoint(
+  st: RunState,
+  trade: TradeRecord,
+  long: boolean,
+): { timestamp: number; dataIndex: number; value: number } | undefined {
+  let dataIndex = st.tsToIndex.get(trade.entryTime);
+  if (dataIndex === undefined && Number.isInteger(trade.entryBar)) {
+    dataIndex = trade.entryBar;
+  }
+  if (dataIndex === undefined) return undefined;
+  const bar = st.bars[dataIndex];
+  if (!bar) return undefined;
+  const value = long ? bar.low : bar.high;
+  if (!Number.isFinite(value)) return undefined;
+  return { timestamp: bar.timestamp, dataIndex, value };
+}
+
+function tradeExitPoint(
+  st: RunState,
+  trade: TradeRecord,
+): { timestamp: number; dataIndex: number; value: number } | undefined {
+  if (trade.exitPrice == null || !Number.isFinite(trade.exitPrice)) return undefined;
+  let dataIndex = st.tsToIndex.get(trade.exitTime);
+  if (dataIndex === undefined && Number.isInteger(trade.exitBar)) {
+    dataIndex = trade.exitBar;
+  }
+  if (dataIndex === undefined) return undefined;
+  const bar = st.bars[dataIndex];
+  if (!bar) return undefined;
+  return { timestamp: bar.timestamp, dataIndex, value: trade.exitPrice };
 }
 
 function addTradeAnnotations(st: RunState): void {
-  let budget = MAX_TRADE_ANNOTATIONS;
+  let budget = MAX_TRADE_MARKERS;
   for (const trade of st.trades) {
     if (budget <= 0) break;
     const long = (trade.size ?? 0) > 0;
-    if (trade.entryTime > 0 && trade.entryPrice != null) {
+    const entryPoint = tradeEntryPoint(st, trade, long);
+    if (entryPoint) {
       st.chart.createOverlay({
-        name: 'simpleAnnotation',
-        points: [{ timestamp: trade.entryTime, value: trade.entryPrice }],
-        extendData: `${long ? '▲ Long' : '▼ Short'} ${trade.entryId ?? ''}`,
-        styles: {
-          text: { color: long ? '#26a69a' : '#ef5350' },
+        name: TRADE_MARKER_OVERLAY_NAME,
+        paneId: 'candle_pane',
+        points: [entryPoint],
+        extendData: {
+          direction: long ? 'up' : 'down',
+          title: tradeEntryTitle(long, trade.entryId),
+          detail: signedTradeSize(trade.size),
+          color: long ? '#2962ff' : '#ff5252',
         },
         lock: true,
       });
       budget--;
     }
-    if (trade.exitTime > 0 && trade.exitPrice != null && budget > 0) {
-      const win = (trade.profit ?? 0) >= 0;
-      st.chart.createOverlay({
-        name: 'simpleAnnotation',
-        points: [{ timestamp: trade.exitTime, value: trade.exitPrice }],
-        extendData: `✕ ${trade.exitId ?? ''} (${win ? '+' : ''}${(trade.profit ?? 0).toFixed(2)})`,
-        styles: {
-          text: { color: win ? '#26a69a' : '#ef5350' },
-        },
-        lock: true,
-      });
-      budget--;
-    }
+
+    if (budget <= 0) break;
+    const exitPoint = tradeExitPoint(st, trade);
+    if (!exitPoint) continue;
+    st.chart.createOverlay({
+      name: TRADE_EXIT_OVERLAY_NAME,
+      paneId: 'candle_pane',
+      points: [exitPoint],
+      extendData: { color: long ? '#ff5252' : '#2962ff' },
+      lock: true,
+    });
+    budget--;
   }
 }
 
@@ -1368,7 +1543,7 @@ function uiTick(): void {
       rebuildPlotIndicators(st);
       renderPlotList(st);
     }
-    ensureEquityIndicator(st);
+    drawPerformance();
     ensureDrawingIndicators(st);
     syncBreakpointOverlays(st);
     renderDrawingTables(st);
@@ -1385,10 +1560,11 @@ setTimeout(uiTick, UI_TICK_MS);
 
 const bottomEl = document.getElementById('bottom');
 const tabBodyEl = document.getElementById('tab-body');
+const tabPerformanceEl = document.getElementById('tab-performance');
 const tabTradesEl = document.getElementById('tab-trades');
 const tabStatsEl = document.getElementById('tab-stats');
 const tabToggleEl = document.getElementById('tab-toggle');
-let activeTab: 'trades' | 'stats' = 'trades';
+let activeTab: 'performance' | 'trades' | 'stats' = 'trades';
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -1410,6 +1586,78 @@ function fmtTime(ts: number): string {
 function signClass(v: number | null | undefined): string {
   if (v === null || v === undefined || v === 0) return '';
   return v > 0 ? 'pos' : 'neg';
+}
+
+function signed(v: number): string {
+  return `${v > 0 ? '+' : ''}${fmt(v)}`;
+}
+
+function percent(v: number | null): string {
+  return v === null ? '—' : `${v > 0 ? '+' : ''}${fmt(v)}%`;
+}
+
+function performanceMetric(
+  label: string,
+  value: string,
+  sign: number | null,
+  detail?: string
+): string {
+  return (
+    '<div class="performance-metric">' +
+    `<span class="performance-label">${esc(label)}</span>` +
+    `<strong class="${signClass(sign)}">${esc(value)}</strong>` +
+    (detail ? `<small>${esc(detail)}</small>` : '') +
+    '</div>'
+  );
+}
+
+function equitySummary(): EquitySummary | undefined {
+  return state ? calculateEquitySummary(state.bars, state.start.initialCapital) : undefined;
+}
+
+function renderPerformance(): string {
+  const summary = equitySummary();
+  if (!summary) {
+    return '<span class="muted">The equity curve appears as strategy bars are processed.</span>';
+  }
+  return (
+    '<div class="performance-view">' +
+    '<div class="performance-summary">' +
+    performanceMetric('Cumulative P&L', signed(summary.pnl), summary.pnl, percent(summary.returnPct)) +
+    performanceMetric(
+      'Max run-up',
+      signed(summary.maxRunup),
+      summary.maxRunup,
+      percent(summary.maxRunupPct)
+    ) +
+    performanceMetric(
+      'Max drawdown',
+      `−${fmt(summary.maxDrawdown)}`,
+      -summary.maxDrawdown,
+      summary.maxDrawdownPct === null ? '—' : `−${fmt(summary.maxDrawdownPct)}%`
+    ) +
+    performanceMetric('Final equity', fmt(summary.finalEquity), null) +
+    '</div>' +
+    '<div class="equity-chart-wrap">' +
+    '<span class="equity-chart-title">Cumulative P&amp;L · full run</span>' +
+    '<canvas id="equity-canvas"></canvas>' +
+    '</div>' +
+    '</div>'
+  );
+}
+
+function drawPerformance(): void {
+  if (activeTab !== 'performance' || bottomEl?.classList.contains('collapsed')) return;
+  const canvas = document.getElementById('equity-canvas') as HTMLCanvasElement | null;
+  const summary = equitySummary();
+  if (!canvas || !summary) return;
+  drawEquityCurve(canvas, summary, {
+    foreground: cssVar('--vscode-editor-foreground', '#ccc'),
+    muted: cssVar('--vscode-descriptionForeground', '#999'),
+    grid: isDark() ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+    positive: cssVar('--vscode-charts-green', '#26a69a'),
+    negative: cssVar('--vscode-charts-red', '#ef5350'),
+  });
 }
 
 function setCollapsed(collapsed: boolean): void {
@@ -1471,13 +1719,26 @@ function renderStats(): string {
 
 function renderTables(): void {
   if (!tabBodyEl || !bottomEl) return;
+  tabPerformanceEl?.classList.toggle('active', activeTab === 'performance');
   tabTradesEl?.classList.toggle('active', activeTab === 'trades');
   tabStatsEl?.classList.toggle('active', activeTab === 'stats');
+  if (tabPerformanceEl) tabPerformanceEl.hidden = state?.start.scriptType !== 'strategy';
   if (tabTradesEl && state) tabTradesEl.textContent = `Trades (${state.trades.length})`;
   if (bottomEl.classList.contains('collapsed')) return;
-  tabBodyEl.innerHTML = activeTab === 'trades' ? renderTrades() : renderStats();
+  tabBodyEl.innerHTML =
+    activeTab === 'performance'
+      ? renderPerformance()
+      : activeTab === 'trades'
+        ? renderTrades()
+        : renderStats();
+  requestAnimationFrame(drawPerformance);
 }
 
+tabPerformanceEl?.addEventListener('click', () => {
+  activeTab = 'performance';
+  setCollapsed(false);
+  renderTables();
+});
 tabTradesEl?.addEventListener('click', () => {
   activeTab = 'trades';
   setCollapsed(false);
@@ -1908,12 +2169,14 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         state.chart.scrollToRealTime(0);
         rebuildPlotIndicators(state);
         renderPlotList(state);
-        ensureEquityIndicator(state);
         ensureDrawingIndicators(state);
         syncBreakpointOverlays(state);
         renderDrawingTables(state);
         addTradeAnnotations(state);
-        if (state.trades.length) setCollapsed(false);
+        if (state.start.scriptType === 'strategy') {
+          activeTab = 'performance';
+          setCollapsed(false);
+        }
         renderTables();
         syncToolbar();
       }
@@ -1921,6 +2184,9 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   }
 });
 
-window.addEventListener('resize', () => state?.chart.resize());
+window.addEventListener('resize', () => {
+  state?.chart.resize();
+  drawPerformance();
+});
 
 vscode.postMessage({ type: 'ready' });

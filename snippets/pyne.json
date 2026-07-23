@@ -49,21 +49,20 @@
   },
   "Pyne library skeleton": {
     "prefix": "library",
-    "description": "Pyne library script skeleton (full file)",
+    "description": "Importable versioned Pyne library module (full file)",
     "body": [
       "\"\"\"",
-      "@pyne",
+      "@pyne lib",
       "\"\"\"",
-      "from pynecore.lib import script, ta",
+      "from pynecore.lib import ta",
       "from pynecore.types import Series",
       "",
+      "__all__ = [\"${1:my_function}\"]",
       "",
-      "@script.library(\"${1:MyLibrary}\", overlay=${2|False,True|})",
-      "def main():",
-      "    def ${3:my_function}(source: Series[float], length: int) -> Series[float]:",
-      "        \"\"\"${4:Short description}\"\"\"",
-      "        return ${5:ta.sma(source, length)}",
-      "    $0"
+      "def ${1}(source: Series[float], length: int) -> Series[float]:",
+      "    \"\"\"${2:Short description}\"\"\"",
+      "    return ${3:ta.sma(source, length)}",
+      "$0"
     ]
   },
   "Pyne input group": {

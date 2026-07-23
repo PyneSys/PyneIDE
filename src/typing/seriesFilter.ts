@@ -14,6 +14,16 @@ export function seriesSpanIndex(spans: Span[]): Set<string> {
   return new Set(spans.map((span) => span.join(':')));
 }
 
+/** Whether a single-line range exactly matches one analyzer span. */
+export function isExactSpan(
+  index: Set<string>,
+  line: number,
+  start: number,
+  end: number
+): boolean {
+  return index.has([line, start, end].join(':'));
+}
+
 /**
  * Whether a diagnostic range denotes an access pynecomp rewrites into a
  * series-buffer read.
@@ -33,7 +43,7 @@ export function isSeriesAccess(
   end: number
 ): boolean {
   const [from, to] = trimParens(lineText, start, end);
-  return index.has([line, from, to].join(':'));
+  return isExactSpan(index, line, from, to);
 }
 
 /** Strip whitespace and matched parenthesis pairs from a `[start, end)` range. */

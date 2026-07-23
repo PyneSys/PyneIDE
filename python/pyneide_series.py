@@ -47,7 +47,8 @@ Request  ``{"id": N, "source": "..."}``
 Response ``{"id": N, "ok": true, "spans": [[line, col, endCol], ...],
             "refs": [[line, col, endCol, "Series[float]"], ...],
             "problems": [[line, col, endCol, "code", "message"], ...],
-            "overloads": [[line, col, endCol], ...]}``
+            "overloads": [[line, col, endCol], ...],
+            "exports": [[line, col, endCol], ...]}``
          ``{"id": N, "ok": false, "error": "..."}`` on unparsable source.
 
 Positions are 0-based LSP coordinates: `line` is 0-based and columns are
@@ -723,6 +724,7 @@ class _EdgeChecker:
         self.import_bound: set[str] = set()
         self.def_names: set[str] = set()
         self.allowed_lambdas: set[int] = set()
+        self.allowed_lists: set[int] = set()
 
     def check(self) -> None:
         if _edge_rules is None:  # pragma: no cover - partial deployment
@@ -756,6 +758,17 @@ class _EdgeChecker:
                 if (kw.arg == 'default_factory' and isinstance(value, ast.Lambda)
                         and not _has_parameters(value.args)):
                     self.allowed_lambdas.add(id(value))
+        # `__all__ = ['name', ...]` at module level is the one legitimate
+        # list literal (the library emitter produces it).
+        for stmt in self.tree.body:
+            if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and stmt.targets[0].id == '__all__'
+                    and isinstance(stmt.value, ast.List)
+                    and all(isinstance(e, ast.Constant)
+                            and isinstance(e.value, str)
+                            for e in stmt.value.elts)):
+                self.allowed_lists.add(id(stmt.value))
 
     # --- recursive walk ---------------------------------------------------
 
@@ -764,6 +777,8 @@ class _EdgeChecker:
         if isinstance(node, (ast.expr_context, ast.boolop, ast.operator,
                              ast.unaryop, ast.cmpop)):
             return
+        if kind == 'List' and id(node) in self.allowed_lists:
+            return  # `__all__ = [...]` — children are validated constants
         if kind not in _edge_rules.ALLOWED_NODES and hasattr(node, 'lineno'):
             label = _EDGE_NODE_LABELS.get(kind, f"'{kind}'")
             self._problem(node, 'pyne-edge-syntax', f'{label} is {_EDGE_SUFFIX}')
@@ -841,10 +856,12 @@ class _EdgeChecker:
                                       allow_script=True):
                 self._problem(decorator, 'pyne-edge-decorator',
                               f'this decorator is {_EDGE_SUFFIX} — only '
-                              f'@script.indicator/strategy/library(...) and '
-                              f'@method exist')
+                              f'@script.indicator/strategy/library(...), '
+                              f'@method and @export exist')
 
     def _check_class(self, node: ast.ClassDef) -> None:
+        if self._is_protocol_shim(node):
+            return
         if node.bases or node.keywords:
             self._problem(node, 'pyne-edge-class',
                           f'class inheritance and class keywords are '
@@ -864,6 +881,26 @@ class _EdgeChecker:
                 self._problem(stmt, 'pyne-edge-class',
                               f'a class body may only contain annotated '
                               f'fields in the Pyne Edge profile')
+
+    def _is_protocol_shim(self, node: ast.ClassDef) -> bool:
+        """A library-export signature shim: `class _ProtocolX(Protocol)` with
+        only ellipsis-body method declarations (the emitter's export typing
+        scaffolding) — the one class form allowed besides @udt/@dataclass."""
+        if (len(node.bases) != 1 or node.keywords or node.decorator_list
+                or not isinstance(node.bases[0], ast.Name)
+                or self.from_imports.get(node.bases[0].id)
+                != ('typing', 'Protocol')):
+            return False
+        body = node.body
+        if body and _is_docstring(body[0]):
+            body = body[1:]
+        return bool(body) and all(
+            isinstance(stmt, ast.FunctionDef)
+            and len(stmt.body) == 1
+            and isinstance(stmt.body[0], ast.Expr)
+            and isinstance(stmt.body[0].value, ast.Constant)
+            and stmt.body[0].value.value is Ellipsis
+            for stmt in body)
 
     def _check_call(self, node: ast.Call) -> None:
         func = node.func
@@ -996,15 +1033,69 @@ def _overload_def_spans(tree: ast.Module, columns: _Utf16Columns) -> list[tuple[
         if not any(isinstance(d, ast.Name) and d.id in overload_names
                    for d in node.decorator_list):
             continue
-        prefix = 'async def ' if isinstance(node, ast.AsyncFunctionDef) else 'def '
-        line = node.lineno - 1
-        start_byte = node.col_offset + len(prefix)
-        spans.append((
-            line,
-            columns.convert(line, start_byte),
-            columns.convert(line, start_byte + len(node.name.encode('utf-8'))),
-        ))
+        spans.append(_function_name_span(node, columns))
     return spans
+
+
+def _function_name_span(
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        columns: _Utf16Columns) -> tuple[int, int, int]:
+    """Return the LSP span of a function's name."""
+    prefix = 'async def ' if isinstance(node, ast.AsyncFunctionDef) else 'def '
+    line = node.lineno - 1
+    start_byte = node.col_offset + len(prefix)
+    return (
+        line,
+        columns.convert(line, start_byte),
+        columns.convert(line, start_byte + len(node.name.encode('utf-8'))),
+    )
+
+
+def _exported_def_spans(tree: ast.Module,
+                        columns: _Utf16Columns) -> list[tuple[int, int, int]]:
+    """Name spans of functions that form a library's public API.
+
+    Native ``@pyne lib`` modules declare their exports through a static
+    module-level ``__all__``. Compiler-shaped modules instead decorate nested
+    implementations with ``pynecore.core.pine_export.export``. Pyright cannot
+    infer either runtime linkage and reports the definitions as unused, so the
+    IDE needs their exact spans to remove only those false positives while
+    preserving warnings for genuinely dead helpers.
+    """
+    exported_names: set[str] = set()
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == '__all__'
+                   for target in stmt.targets):
+            continue
+        if not isinstance(stmt.value, (ast.List, ast.Tuple)):
+            continue
+        if not all(isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                   for elt in stmt.value.elts):
+            continue
+        exported_names.update(elt.value for elt in stmt.value.elts)
+
+    export_decorators: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'pynecore.core.pine_export':
+            for alias in node.names:
+                if alias.name == 'export':
+                    export_decorators.add(alias.asname or alias.name)
+
+    spans: list[tuple[int, int, int]] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in exported_names:
+                spans.append(_function_name_span(node, columns))
+    if export_decorators:
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(isinstance(d, ast.Name) and d.id in export_decorators
+                   for d in node.decorator_list):
+                spans.append(_function_name_span(node, columns))
+    return sorted(set(spans))
 
 
 def analyze(source: str) -> dict[str, Any]:
@@ -1031,6 +1122,7 @@ def analyze(source: str) -> dict[str, Any]:
         'refs': [list(ref) for ref in analyzer.refs],
         'problems': [list(problem) for problem in problems],
         'overloads': [list(span) for span in _overload_def_spans(tree, columns)],
+        'exports': [list(span) for span in _exported_def_spans(tree, columns)],
     }
 
 

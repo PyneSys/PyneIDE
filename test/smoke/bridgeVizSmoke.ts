@@ -117,6 +117,22 @@ def main():
         line.delete(doomed)
 `;
 
+const STRATEGY_SCRIPT = `"""
+@pyne
+Equity persistence demo
+"""
+from pynecore.lib import script, strategy, close, open, plot
+
+
+@script.strategy("Equity Persistence Demo", overlay=True)
+def main():
+    plot(close, "Price")
+    if close > open:
+        strategy.entry("Long", strategy.long)
+    elif close < open:
+        strategy.entry("Short", strategy.short)
+`;
+
 function fail(msg: string): never {
   throw new Error(msg);
 }
@@ -324,6 +340,35 @@ function assertNativeVizFile(workdir: string, stem: string): void {
   log(`Native viz file OK: ${records.length} NDJSON records`);
 }
 
+function assertNativeEquityFile(workdir: string, stem: string): void {
+  const file = path.join(workdir, 'output', `${stem}_viz.ndjson`);
+  const records = fs
+    .readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line) as { t?: string; equity?: number | null });
+  const persisted = records.filter(
+    (record): record is { t: string; equity: number } =>
+      record.t === 'bar' && typeof record.equity === 'number'
+  );
+  if (!persisted.length) fail('native viz strategy equity missing');
+
+  const pair = resolveOutputPair(file);
+  if (!pair) fail('native strategy viz/CSV pair was not resolved');
+  const preview = buildOutputPreview(pair);
+  const start = preview.events[0];
+  if (start.e !== 'start' || typeof start.initialCapital !== 'number') {
+    fail('persisted strategy initial capital missing');
+  }
+  const bars = preview.events.find((event) => event.e === 'bars');
+  if (!bars || bars.e !== 'bars') fail('strategy preview bars missing');
+  const replayed = bars.d.filter((bar) => typeof bar[7] === 'number');
+  if (replayed.length !== persisted.length) {
+    fail(`strategy equity replay mismatch: ${replayed.length}/${persisted.length}`);
+  }
+  log(`Native strategy equity OK: ${persisted.length} bars`);
+}
+
 /**
  * F9B drawing journal assertions: every family present, the persistent
  * trend line accumulates per-bar updates, the doomed line's delete is
@@ -435,6 +480,7 @@ async function main(): Promise<void> {
   const ws = await scaffoldWorkdirWithCli(pyneBinPath(pythonBin), path.join(base, 'workdir'), log);
   fs.writeFileSync(path.join(ws.workdir, 'scripts', 'viz_styles_demo.py'), VIZ_SCRIPT);
   fs.writeFileSync(path.join(ws.workdir, 'scripts', 'viz_drawings_demo.py'), DRAW_SCRIPT);
+  fs.writeFileSync(path.join(ws.workdir, 'scripts', 'equity_demo.py'), STRATEGY_SCRIPT);
 
   const capable = await vizCapable(pythonBin);
   log(`pynecore viz layer: ${capable ? 'present' : 'absent (degradation path)'}`);
@@ -451,6 +497,10 @@ async function main(): Promise<void> {
     const draw = await runBridge(pythonBin, ws.workdir, 'viz_drawings_demo');
     if (draw.exitCode !== 0) fail(`bridge exit code ${draw.exitCode} (drawings)`);
     assertDrawStream(draw.events);
+
+    const strategy = await runBridge(pythonBin, ws.workdir, 'equity_demo');
+    if (strategy.exitCode !== 0) fail(`bridge exit code ${strategy.exitCode} (strategy)`);
+    assertNativeEquityFile(ws.workdir, 'equity_demo');
   }
 
   log('BRIDGE VIZ SMOKE OK');

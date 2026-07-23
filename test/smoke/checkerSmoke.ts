@@ -60,9 +60,16 @@ async function main(): Promise<void> {
 
     // --- `@pyne lib` module: main is not required ----------------------------
     const libModule = await worker.request(
-      '"""\n@pyne lib\n"""\ndef helper():\n    pass\n'
+      '"""\n@pyne lib\n"""\n' +
+        '__all__ = ["myFunction"]\n\n\n' +
+        'def myFunction():\n    pass\n\n\n' +
+        'def helper():\n    pass\n'
     );
     expectCodes(libModule, [], 'lib-module');
+    assert(
+      JSON.stringify(libModule.exports) === JSON.stringify([[6, 4, 14]]),
+      `lib-module: expected only the public function span, got ${JSON.stringify(libModule.exports)}`
+    );
     log('lib-module OK');
 
     // --- pynecore @overload defs are reported for the redeclaration filter ---

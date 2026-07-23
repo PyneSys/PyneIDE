@@ -24,17 +24,31 @@ FLUSH_AGE_SECONDS = 0.1
 _MISSING = object()
 
 
-def _make_viz_writer(path: Path, data_path: Path) -> Any:
-    """Create pynecore's native writer with an IDE-owned source-data field in
-    the header. Keeping this tiny extension in the bridge lets persisted chart
-    output identify its exact OHLCV input without changing pynecore's public
-    ScriptRunner API."""
+def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
+    """Create pynecore's native writer with IDE-owned persistence fields.
+
+    The source-data path lets a persisted chart recover its binding. Strategy
+    equity is stored on each bar because the plot CSV intentionally contains
+    plots only; without it a chart reopened from disk could not rebuild the
+    full-run performance curve.
+    """
     from pynecore.core.viz import VizWriter
 
     class _DataPathVizWriter(VizWriter):
         def _emit(self, obj: dict) -> None:
             if obj.get("t") == "hdr":
-                obj = {**obj, "data": str(data_path)}
+                initial_capital = getattr(runner.script, "initial_capital", None)
+                obj = {
+                    **obj,
+                    "data": str(data_path),
+                    "initialCapital": num_or_none(initial_capital),
+                }
+            elif obj.get("t") == "bar":
+                position = getattr(runner.script, "position", None)
+                if position is not None:
+                    equity = float(position.equity) if position.equity \
+                        else float(runner.script.initial_capital)
+                    obj = {**obj, "equity": num_or_none(equity)}
             super()._emit(obj)
 
     return _DataPathVizWriter(path)
@@ -522,7 +536,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
             **runner_kwargs,
         )
         if viz_supported:
-            runner.viz_writer = _make_viz_writer(viz_path, data_path)
+            runner.viz_writer = _make_viz_writer(viz_path, data_path, runner)
 
         is_strategy = _script_type_name(runner.script) == "strategy"
         emitter.emit({
@@ -530,6 +544,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
             "script": str(script),
             "scriptType": _script_type_name(runner.script),
             "overlay": bool(getattr(runner.script, "overlay", False)),
+            "initialCapital": num_or_none(runner.script.initial_capital)
+            if is_strategy else None,
             "syminfo": _serialize_syminfo(syminfo),
             "data": str(data_path),
             "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},

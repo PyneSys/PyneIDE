@@ -38,6 +38,11 @@ export interface SeriesAnalysis {
    * redefinitions of one name, whose `reportRedeclaration` gets dropped.
    */
   overloads: Span[];
+  /**
+   * Name spans of public library functions declared through `__all__` or
+   * pynecore's runtime `@export` decorator.
+   */
+  exports: Span[];
 }
 
 interface CacheEntry {
@@ -57,6 +62,7 @@ interface WorkerResponse {
   refs?: [number, number, number, string][];
   problems?: [number, number, number, string, string][];
   overloads?: Span[];
+  exports?: Span[];
   error?: string;
 }
 
@@ -261,6 +267,7 @@ export class SeriesAnalyzer implements vscode.Disposable {
         message,
       })),
       overloads: response.overloads ?? [],
+      exports: response.exports ?? [],
     });
   }
 

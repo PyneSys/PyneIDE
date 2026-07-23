@@ -454,7 +454,7 @@ export class ChartPanel {
   }
   #to-realtime[hidden] { display: none; }
   #bottom {
-    flex: 0 0 auto; height: 220px; display: flex; flex-direction: column;
+    flex: 0 0 auto; height: min(300px, 42vh); display: flex; flex-direction: column;
     border-top: 1px solid var(--vscode-panel-border, #444);
     background: var(--vscode-editor-background);
     color: var(--vscode-editor-foreground);
@@ -488,6 +488,35 @@ export class ChartPanel {
   }
   .tab-body tr.clickable { cursor: pointer; }
   .tab-body tr.clickable:hover { background: var(--vscode-list-hoverBackground, #333); }
+  .performance-view {
+    height: 100%; min-height: 0; display: flex; flex-direction: column;
+    box-sizing: border-box; padding: 8px 10px 6px;
+  }
+  .performance-summary {
+    flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr));
+    gap: 8px; margin-bottom: 6px;
+  }
+  .performance-metric {
+    min-width: 0; padding: 4px 7px; border-left: 2px solid var(--vscode-panel-border, #444);
+  }
+  .performance-metric span, .performance-metric small {
+    display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .performance-metric span {
+    color: var(--vscode-descriptionForeground); font-size: 10px; text-transform: uppercase;
+  }
+  .performance-metric strong { display: block; margin-top: 1px; font-size: 15px; font-weight: 600; }
+  .performance-metric small { color: var(--vscode-descriptionForeground); font-size: 10px; }
+  .equity-chart-wrap { flex: 1 1 auto; min-height: 80px; position: relative; }
+  .equity-chart-title {
+    position: absolute; z-index: 1; top: 2px; left: 10px; font-size: 10px;
+    color: var(--vscode-descriptionForeground); pointer-events: none;
+  }
+  #equity-canvas { display: block; width: 100%; height: 100%; }
+  @media (max-width: 620px) {
+    .performance-summary { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
+    .performance-metric:nth-child(n+3) { display: none; }
+  }
   .pos { color: var(--vscode-charts-green, #26a69a); }
   .neg { color: var(--vscode-charts-red, #ef5350); }
   .muted { color: var(--vscode-descriptionForeground); padding: 8px; display: block; }
@@ -522,6 +551,7 @@ export class ChartPanel {
 </div>
 <div id="bottom" class="collapsed">
   <div class="tab-bar">
+    <button id="tab-performance" hidden>Performance</button>
     <button id="tab-trades" class="active">Trades</button>
     <button id="tab-stats">Stats</button>
     <span class="spacer"></span>

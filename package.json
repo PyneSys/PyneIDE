@@ -208,6 +208,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "pyneide.workspace.createScript",
+        "title": "New Script…",
+        "category": "PyneIDE",
+        "icon": "$(add)"
+      },
+      {
         "command": "pyneide.dataDownloadWizard",
         "title": "Download Data…",
         "category": "PyneIDE",
@@ -392,6 +398,11 @@
       ],
       "view/item/context": [
         {
+          "command": "pyneide.workspace.createScript",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.scripts",
+          "group": "inline@1"
+        },
+        {
           "command": "pyneide.dataDownloadWizard",
           "when": "view == pyneide.workspace && viewItem == pyneSection.data",
           "group": "inline@1"
@@ -433,7 +444,7 @@
         },
         {
           "command": "pyneide.workspace.revealInExplorer",
-          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneFile)",
+          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
           "group": "9_reveal@1"
         },
         {

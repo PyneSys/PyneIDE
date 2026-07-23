@@ -18,6 +18,7 @@ import { buildOutputPreview, resolveOutputPair } from '../data/outputPreview';
 import { parseSymInfo, readOhlcvStats } from '../data/syminfo';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES, type PyneKind } from '../pyneDetect';
+import { createNewScript } from './createScript';
 
 export const PYNE_WORKSPACE_VIEW_ID = 'pyneide.workspace';
 
@@ -33,6 +34,12 @@ interface ScriptNode {
   uri: vscode.Uri;
   rel: string;
   pyneKind?: PyneKind;
+}
+
+interface LibraryFolderNode {
+  type: 'libraryFolder';
+  uri: vscode.Uri;
+  depth: number;
 }
 
 interface DataNode {
@@ -54,7 +61,13 @@ interface CompanionNode {
   pyneKind?: PyneKind;
 }
 
-export type PyneNode = SectionNode | ScriptNode | DataNode | OutputNode | CompanionNode;
+export type PyneNode =
+  | SectionNode
+  | ScriptNode
+  | LibraryFolderNode
+  | DataNode
+  | OutputNode
+  | CompanionNode;
 
 interface DataMeta {
   label: string;
@@ -127,6 +140,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.sectionItem(node);
       case 'script':
         return this.scriptItem(node);
+      case 'libraryFolder':
+        return this.libraryFolderItem(node);
       case 'data':
         return this.dataItem(node);
       case 'output':
@@ -146,6 +161,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       ];
     }
     if (node.type === 'script') return this.companionChildren(node);
+    if (node.type === 'libraryFolder') return this.libraryFolderChildren(node);
     if (node.type === 'output' && !node.sidecar) return this.outputSidecarChildren(node);
     if (node.type !== 'section') return [];
     switch (node.kind) {
@@ -175,9 +191,14 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     return item;
   }
 
-  private scriptChildren(): ScriptNode[] {
+  private scriptChildren(): PyneNode[] {
     const dir = path.join(this.workdir!, 'scripts');
-    const files = walkScripts(dir);
+    const libraryDir = path.join(dir, 'lib');
+    const libraryPrefix = `${libraryDir}${path.sep}`;
+    const allFiles = walkScripts(dir);
+    const files = allFiles.filter(
+      (file) => file !== libraryDir && !file.startsWith(libraryPrefix)
+    );
     const present = new Set(files);
     const nodes: ScriptNode[] = [];
     for (const file of files) {
@@ -192,7 +213,83 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       });
     }
     nodes.sort((a, b) => a.rel.localeCompare(b.rel));
-    return nodes;
+    const hasLibraries = allFiles.some(
+      (file) =>
+        file.startsWith(libraryPrefix) && path.basename(file) !== '__init__.py'
+    );
+    const libraries: LibraryFolderNode[] = hasLibraries
+      ? [{ type: 'libraryFolder', uri: vscode.Uri.file(libraryDir), depth: 0 }]
+      : [];
+    return [...libraries, ...nodes];
+  }
+
+  private libraryFolderChildren(node: LibraryFolderNode): PyneNode[] {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(node.uri.fsPath, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const folders = entries
+      .filter(
+        (entry) =>
+          entry.isDirectory() &&
+          !entry.name.startsWith('.') &&
+          entry.name !== '__pycache__'
+      )
+      .map(
+        (entry): LibraryFolderNode => ({
+          type: 'libraryFolder',
+          uri: vscode.Uri.file(path.join(node.uri.fsPath, entry.name)),
+          depth: node.depth + 1,
+        })
+      )
+      .sort((a, b) =>
+        path.basename(a.uri.fsPath).localeCompare(path.basename(b.uri.fsPath))
+      );
+
+    const files = entries
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          entry.name !== '__init__.py' &&
+          /\.(?:pine|py)$/i.test(entry.name)
+      )
+      .map((entry) => path.join(node.uri.fsPath, entry.name));
+    const present = new Set(files);
+    const scripts = files
+      .filter(
+        (file) =>
+          !/\.py$/i.test(file) || !present.has(file.replace(/\.py$/i, '.pine'))
+      )
+      .map(
+        (file): ScriptNode => ({
+          type: 'script',
+          uri: vscode.Uri.file(file),
+          rel: path.basename(file),
+          pyneKind: detectScriptKind(file),
+        })
+      )
+      .sort((a, b) => a.rel.localeCompare(b.rel));
+
+    return [...folders, ...scripts];
+  }
+
+  private libraryFolderItem(node: LibraryFolderNode): vscode.TreeItem {
+    const label = node.depth === 0 ? 'Libraries' : path.basename(node.uri.fsPath);
+    const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+    item.iconPath = new vscode.ThemeIcon(
+      node.depth === 0 ? 'library' : node.depth === 1 ? 'organization' : 'folder'
+    );
+    item.contextValue =
+      node.depth === 0
+        ? 'pyneLibraryRoot'
+        : node.depth === 1
+          ? 'pyneLibraryPublisher'
+          : 'pyneLibraryFolder';
+    item.tooltip = node.uri.fsPath;
+    return item;
   }
 
   /** The compiled `.py` nested under a `.pine`, if it exists on disk. The
@@ -221,7 +318,11 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       item.resourceUri = node.uri;
       item.iconPath = new vscode.ThemeIcon('file');
     }
-    item.contextValue = node.pyneKind ? 'pyneScript' : 'pyneFile';
+    item.contextValue = this.isLibraryScript(node.uri.fsPath, node.pyneKind)
+      ? 'pyneLibrary'
+      : node.pyneKind
+        ? 'pyneScript'
+        : 'pyneFile';
     item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
     return item;
   }
@@ -239,9 +340,19 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       item.resourceUri = node.uri;
       item.iconPath = new vscode.ThemeIcon('file');
     }
-    item.contextValue = node.pyneKind ? 'pyneScript' : 'pyneFile';
+    item.contextValue = this.isLibraryScript(node.uri.fsPath, node.pyneKind)
+      ? 'pyneLibrary'
+      : node.pyneKind
+        ? 'pyneScript'
+        : 'pyneFile';
     item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
     return item;
+  }
+
+  private isLibraryScript(file: string, kind: PyneKind | undefined): boolean {
+    if (kind === 'lib') return true;
+    const relative = path.relative(path.join(this.workdir!, 'scripts'), file);
+    return relative === 'lib' || relative.startsWith(`lib${path.sep}`);
   }
 
   private dataChildren(): DataNode[] {
@@ -506,6 +617,9 @@ export function registerWorkspaceView(
       syncContext();
       rebuildWatcher();
     }),
+    vscode.commands.registerCommand('pyneide.workspace.createScript', () =>
+      createNewScript(context)
+    ),
     vscode.commands.registerCommand('pyneide.workspace.runScript', (node?: PyneNode) => {
       const uri = nodeUri(node);
       if (uri) void vscode.commands.executeCommand('pyneide.runScript', uri);
