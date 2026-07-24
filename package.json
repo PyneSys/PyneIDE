@@ -229,6 +229,18 @@
         "icon": "$(search)"
       },
       {
+        "command": "pyneide.editSymbolMap",
+        "title": "Edit Symbol Map",
+        "category": "PyneIDE",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "pyneide.showDataRequirements",
+        "title": "Show Data Requirements",
+        "category": "PyneIDE",
+        "icon": "$(checklist)"
+      },
+      {
         "command": "pyneide.workspace.runScript",
         "title": "Run Pyne code",
         "category": "PyneIDE",
@@ -817,6 +829,7 @@
     "test:checker": "node esbuild.mjs --smoke-checker && node dist/checker-smoke.js",
     "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
+    "test:bridge-security": "node esbuild.mjs --smoke-bridge-security && node dist/bridge-security-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "test:library-imports": "node esbuild.mjs --smoke-library-imports && node dist/library-imports-smoke.js",
     "vscode:prepublish": "npm run build",

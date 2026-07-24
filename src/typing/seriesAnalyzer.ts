@@ -27,6 +27,22 @@ export interface PyneProblem {
   message: string;
 }
 
+/**
+ * A `request.security()` / `request.security_lower_tf()` call site the worker
+ * found. `symbol`/`timeframe` are the literal string arguments (null when
+ * absent or non-literal); `dynamic` is true when either was non-literal, so the
+ * feed is only knowable at run time.
+ */
+export interface SecurityCall {
+  line: number;
+  col: number;
+  endCol: number;
+  symbol: string | null;
+  timeframe: string | null;
+  isLtf: boolean;
+  dynamic: boolean;
+}
+
 export interface SeriesAnalysis {
   /** Bases of subscripts that pynecomp rewrites into series-buffer reads. */
   spans: Span[];
@@ -43,6 +59,8 @@ export interface SeriesAnalysis {
    * pynecore's runtime `@export` decorator.
    */
   exports: Span[];
+  /** `request.security()` call sites for the data-requirement diagnostics. */
+  securityCalls: SecurityCall[];
 }
 
 interface CacheEntry {
@@ -63,6 +81,7 @@ interface WorkerResponse {
   problems?: [number, number, number, string, string][];
   overloads?: Span[];
   exports?: Span[];
+  securityCalls?: SecurityCall[];
   error?: string;
 }
 
@@ -268,6 +287,7 @@ export class SeriesAnalyzer implements vscode.Disposable {
       })),
       overloads: response.overloads ?? [],
       exports: response.exports ?? [],
+      securityCalls: response.securityCalls ?? [],
     });
   }
 

@@ -31,6 +31,11 @@ import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
 import { getRememberedData, pickRunData } from './dataSelect';
+import {
+  SecurityDataService,
+  type SecurityRequirementItem,
+  type ShowSymbolBrowser,
+} from './securityData';
 
 export interface RunListener {
   /** `chartKey` identifies which script's chart the event belongs to (the
@@ -53,6 +58,9 @@ interface PreparedRun {
   workdir: string;
   /** The user's source path — the chart key this run streams to (Part B). */
   chartKey: string;
+  /** Explicit `--security KEY=stem` args for unresolved cross-symbol feeds
+   * (map-resolved feeds need none; the core reads the symbol map itself). */
+  security?: string[];
 }
 
 export class RunService {
@@ -109,12 +117,29 @@ export class RunService {
    * (the rest fly with breakpoints removed). */
   private static readonly RUN_TO_BAR_CRAWL = 2;
 
+  /** Run-time resolver for `request.security()` data requirements. */
+  private readonly securityData: SecurityDataService;
+  /** The "old pynecore, no security resolution" warning is shown at most once. */
+  private securityUnsupportedWarned = false;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly manager: EnvManager,
     private readonly compile: CompileService,
     private readonly libraryDiagnostics?: LibraryCallDiagnostics
-  ) {}
+  ) {
+    this.securityData = new SecurityDataService(context, this.output, context.extensionUri);
+  }
+
+  /** Wire the Symbol Browser opener used by the security "Download…" choice. */
+  setShowSymbolBrowser(cb: ShowSymbolBrowser): void {
+    this.securityData.setShowSymbolBrowser(cb);
+  }
+
+  /** Wire the "a security choice was persisted" listener (editor diagnostics). */
+  setOnSecurityResolved(cb: () => void): void {
+    this.securityData.setOnChanged(cb);
+  }
 
   register(): void {
     const selector = [{ language: 'python' }, { language: 'pine' }];
@@ -466,8 +491,10 @@ export class RunService {
       // sourcemap translator from this (see debug/pyneDebug.ts). Survives a
       // restart along with the rest of the resolved config.
       ...(doc.languageId === 'pine' ? { pineSource: doc.uri.fsPath } : {}),
-      // Freeze the resolved data so a restart reuses it instead of re-prompting.
+      // Freeze the resolved data + security args so a restart reuses them
+      // instead of re-prompting (the run pipeline reads them back verbatim).
       data: prepared.data,
+      security: prepared.security ?? [],
       justMyCode,
       // Keep stepping inside the user's Pyne script, never in the runner.
       // Both the bridge and (in dev) the editable pynecore checkout live
@@ -563,6 +590,9 @@ export class RunService {
     const doc = await vscode.workspace.openTextDocument(script);
     const prepared = await this.prepareRun(doc, {
       data: typeof config.data === 'string' && config.data ? config.data : undefined,
+      security: Array.isArray(config.security)
+        ? (config.security as unknown[]).filter((s): s is string => typeof s === 'string')
+        : undefined,
     });
     if (!prepared) return undefined;
     return this.spawnDebugRun(prepared);
@@ -583,10 +613,10 @@ export class RunService {
     }
   }
 
-  /** Shared pipeline: compile (Pine), env, workdir, data. */
+  /** Shared pipeline: compile (Pine), env, workdir, data, security. */
   private async prepareRun(
     doc: vscode.TextDocument,
-    overrides?: { data?: string }
+    overrides?: { data?: string; security?: string[] }
   ): Promise<PreparedRun | undefined> {
     if (this.activeRun) {
       void vscode.window.showWarningMessage(
@@ -661,7 +691,152 @@ export class RunService {
       return undefined;
     }
 
-    return { pythonBin, scriptPath, data, workdir, chartKey: sourceKey };
+    // Resolve request.security() data requirements. A debug restart reuses the
+    // frozen args (overrides.security) so it never re-prompts; a fresh run asks
+    // only for what the core cannot resolve from the chart feed or symbol map.
+    let security = overrides?.security;
+    if (security === undefined) {
+      const resolved = await this.resolveSecurity(pythonBin, scriptPath, data, workdir, sourceKey);
+      if (resolved === undefined) {
+        this.output.appendLine('Run stopped: security data selection cancelled.');
+        return undefined;
+      }
+      security = resolved;
+    }
+
+    return { pythonBin, scriptPath, data, workdir, chartKey: sourceKey, security };
+  }
+
+  /**
+   * Resolve the script's cross-symbol `request.security()` feeds, prompting only
+   * for the remainder the core cannot resolve. Returns the explicit `--security`
+   * args (possibly empty), or `undefined` when the user cancelled the run. An
+   * unsupported/failed inspection warns once and continues with no args.
+   */
+  private async resolveSecurity(
+    pythonBin: string,
+    scriptPath: string,
+    data: string,
+    workdir: string,
+    chartKey: string
+  ): Promise<string[] | undefined> {
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'Checking data requirements…' },
+      () =>
+        this.securityData.resolveSecurityData({
+          pythonBin,
+          workdir,
+          scriptPath,
+          dataStem: data,
+          chartKey,
+        })
+    );
+    if (result.cancelled) return undefined;
+    if (result.unsupported && !this.securityUnsupportedWarned) {
+      this.securityUnsupportedWarned = true;
+      void vscode.window.showWarningMessage(
+        'PyneIDE: could not check request.security() data requirements — running without ' +
+          'automatic data resolution. Update PyneCore for symbol-map resolution.'
+      );
+    }
+    return result.security;
+  }
+
+  /**
+   * Inspect the active script's `request.security()` data requirements and print
+   * the classified bucket report to the Run output channel — no prompting, no
+   * run (the `pyneide.showDataRequirements` command).
+   */
+  async showDataRequirements(uri?: vscode.Uri): Promise<void> {
+    const doc = await this.resolveDocument(uri);
+    if (!doc) return;
+    if (doc.isDirty) await doc.save();
+
+    let scriptPath = doc.uri.fsPath;
+    if (doc.languageId === 'pine') {
+      const compiled = await this.compile.ensureCompiledForRun(doc);
+      if (!compiled) {
+        void vscode.window.showWarningMessage(
+          'PyneIDE: compilation did not produce a runnable .py to inspect.'
+        );
+        return;
+      }
+      scriptPath = compiled;
+    } else if (
+      doc.languageId !== 'python' ||
+      detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) === undefined
+    ) {
+      void vscode.window.showWarningMessage(
+        'PyneIDE: open a Pyne (.py) or Pine (.pine) script to inspect its data requirements.'
+      );
+      return;
+    }
+
+    const pythonBin = await this.manager.ensureReady(
+      'Checking data requirements needs the Python environment. Set it up now?'
+    );
+    if (!pythonBin) return;
+    const workdir = await this.resolveOrInitWorkdir(doc, scriptPath);
+    if (!workdir) return;
+    const chartKey = canonicalChartKey(doc.uri.fsPath);
+    let data = getRememberedData(this.context, workdir, chartKey);
+    if (!data) data = await pickRunData(this.context, workdir, chartKey, pythonBin, this.output);
+    if (!data) return;
+
+    const inspection = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: 'Checking data requirements…' },
+      () => this.securityData.inspectSecurityRequirements(pythonBin, workdir, scriptPath, data!)
+    );
+    this.output.show(true);
+    this.output.appendLine(`--- Data requirements: ${path.basename(doc.uri.fsPath)} on ${data}`);
+    if (!inspection) {
+      this.output.appendLine('  inspection failed (see log above).');
+      return;
+    }
+    if (!inspection.supported) {
+      this.output.appendLine('  unsupported by this PyneCore — update it for data-requirement reporting.');
+      return;
+    }
+    this.printRequirements(inspection);
+  }
+
+  private printRequirements(inspection: {
+    chartSymbol?: string;
+    chartTf?: string;
+    chartMain: SecurityRequirementItem[];
+    sameSymbolOtherTf: SecurityRequirementItem[];
+    crossSymbol: SecurityRequirementItem[];
+    dynamic: SecurityRequirementItem[];
+  }): void {
+    const chart = inspection.chartSymbol
+      ? `${inspection.chartSymbol}${inspection.chartTf ? ` @ ${inspection.chartTf}` : ''}`
+      : '(unknown)';
+    this.output.appendLine(`  chart feed: ${chart}`);
+    const section = (title: string, items: SecurityRequirementItem[]): void => {
+      if (items.length === 0) return;
+      this.output.appendLine(`  ${title}:`);
+      for (const req of items) {
+        const label = `${req.symbol ?? '?'} @ ${req.timeframe ?? '?'}`;
+        let note = '';
+        if (req.hasGlobalMap && req.mappedNativeSymbol) {
+          note = ` -> ${req.mappedProvider}:${req.mappedNativeSymbol}` +
+            ` [${req.mappedFileExists ? 'ok' : 'missing'}]`;
+        } else if (req.downloadSuggestion) {
+          note = ` -> no mapping (${req.downloadSuggestion})`;
+        }
+        this.output.appendLine(`    - ${label}${note}`);
+      }
+    };
+    section('chart-symbol feeds', inspection.chartMain);
+    section('same symbol, other timeframe', inspection.sameSymbolOtherTf);
+    section('cross-symbol', inspection.crossSymbol);
+    section('dynamic (resolved at run time)', inspection.dynamic);
+    const total =
+      inspection.chartMain.length +
+      inspection.sameSymbolOtherTf.length +
+      inspection.crossSymbol.length +
+      inspection.dynamic.length;
+    if (total === 0) this.output.appendLine('  no request.security() calls.');
   }
 
   /**
@@ -964,6 +1139,7 @@ export class RunService {
     data: string;
     workdir: string;
     chartKey: string;
+    security?: string[];
     debug?: { onEndpoint: (host: string, port: number) => void };
   }): Promise<void> {
     const scriptName = path.basename(opts.scriptPath);
@@ -999,6 +1175,7 @@ export class RunService {
       script: opts.scriptPath,
       data: opts.data,
       workdir: opts.workdir,
+      ...(opts.security && opts.security.length ? { security: opts.security } : {}),
       // Debug: listen on a free port and per-bar flushes, so the chart
       // shows every processed bar while execution sits at a breakpoint.
       ...(opts.debug ? { debugpyPort: 0, batchSize: 1 } : {}),

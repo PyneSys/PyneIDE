@@ -542,6 +542,7 @@ function startRun(start: StartEvent): void {
   measureOverlayId = undefined;
   measureDrawing = false;
   tbMeasureEl?.classList.remove('active');
+  tbMeasureEl?.setAttribute('aria-pressed', 'false');
   activeTab = start.scriptType === 'strategy' ? 'performance' : 'trades';
   if (state) {
     dispose(state.chart);
@@ -1428,11 +1429,13 @@ function openPlotsPopup(): void {
   plotsPopupEl.hidden = false;
   positionPlotsPopup();
   tbLayersEl?.classList.add('active');
+  tbLayersEl?.setAttribute('aria-pressed', 'true');
 }
 
 function closePlotsPopup(): void {
   if (plotsPopupEl) plotsPopupEl.hidden = true;
   tbLayersEl?.classList.remove('active');
+  tbLayersEl?.setAttribute('aria-pressed', 'false');
 }
 
 function togglePlotsPopup(): void {
@@ -1847,7 +1850,9 @@ const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | n
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
 const tbBreakpointsEl = document.getElementById('tb-breakpoints') as HTMLButtonElement | null;
-const tbBreakpointsSepEl = document.getElementById('tb-breakpoints-sep');
+const tbBreakpointsCountEl = document.getElementById('tb-breakpoints-count');
+const tbSymbolNameEl = document.getElementById('tb-symbol-name');
+const tbSymbolPeriodEl = document.getElementById('tb-symbol-period');
 const gotoPopupEl = document.getElementById('goto-popup') as HTMLDivElement | null;
 const tbGotoInputEl = document.getElementById('tb-goto-input') as HTMLInputElement | null;
 const tbGotoDoEl = document.getElementById('tb-goto-do');
@@ -1924,23 +1929,33 @@ function openBreakpointsPopup(): void {
   renderBreakpointList();
   breakpointsPopupEl.hidden = false;
   tbBreakpointsEl?.classList.add('active');
+  tbBreakpointsEl?.setAttribute('aria-pressed', 'true');
   positionBreakpointsPopup();
 }
 
 function closeBreakpointsPopup(): void {
   if (breakpointsPopupEl) breakpointsPopupEl.hidden = true;
   tbBreakpointsEl?.classList.remove('active');
+  tbBreakpointsEl?.setAttribute('aria-pressed', 'false');
 }
 
 function syncBreakpointControls(): void {
   const visible = chartBreakpointTargets.length > 0;
   if (tbBreakpointsEl) {
     tbBreakpointsEl.hidden = !visible;
-    tbBreakpointsEl.textContent = visible
-      ? `Breakpoints (${chartBreakpointTargets.length})`
-      : 'Breakpoints';
+    tbBreakpointsEl.title = visible
+      ? `Chart breakpoints (${chartBreakpointTargets.length})`
+      : 'Chart breakpoints';
+    tbBreakpointsEl.setAttribute(
+      'aria-label',
+      visible ? `Chart breakpoints (${chartBreakpointTargets.length})` : 'Chart breakpoints'
+    );
   }
-  if (tbBreakpointsSepEl) tbBreakpointsSepEl.hidden = !visible;
+  if (tbBreakpointsCountEl) {
+    tbBreakpointsCountEl.textContent = chartBreakpointTargets.length > 99
+      ? '99+'
+      : String(chartBreakpointTargets.length);
+  }
   if (!visible) closeBreakpointsPopup();
   else if (breakpointsPopupEl && !breakpointsPopupEl.hidden) {
     renderBreakpointList();
@@ -1992,17 +2007,55 @@ container.addEventListener('click', (event) => {
   if (typeof point?.timestamp === 'number') selectBreakpointTimestamp(point.timestamp);
 });
 
-/** The data name shown on the Data button (bare stem of the .ohlcv path). */
-function dataLabel(dataPath?: string): string {
-  if (!dataPath) return 'Data';
-  const base = dataPath.split(/[\\/]/).pop() ?? dataPath;
-  return base.endsWith('.ohlcv') ? base.slice(0, -'.ohlcv'.length) : base;
+interface DataPresentation {
+  symbol: string;
+  period: string;
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+}
+
+/** TradingView-style instrument identity, preferring syminfo and gracefully
+ * cleaning legacy provider_symbol_period file stems. */
+function dataPresentation(st?: RunState): DataPresentation {
+  if (!st) return { symbol: 'Select data', period: '' };
+  const info = st.start.syminfo;
+  const dataPath = st.start.data;
+  const base = (dataPath.split(/[\\/]/).pop() ?? dataPath).replace(/\.ohlcv$/i, '');
+  const stemParts = base.split('_').filter(Boolean);
+  const lastStemPart = stemParts[stemParts.length - 1] ?? '';
+  const stemPeriod = stemParts.length > 2 && /^\d*[SDWM]?$/i.test(lastStemPart)
+    ? stemParts.pop() ?? ''
+    : '';
+  const stemPrefix = stemParts.length > 1 ? stemParts.shift() ?? '' : '';
+  const stemTicker = stemParts.join('_') || base;
+
+  const ticker = textValue(info.ticker) || stemTicker;
+  const tickerId = textValue(info.tickerid);
+  const prefix = textValue(info.prefix) || stemPrefix;
+  const symbol = tickerId.includes(':')
+    ? tickerId
+    : prefix && ticker
+      ? `${prefix}:${ticker}`
+      : tickerId || ticker || 'Select data';
+  return {
+    symbol: symbol.toUpperCase(),
+    period: textValue(info.period) || textValue(info.timeframe) || stemPeriod,
+  };
 }
 
 /** Reflect current run state onto the toolbar (data, volume, CSV). */
 function syncToolbar(): void {
   const st = state;
-  if (tbDataEl) tbDataEl.textContent = dataLabel(st?.start.data);
+  const data = dataPresentation(st);
+  if (tbSymbolNameEl) tbSymbolNameEl.textContent = data.symbol;
+  if (tbSymbolPeriodEl) tbSymbolPeriodEl.textContent = data.period;
+  if (tbDataEl) {
+    const detail = data.period ? `${data.symbol} · ${data.period}` : data.symbol;
+    tbDataEl.title = `Select OHLCV data\n${detail}`;
+    tbDataEl.setAttribute('aria-label', `Select OHLCV data. Current: ${detail}`);
+  }
   if (tbMeasureEl) tbMeasureEl.disabled = !st;
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
@@ -2033,6 +2086,7 @@ function clearMeasureState(): void {
   measureOverlayId = undefined;
   measureDrawing = false;
   tbMeasureEl?.classList.remove('active');
+  tbMeasureEl?.setAttribute('aria-pressed', 'false');
 }
 
 function removeMeasurement(): void {
@@ -2066,6 +2120,7 @@ function toggleMeasureDrawing(): void {
   measureOverlayId = id;
   measureDrawing = true;
   tbMeasureEl?.classList.add('active');
+  tbMeasureEl?.setAttribute('aria-pressed', 'true');
 }
 
 tbMeasureEl?.addEventListener('click', toggleMeasureDrawing);
@@ -2126,6 +2181,7 @@ function openGotoPopup(): void {
   closeBreakpointsPopup();
   gotoPopupEl.hidden = false;
   tbGotoEl?.classList.add('active');
+  tbGotoEl?.setAttribute('aria-pressed', 'true');
   positionGotoPopup();
   if (tbGotoInputEl) {
     if (!tbGotoInputEl.value && state?.bars.length) {
@@ -2139,6 +2195,7 @@ function openGotoPopup(): void {
 function closeGotoPopup(): void {
   if (gotoPopupEl) gotoPopupEl.hidden = true;
   tbGotoEl?.classList.remove('active');
+  tbGotoEl?.setAttribute('aria-pressed', 'false');
 }
 
 tbGotoEl?.addEventListener('click', (e) => {

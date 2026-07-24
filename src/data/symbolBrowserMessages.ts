@@ -24,7 +24,9 @@ export type BrowserInMessage =
   | { type: 'syminfoError'; reqId: number; symbol: string; message: string }
   | { type: 'downloadProgress'; done: number; total: number; indeterminate?: boolean }
   | { type: 'downloadDone'; ohlcvPath: string; barsWritten: number; symbol: string }
-  | { type: 'downloadError'; kind: string; message: string; retryable: boolean };
+  | { type: 'downloadError'; kind: string; message: string; retryable: boolean }
+  // Seed the search box + timeframe for a security-download prefill.
+  | { type: 'prefill'; symbol: string; timeframe?: string };
 
 /** Webview -> host. */
 export type BrowserOutMessage =

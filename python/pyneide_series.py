@@ -48,7 +48,9 @@ Response ``{"id": N, "ok": true, "spans": [[line, col, endCol], ...],
             "refs": [[line, col, endCol, "Series[float]"], ...],
             "problems": [[line, col, endCol, "code", "message"], ...],
             "overloads": [[line, col, endCol], ...],
-            "exports": [[line, col, endCol], ...]}``
+            "exports": [[line, col, endCol], ...],
+            "securityCalls": [{"line", "col", "endCol", "symbol", "timeframe",
+                               "isLtf", "dynamic"}, ...]}``
          ``{"id": N, "ok": false, "error": "..."}`` on unparsable source.
 
 Positions are 0-based LSP coordinates: `line` is 0-based and columns are
@@ -132,6 +134,15 @@ FORBIDDEN_STRATEGY_STATE_ATTRS = frozenset({
 # request.<fn> whose expression argument runs in a security child context;
 # the value is the expression's positional index in the call.
 SECURITY_EXPRESSION_ARG = {'security': 2, 'security_lower_tf': 2}
+
+# request.security(symbol, timeframe, expression, ...) positional argument
+# indices for the symbol and timeframe (same for security_lower_tf).
+SECURITY_SYMBOL_ARG = 0
+SECURITY_TIMEFRAME_ARG = 1
+
+# Sentinel for a security symbol/timeframe argument that is present but not a
+# string literal — such a call resolves its feed dynamically at run time.
+_NON_LITERAL = object()
 
 
 class _Utf16Columns:
@@ -294,6 +305,9 @@ class _Analyzer(ast.NodeVisitor):
         self.spans: list[tuple[int, int, int]] = []
         self.refs: list[tuple[int, int, int, str]] = []
         self.problems: list[tuple[int, int, int, str, str]] = []
+        # request.security()/security_lower_tf() call sites for the IDE's
+        # data-requirement diagnostics (line/col span + literal symbol/tf).
+        self.security_calls: list[dict[str, Any]] = []
         self.scope = _Scope(None)
         self._collect_bindings(tree.body, self.scope)
 
@@ -401,6 +415,7 @@ class _Analyzer(ast.NodeVisitor):
         chain = self._lib_chain(node.func)
         if (chain is not None and len(chain) == 2 and chain[0] == 'request'
                 and chain[1] in SECURITY_EXPRESSION_ARG):
+            self._record_security_call(node, chain[1] == 'security_lower_tf')
             expression = self._call_arg(node, SECURITY_EXPRESSION_ARG[chain[1]], 'expression')
             if expression is not None:
                 for bad, attr in self._forbidden_strategy_state(expression):
@@ -411,6 +426,34 @@ class _Analyzer(ast.NodeVisitor):
                         f"only available in the chart context, not in a "
                         f"security context"))
         self.generic_visit(node)
+
+    def _record_security_call(self, node: ast.Call, is_ltf: bool) -> None:
+        """Record a request.security() call: its span and literal symbol/tf.
+
+        A symbol or timeframe argument that is present but not a string literal
+        marks the call `dynamic` — the feed is only knowable at run time, so the
+        IDE cannot resolve or map it statically.
+        """
+        symbol = self._literal_arg(node, SECURITY_SYMBOL_ARG, 'symbol')
+        timeframe = self._literal_arg(node, SECURITY_TIMEFRAME_ARG, 'timeframe')
+        line, col, end_col = _node_span(self.columns, node.func)
+        self.security_calls.append({
+            'line': line, 'col': col, 'endCol': end_col,
+            'symbol': None if symbol is _NON_LITERAL else symbol,
+            'timeframe': None if timeframe is _NON_LITERAL else timeframe,
+            'isLtf': is_ltf,
+            'dynamic': symbol is _NON_LITERAL or timeframe is _NON_LITERAL,
+        })
+
+    def _literal_arg(self, node: ast.Call, index: int, keyword: str) -> Any:
+        """The string value of a positional/keyword arg, `_NON_LITERAL` when it
+        is present but not a string constant, or None when it is absent."""
+        arg = self._call_arg(node, index, keyword)
+        if arg is None:
+            return None
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return arg.value
+        return _NON_LITERAL
 
     def _lib_chain(self, expr: ast.expr) -> list[str] | None:
         """The `lib.*` chain `expr` normalizes to, honoring parameter shadowing."""
@@ -1123,6 +1166,7 @@ def analyze(source: str) -> dict[str, Any]:
         'problems': [list(problem) for problem in problems],
         'overloads': [list(span) for span in _overload_def_spans(tree, columns)],
         'exports': [list(span) for span in _exported_def_spans(tree, columns)],
+        'securityCalls': analyzer.security_calls,
     }
 
 

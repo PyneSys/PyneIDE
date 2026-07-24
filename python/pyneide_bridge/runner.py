@@ -434,6 +434,98 @@ def write_inputs(args: Any, emitter: Emitter) -> int:
     return 0
 
 
+def _serialize_security_req(req: Any) -> dict[str, Any]:
+    """Serialize one pynecore ``SecurityRequirement`` to a JSON-safe dict for the
+    IDE's run-time data-requirement resolution (see ``list_data_requirements``).
+    The map/file fields are populated only for cross-symbol requirements; they
+    default to ``None``/``False``/``[]`` for chart-main and same-symbol feeds
+    (which resample from the chart data and need no external file)."""
+    return {
+        "secId": req.sec_id,
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "isLtf": bool(req.is_ltf),
+        "ignoreInvalidSymbol": bool(req.ignore_invalid_symbol),
+        "fromLibrary": bool(req.from_library),
+        "hasSecurityMapping": bool(req.has_security_mapping),
+        "hasGlobalMap": bool(getattr(req, "has_global_map", False)),
+        "mappedProvider": getattr(req, "mapped_provider", None),
+        "mappedNativeSymbol": getattr(req, "mapped_native_symbol", None),
+        "mappedFile": getattr(req, "mapped_file", None),
+        "mappedFileExists": bool(getattr(req, "mapped_file_exists", False)),
+        "downloadSuggestion": getattr(req, "download_suggestion", None),
+        "fileSuggestions": list(getattr(req, "file_suggestions", []) or []),
+    }
+
+
+def inspect_security(args: Any, emitter: Emitter) -> int:
+    """One-shot: import the script far enough to collect its security contexts,
+    then statically classify its ``request.security()`` data requirements against
+    the chart data's syminfo — WITHOUT running it, opening security data files or
+    spawning subprocesses (``ScriptRunner.list_data_requirements``).
+
+    Emits a single ``security`` event with the chart symbol/timeframe and the
+    four classified buckets (chartMain / sameSymbolOtherTf / crossSymbol /
+    dynamic). A pynecore that predates the static classifier degrades to
+    ``{"e": "security", "supported": false}`` so the IDE skips resolution.
+    """
+    import os
+
+    from pynecore.core.script_runner import ScriptRunner
+    from pynecore.core.syminfo import SymInfo
+    from pynecore.lib.timeframe import in_seconds
+
+    # Version guard: an older pynecore has no static requirement classifier.
+    if not hasattr(ScriptRunner, "list_data_requirements"):
+        emitter.emit({"e": "security", "supported": False})
+        return 0
+
+    workdir = Path(args.workdir).resolve()
+    script = _resolve_script(workdir, args.inspect_security)
+    if not args.data:
+        raise ValueError("--data is required for --inspect-security")
+    data_path = _resolve_data(workdir, args.data)
+
+    syminfo = SymInfo.load_toml(data_path.with_suffix(".toml"))
+
+    # Chart timeframe override (mirrors run() / pyne run --timeframe): the
+    # requirement classification keys off the chart's effective timeframe.
+    if args.timeframe:
+        chart_tf = args.timeframe.upper()
+        in_seconds(chart_tf)  # raises on an invalid timeframe
+        syminfo.period = chart_tf
+
+    # Library scripts import their deps from workdir/scripts/lib (like run()).
+    lib_dir = workdir / "scripts" / "lib"
+    if lib_dir.is_dir():
+        sys.path.insert(0, str(lib_dir))
+
+    # Never rewrite the sibling .toml while merely inspecting.
+    os.environ["PYNE_SAVE_SCRIPT_TOML"] = "0"
+
+    chart_symbol = f"{syminfo.prefix}:{syminfo.ticker}"
+    chart_tf = str(syminfo.period)
+
+    runner = ScriptRunner(
+        script, iter(()), syminfo,
+        config_dir=workdir / "config",
+        chart_data_path=data_path,
+    )
+    reqs = runner.list_data_requirements(chart_symbol=chart_symbol, chart_tf=chart_tf)
+
+    emitter.emit({
+        "e": "security",
+        "supported": True,
+        "chartSymbol": chart_symbol,
+        "chartTf": chart_tf,
+        "chartMain": [_serialize_security_req(r) for r in reqs.chart_main],
+        "sameSymbolOtherTf": [_serialize_security_req(r) for r in reqs.same_symbol_other_tf],
+        "crossSymbol": [_serialize_security_req(r) for r in reqs.cross_symbol],
+        "dynamic": [_serialize_security_req(r) for r in reqs.dynamic],
+    })
+    return 0
+
+
 def run(args: Any, emitter: Emitter, control: Control) -> int:
     """Execute the script run; returns the process exit code."""
     from pynecore.core.aggregator import validate_aggregation
@@ -527,9 +619,15 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
             "magnifier_source_tf": magnifier_source_tf,
             "chart_data_path": data_path,
         }
-        viz_supported = "viz_path" in inspect.signature(ScriptRunner).parameters
+        runner_params = inspect.signature(ScriptRunner).parameters
+        viz_supported = "viz_path" in runner_params
         if viz_supported:
             runner_kwargs["viz_path"] = viz_path
+        # Global workdir symbol map (config/symbol_map.toml) resolution: hand the
+        # config dir to a pynecore that supports it so backtest cross-symbol
+        # request.security() feeds resolve from the map with no --security arg.
+        if "config_dir" in runner_params:
+            runner_kwargs["config_dir"] = workdir / "config"
 
         runner = ScriptRunner(
             script, ohlcv_iter, syminfo,

@@ -44,6 +44,9 @@ def main() -> int:
     parser.add_argument("--write-inputs", default=None, metavar="SCRIPT",
                         help="One-shot: read {name: value} JSON from stdin and persist it "
                              "to SCRIPT's sibling .toml via pynecore's canonical writer")
+    parser.add_argument("--inspect-security", default=None, metavar="SCRIPT",
+                        help="One-shot: import SCRIPT and print its request.security() data "
+                             "requirements (against --data's syminfo) as JSON, without running it")
     parser.add_argument("--data-only", action="store_true",
                         help="Stream the raw .ohlcv candles without running a script "
                              "(chart preview); ignores --script/--debugpy-port")
@@ -109,6 +112,19 @@ def main() -> int:
         from .runner import write_inputs
         try:
             return write_inputs(args, emitter)
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+
+    if args.inspect_security:
+        from .runner import inspect_security
+        try:
+            return inspect_security(args, emitter)
         except Exception as exc:
             emitter.emit({
                 "e": "error",

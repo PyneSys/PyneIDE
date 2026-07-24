@@ -9,7 +9,7 @@ import { CompileService } from './compile/service';
 import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { buildOhlcvPreview } from './data/ohlcvPreview';
-import { SymbolBrowserPanel } from './data/symbolBrowserPanel';
+import { SymbolBrowserPanel, type SecurityPrefill } from './data/symbolBrowserPanel';
 import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager, type EnvState } from './env/manager';
@@ -28,8 +28,10 @@ import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { downloadData, truncateData, updateData } from './run/dataSelect';
 import { RunService } from './run/runService';
+import { ensureSymbolMapFile } from './run/symbolMapFile';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
+import { SecurityStatusService } from './typing/securityStatus';
 import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
@@ -150,6 +152,17 @@ export function activate(context: vscode.ExtensionContext): void {
   pyright.register();
   const pyneChecker = new PyneCheckerService(context, seriesAnalyzer, pyrightOutput);
   pyneChecker.register();
+  // Editor status for request.security() data requirements (own diagnostic
+  // collection, computed locally from the symbol map + data tomls).
+  const securityStatus = new SecurityStatusService(context, seriesAnalyzer, pyrightOutput);
+  securityStatus.register();
+  // A run-time security resolution (map/override write) refreshes the status.
+  runService.setOnSecurityResolved(() => securityStatus.refreshAll());
+  // The security "Download…" choice opens the Symbol Browser armed with a
+  // prefill (callback injection avoids a run<->data dependency cycle).
+  runService.setShowSymbolBrowser((prefill) =>
+    void openSymbolBrowser(context, manager, output, prefill)
+  );
   // "Convert to full @pyne" quick fix on Edge-profile violations.
   new EdgeQuickFixProvider().register(context);
   // Declared-type hovers when Pylance (or another pyright) supersedes the
@@ -191,6 +204,10 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('pyneide.dataPreviewChart', (node?: { uri?: vscode.Uri }) =>
       previewDataChart(chartManager, node)
+    ),
+    vscode.commands.registerCommand('pyneide.editSymbolMap', () => editSymbolMapCommand()),
+    vscode.commands.registerCommand('pyneide.showDataRequirements', (uri?: vscode.Uri) =>
+      runService.showDataRequirements(uri)
     )
   );
 
@@ -206,7 +223,8 @@ export function activate(context: vscode.ExtensionContext): void {
 async function openSymbolBrowser(
   context: vscode.ExtensionContext,
   manager: EnvManager,
-  output: vscode.OutputChannel
+  output: vscode.OutputChannel,
+  prefill?: SecurityPrefill
 ): Promise<void> {
   const workdir = resolveWorkspaceWorkdir();
   if (!workdir?.exists) {
@@ -219,13 +237,17 @@ async function openSymbolBrowser(
     'The symbol browser uses the pyne provider service, so the Python environment must be set up first.'
   );
   if (!pythonBin) return;
-  SymbolBrowserPanel.show(context, {
-    pythonBin,
-    bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
-    workdir: workdir.path,
-    output,
-    onServiceUnavailable: () => void legacyDownloadWizard(context, manager, output),
-  });
+  SymbolBrowserPanel.show(
+    context,
+    {
+      pythonBin,
+      bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+      workdir: workdir.path,
+      output,
+      onServiceUnavailable: () => void legacyDownloadWizard(context, manager, output),
+    },
+    prefill
+  );
 }
 
 /**
@@ -326,6 +348,23 @@ async function dataFileAction(
   );
   if (!pythonBin) return;
   await action(workdir.path, pythonBin, uri.fsPath, output);
+}
+
+/**
+ * Open (creating if absent) the workdir's global `config/symbol_map.toml` so
+ * the user can hand-edit the TV-symbol -> provider-native mappings.
+ */
+async function editSymbolMapCommand(): Promise<void> {
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: no Pyne workspace found — initialize one first.'
+    );
+    return;
+  }
+  const filePath = ensureSymbolMapFile(workdir.path);
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+  await vscode.window.showTextDocument(doc);
 }
 
 async function initialCheck(

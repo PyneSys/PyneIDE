@@ -12,6 +12,7 @@ const smokeEdgeCorpus = process.argv.includes('--smoke-edge-corpus');
 const smokeBridgeViz = process.argv.includes('--smoke-bridge-viz');
 const smokeChartBreakpoints = process.argv.includes('--smoke-chart-breakpoints');
 const smokeLibraryImports = process.argv.includes('--smoke-library-imports');
+const smokeBridgeSecurity = process.argv.includes('--smoke-bridge-security');
 
 const common = {
   bundle: true,
@@ -118,6 +119,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/libraryImportsSmoke.ts'],
     outfile: 'dist/library-imports-smoke.js',
+    minify: false,
+  });
+} else if (smokeBridgeSecurity) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/securitySmoke.ts'],
+    outfile: 'dist/bridge-security-smoke.js',
     minify: false,
   });
 } else {

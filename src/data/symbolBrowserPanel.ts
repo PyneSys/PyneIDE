@@ -13,9 +13,14 @@
  * One panel at a time (singleton): a second `show()` reveals the existing one.
  * A single download runs at a time — the service rejects a second one.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 import * as vscode from 'vscode';
 
+import { writeSymbolMapEntry } from '../run/symbolMapFile';
 import { OhlcvEditorProvider } from './ohlcvEditor';
+import { parseSymInfo } from './syminfo';
 import {
   ProviderService,
   ProviderServiceError,
@@ -33,6 +38,23 @@ const LAST_TIMEFRAME_KEY = 'pyneide.symbolBrowser.timeframe';
 /** Host-side syminfo LRU: avoids re-hitting the service (and provider REST) as
  * the cursor moves back over rows already seen. Keyed provider|broker|symbol|tf. */
 const SYMINFO_CACHE_MAX = 300;
+
+/**
+ * A security-download prefill: the browser seeds its search box with the
+ * ticker and selects the timeframe, and once the download finishes it writes the
+ * `symbol_map.toml` entry (`mapKey` → the download's provider string) so both
+ * the run and the CLI resolve the feed afterwards, then offers to run `chartKey`.
+ */
+export interface SecurityPrefill {
+  /** Native symbol to seed the search with (the `PREFIX:` is stripped). */
+  symbol: string;
+  timeframe?: string;
+  /** TV symbol the map entry is keyed under. */
+  mapKey: string;
+  workdir: string;
+  /** Source path of the script to offer a "Run" action for after the download. */
+  chartKey: string;
+}
 
 export interface SymbolBrowserDeps {
   pythonBin: string;
@@ -53,19 +75,29 @@ export class SymbolBrowserPanel {
   private readonly syminfoCache = new Map<string, SymInfoDict>();
   private readonly disposables: vscode.Disposable[] = [];
   private activeDownloadId: number | undefined;
+  /** Armed security-download prefill (map write + Run offer after download). */
+  private prefill: SecurityPrefill | undefined;
 
-  static show(context: vscode.ExtensionContext, deps: SymbolBrowserDeps): void {
+  static show(
+    context: vscode.ExtensionContext,
+    deps: SymbolBrowserDeps,
+    prefill?: SecurityPrefill
+  ): void {
     if (SymbolBrowserPanel.current) {
-      SymbolBrowserPanel.current.panel.reveal(vscode.ViewColumn.Active);
+      const existing = SymbolBrowserPanel.current;
+      existing.panel.reveal(vscode.ViewColumn.Active);
+      if (prefill) existing.arm(prefill);
       return;
     }
-    SymbolBrowserPanel.current = new SymbolBrowserPanel(context, deps);
+    SymbolBrowserPanel.current = new SymbolBrowserPanel(context, deps, prefill);
   }
 
   private constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly deps: SymbolBrowserDeps
+    private readonly deps: SymbolBrowserDeps,
+    prefill?: SecurityPrefill
   ) {
+    this.prefill = prefill;
     this.service = new ProviderService({
       pythonBin: deps.pythonBin,
       bridgeRoot: deps.bridgeRoot,
@@ -93,10 +125,25 @@ export class SymbolBrowserPanel {
     void this.panel.webview.postMessage(message);
   }
 
+  /** Re-arm a prefill on the already-open panel and seed the webview. */
+  private arm(prefill: SecurityPrefill): void {
+    this.prefill = prefill;
+    this.postPrefill(prefill);
+  }
+
+  /** Seed the webview search box + timeframe (the `PREFIX:` is dropped so the
+   * broker-native ticker matches the symbol list). */
+  private postPrefill(prefill: SecurityPrefill): void {
+    const colon = prefill.symbol.indexOf(':');
+    const search = colon >= 0 ? prefill.symbol.slice(colon + 1) : prefill.symbol;
+    this.post({ type: 'prefill', symbol: search, timeframe: prefill.timeframe });
+  }
+
   private async onMessage(msg: BrowserOutMessage): Promise<void> {
     switch (msg.type) {
       case 'ready':
         await this.sendInit();
+        if (this.prefill) this.postPrefill(this.prefill);
         break;
       case 'selectProvider':
         await this.sendBrokers(msg.provider);
@@ -247,10 +294,30 @@ export class SymbolBrowserPanel {
     }
   }
 
-  /** Refresh the workspace tree and offer to open the freshly downloaded file. */
+  /** Refresh the workspace tree and offer to open the freshly downloaded file.
+   * With an armed security prefill, write the symbol_map entry and offer to run
+   * the waiting script instead. */
   private async afterDownload(res: DownloadResult, symbol: string): Promise<void> {
     void vscode.commands.executeCommand('pyneide.workspace.refresh');
     const uri = vscode.Uri.file(res.ohlcv_path);
+    const prefill = this.prefill;
+    if (prefill) {
+      this.prefill = undefined;
+      await this.recordPrefillMapping(prefill, res.ohlcv_path);
+      const script = path.basename(prefill.chartKey);
+      const choice = await vscode.window.showInformationMessage(
+        `PyneIDE: downloaded ${symbol} (${res.bars_written.toLocaleString('en-US')} bars) ` +
+          `and mapped ${prefill.mapKey}.`,
+        `Run ${script}`,
+        'Open Table'
+      );
+      if (choice === `Run ${script}`) {
+        await vscode.commands.executeCommand('pyneide.runScript', vscode.Uri.file(prefill.chartKey));
+      } else if (choice === 'Open Table') {
+        await vscode.commands.executeCommand('vscode.openWith', uri, OhlcvEditorProvider.viewType);
+      }
+      return;
+    }
     const choice = await vscode.window.showInformationMessage(
       `PyneIDE: downloaded ${symbol} (${res.bars_written.toLocaleString('en-US')} bars).`,
       'Open Table',
@@ -260,6 +327,30 @@ export class SymbolBrowserPanel {
       await vscode.commands.executeCommand('vscode.openWith', uri, OhlcvEditorProvider.viewType);
     } else if (choice === 'Preview Chart') {
       await vscode.commands.executeCommand('pyneide.dataPreviewChart', { uri });
+    }
+  }
+
+  /** Write `mapKey -> provider-qualified native symbol` into the workdir symbol
+   * map, taking the provider string from the freshly written sibling `.toml`
+   * (`[download]` provider minus its trailing `@TF`). */
+  private async recordPrefillMapping(prefill: SecurityPrefill, ohlcvPath: string): Promise<void> {
+    const tomlPath = `${ohlcvPath.slice(0, -path.extname(ohlcvPath).length)}.toml`;
+    let value: string | undefined;
+    try {
+      const info = parseSymInfo(fs.readFileSync(tomlPath, 'utf8'));
+      if (info.provider) {
+        const at = info.provider.lastIndexOf('@');
+        value = at > 0 ? info.provider.slice(0, at) : info.provider;
+      }
+    } catch {
+      // No readable toml — skip the map write; the run's picker still resolves.
+    }
+    if (!value) return;
+    try {
+      writeSymbolMapEntry(prefill.workdir, prefill.mapKey, value);
+      this.deps.output.appendLine(`symbol_map: "${prefill.mapKey}" -> "${value}"`);
+    } catch (err) {
+      this.deps.output.appendLine(`PyneIDE: symbol_map write failed: ${errMessage(err)}`);
     }
   }
 

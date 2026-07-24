@@ -98,8 +98,25 @@ window.addEventListener('message', (ev: MessageEvent<BrowserInMessage>) => {
     case 'downloadError':
       onDownloadError(msg.message);
       break;
+    case 'prefill':
+      onPrefill(msg.symbol, msg.timeframe);
+      break;
   }
 });
+
+/**
+ * Seed the search box (and timeframe) for a security download. The symbols may
+ * still be loading, so the filter value is applied now and re-applied whenever a
+ * fresh symbol list arrives (`applyFilter` reads the box every time).
+ */
+function onPrefill(symbol: string, timeframe?: string): void {
+  filterInput.value = symbol;
+  if (timeframe && TIMEFRAMES.includes(timeframe)) {
+    timeframeSel.value = timeframe;
+    persist();
+  }
+  applyFilter();
+}
 
 function onInit(list: ProviderInfo[], defaults: BrowserDefaults): void {
   providers = list;

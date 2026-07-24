@@ -318,28 +318,67 @@ export class ChartPanel {
   html, body { height: 100%; margin: 0; padding: 0; }
   body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); }
   #toolbar {
-    flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
-    padding: 3px 6px; user-select: none;
+    flex: 0 0 36px; display: flex; align-items: center; gap: 0;
+    box-sizing: border-box; padding: 3px 6px; user-select: none;
     border-bottom: 1px solid var(--vscode-panel-border, #444);
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    background: var(--vscode-editor-background);
   }
+  #toolbar .toolbar-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
   #toolbar button {
-    background: var(--vscode-button-secondaryBackground, transparent);
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-panel-border, #444); border-radius: 3px;
-    cursor: pointer; padding: 2px 8px; font-size: 11px; height: 22px;
-    white-space: nowrap;
+    border: 0; color: var(--vscode-foreground); background: transparent;
+    cursor: pointer; font: inherit;
+  }
+  #toolbar button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
   }
   #toolbar button:hover:not(:disabled) {
-    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground, #333));
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
   }
-  #toolbar button:disabled { opacity: 0.4; cursor: default; }
-  #toolbar button.active {
-    background: var(--vscode-button-background, #0e639c);
+  #toolbar button:disabled { opacity: 0.35; cursor: default; }
+  #toolbar .symbol-button {
+    display: flex; align-items: center; gap: 7px; max-width: min(280px, 34vw);
+    height: 28px; min-width: 0; padding: 0 8px 0 5px; border-radius: 7px;
+  }
+  #toolbar .symbol-mark {
+    display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
+    width: 22px; height: 22px; border-radius: 50%;
     color: var(--vscode-button-foreground, #fff);
-    border-color: var(--vscode-button-background, #0e639c);
+    background: var(--vscode-button-background, #2962ff);
   }
-  #toolbar .sep { width: 1px; height: 16px; background: var(--vscode-panel-border, #444); margin: 0 2px; }
+  #toolbar .symbol-mark svg { width: 14px; height: 14px; }
+  #toolbar .symbol-copy { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  #toolbar .symbol-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; font-weight: 600; letter-spacing: 0.01em;
+  }
+  #toolbar .symbol-period {
+    flex: 0 0 auto; color: var(--vscode-descriptionForeground);
+    font-size: 11px; font-variant-numeric: tabular-nums;
+  }
+  #toolbar .icon-button {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0; border-radius: 5px;
+  }
+  #toolbar .icon-button[hidden] { display: none; }
+  #toolbar .icon-button svg {
+    width: 17px; height: 17px; fill: none; stroke: currentColor;
+    stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #toolbar .icon-button.active {
+    color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+  }
+  #toolbar .count-badge {
+    position: absolute; right: 1px; top: 1px; min-width: 11px; height: 11px;
+    box-sizing: border-box; padding: 0 2px; border-radius: 6px;
+    color: var(--vscode-badge-foreground, #fff);
+    background: var(--vscode-badge-background, #4d4d4d);
+    font-size: 8px; font-weight: 700; line-height: 11px; text-align: center;
+  }
+  #toolbar .sep {
+    width: 1px; height: 20px; flex: 0 0 auto;
+    background: var(--vscode-panel-border, #444); margin: 0 6px;
+  }
   #toolbar .spacer { flex: 1; }
   #goto-popup {
     position: absolute; z-index: 20; display: flex; align-items: center; gap: 4px;
@@ -541,18 +580,74 @@ export class ChartPanel {
 </head>
 <body>
 <div id="toolbar">
-  <button id="tb-data" title="Select the OHLCV data for this script">Data</button>
+  <div class="toolbar-group">
+    <button id="tb-data" class="symbol-button" title="Select the OHLCV data for this script">
+      <span class="symbol-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M4 3.5v9M2.5 6h3v4h-3zM11.5 2.5v11M10 5h3v5h-3z"
+                fill="none" stroke="currentColor" stroke-width="1.35"></path>
+        </svg>
+      </span>
+      <span class="symbol-copy">
+        <span id="tb-symbol-name" class="symbol-name">Select data</span>
+        <span id="tb-symbol-period" class="symbol-period"></span>
+      </span>
+    </button>
+  </div>
   <span class="sep"></span>
-  <button id="tb-layers" title="Show/hide plots & volume">Layers</button>
+  <div class="toolbar-group">
+    <button id="tb-layers" class="icon-button" title="Layers and indicators"
+            aria-label="Layers and indicators" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="m10 3-7 3.6 7 3.6 7-3.6L10 3Z"></path>
+        <path d="m4.5 9.5-1.5.8 7 3.7 7-3.7-1.5-.8M4.5 13.2l-1.5.8 7 3.5 7-3.5-1.5-.8"></path>
+      </svg>
+    </button>
+  </div>
   <span class="sep"></span>
-  <button id="tb-measure" title="Show/hide a price movement measurement">Measure</button>
-  <span class="sep"></span>
-  <button id="tb-goto" title="Scroll the chart to a date/time">Go to date…</button>
-  <span id="tb-breakpoints-sep" class="sep" hidden></span>
-  <button id="tb-breakpoints" title="Jump to or remove chart breakpoints" hidden>Breakpoints</button>
+  <div class="toolbar-group">
+    <button id="tb-measure" class="icon-button" title="Measure price movement"
+            aria-label="Measure price movement" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3 3.5v3M17 3.5v3M3 5h14"></path>
+        <rect x="3" y="10" width="14" height="6" rx="1.2"></rect>
+        <path d="M6 10v2.5M9 10v1.6M12 10v2.5M15 10v1.6"></path>
+      </svg>
+    </button>
+    <button id="tb-goto" class="icon-button" title="Go to date"
+            aria-label="Go to date" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="3" y="4.5" width="14" height="12.5" rx="2"></rect>
+        <path d="M6.5 2.8v3.4M13.5 2.8v3.4M3 8h14M7.5 12h5M10.8 9.7 13 12l-2.2 2.3"></path>
+      </svg>
+    </button>
+    <button id="tb-breakpoints" class="icon-button" title="Chart breakpoints"
+            aria-label="Chart breakpoints" aria-pressed="false" hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="6"></circle>
+        <circle cx="10" cy="10" r="2.5" fill="currentColor" stroke="none"></circle>
+      </svg>
+      <span id="tb-breakpoints-count" class="count-badge"></span>
+    </button>
+  </div>
   <span class="spacer"></span>
-  <button id="tb-csv-plot" title="Open the plot output CSV" disabled>Plot CSV</button>
-  <button id="tb-csv-trades" title="Open the trades output CSV" disabled hidden>Trades CSV</button>
+  <span class="sep"></span>
+  <div class="toolbar-group">
+    <button id="tb-csv-plot" class="icon-button" title="Open plot output CSV"
+            aria-label="Open plot output CSV" disabled>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3 15.5h14M4.5 13l3.4-3.5 2.7 2 4.9-5"></path>
+        <path d="M13 6.5h2.5V9"></path>
+      </svg>
+    </button>
+    <button id="tb-csv-trades" class="icon-button" title="Open trades output CSV"
+            aria-label="Open trades output CSV" disabled hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="3" y="3.5" width="14" height="13" rx="1.5"></rect>
+        <path d="M3 8h14M8 3.5v13M12.5 8v8.5"></path>
+      </svg>
+    </button>
+  </div>
 </div>
 <div id="chart-area">
   <div id="chart"></div>
