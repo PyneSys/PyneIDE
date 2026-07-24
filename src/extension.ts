@@ -13,6 +13,8 @@ import { SymbolBrowserPanel, type SecurityPrefill } from './data/symbolBrowserPa
 import { SymbolMapPanel } from './data/symbolMapPanel';
 import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
+import { currentMarker } from './env/bootstrap';
+import { PYNECORE_VERSION } from './env/constants';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
@@ -44,6 +46,13 @@ import { registerLibraryHelp } from './workspace/libraryHelp';
 import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
+const UPDATE_PROMPTED_KEY = 'pyneide.updatePromptedFor';
+
+/** Stable tag of the pinned target, so an outdated-env prompt fires once per new pin. */
+function pinnedTargetTag(): string {
+  const m = currentMarker();
+  return `${m.schema}-${m.python}-${m.pynecore}-${m.debugpy}`;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   new PyneDecorationProvider().register(context);
@@ -410,7 +419,26 @@ async function initialCheck(
   const state = await manager.check();
   if (state.kind !== 'needs-setup') return;
 
-  // Ask once instead of silently downloading ~100 MB on first activation.
+  if (state.cause === 'outdated') {
+    // The env already worked; a new extension release bumped the pinned
+    // versions. Prompt once per new pin so declining ("Later") does not renag
+    // every window, but the next update prompts again.
+    const tag = pinnedTargetTag();
+    if (context.globalState.get<string>(UPDATE_PROMPTED_KEY) === tag) return;
+    await context.globalState.update(UPDATE_PROMPTED_KEY, tag);
+    const choice = await vscode.window.showInformationMessage(
+      `PyneIDE bundles a new PyneCore (${PYNECORE_VERSION}). ` +
+        'Update the Python environment now?',
+      'Update Now',
+      'Later'
+    );
+    if (choice === 'Update Now') {
+      await manager.setup();
+    }
+    return;
+  }
+
+  // First install (missing): ask once instead of silently downloading ~100 MB.
   if (context.globalState.get<boolean>(SETUP_PROMPTED_KEY)) return;
   await context.globalState.update(SETUP_PROMPTED_KEY, true);
   const choice = await vscode.window.showInformationMessage(

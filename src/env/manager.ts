@@ -7,10 +7,18 @@ import { managedVenvDir, venvPythonPath } from './uv';
 
 export type EnvState =
   | { kind: 'unknown' }
-  | { kind: 'needs-setup'; reason: string }
+  | { kind: 'needs-setup'; reason: string; cause: SetupCause }
   | { kind: 'working'; step: string }
   | { kind: 'ready'; pythonBin: string; source: EnvSource; verify: VerifyResult }
   | { kind: 'error'; message: string };
+
+/**
+ * Why the managed environment needs setup: never installed (`missing`), the
+ * pinned versions changed under an existing install (`outdated`), or an
+ * otherwise-present install failed verification (`broken`). Drives whether the
+ * user is actively notified and how the prompt is worded.
+ */
+export type SetupCause = 'missing' | 'outdated' | 'broken';
 
 export type EnvSource = 'managed' | 'venvPath' | 'pythonPath';
 
@@ -100,13 +108,18 @@ export class EnvManager {
     }
 
     if (!fs.existsSync(target.pythonBin)) {
-      this.setState({ kind: 'needs-setup', reason: 'The Python environment is not set up yet.' });
+      this.setState({
+        kind: 'needs-setup',
+        reason: 'The Python environment is not set up yet.',
+        cause: 'missing',
+      });
       return this.stateValue;
     }
     if (!markerUpToDate(this.storageDir)) {
       this.setState({
         kind: 'needs-setup',
         reason: 'The Python environment is outdated (new pinned versions).',
+        cause: 'outdated',
       });
       return this.stateValue;
     }
@@ -114,7 +127,7 @@ export class EnvManager {
     this.setState(
       verify.ok
         ? { kind: 'ready', pythonBin: target.pythonBin, source: 'managed', verify }
-        : { kind: 'needs-setup', reason: `Environment check failed: ${verify.error}` }
+        : { kind: 'needs-setup', reason: `Environment check failed: ${verify.error}`, cause: 'broken' }
     );
     return this.stateValue;
   }
