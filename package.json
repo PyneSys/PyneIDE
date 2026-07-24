@@ -715,12 +715,6 @@
           "scope": "resource",
           "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
         },
-        "pyneide.promptInputs": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "markdownDescription": "Open the input form before running a Pyne script, so its inputs can be reviewed and edited first. When off, runs use the values already saved in the script's `.toml`."
-        },
         "pyneide.debug.justMyCode": {
           "type": "boolean",
           "default": true,
