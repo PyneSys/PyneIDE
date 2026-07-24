@@ -338,9 +338,9 @@ export class CompileService {
         : '';
       const choice = await vscode.window.showWarningMessage(
         `PyneIDE: ${detail.error}${wait}`,
-        'Show API Usage'
+        'Show Compile Usage'
       );
-      if (choice === 'Show API Usage') await this.showUsage();
+      if (choice === 'Show Compile Usage') await this.showUsage();
       return;
     }
     // 413 and anything else: the API message is already human-readable.
@@ -358,7 +358,7 @@ export class CompileService {
       const fmt = (label: string, p: { used: number; limit: number; remaining: number; resetAt: string }) =>
         `${label}: ${p.used}/${p.limit} used, ${p.remaining} remaining (resets ${new Date(p.resetAt).toLocaleString()})`;
       void vscode.window.showInformationMessage(
-        `PyneSys compile quota — ${fmt('daily', usage.daily)}; ${fmt('hourly', usage.hourly)}`
+        `PyneSys compile usage — ${fmt('Daily', usage.daily)}; ${fmt('Hourly', usage.hourly)}`
       );
     } catch (err) {
       void vscode.window.showErrorMessage(
