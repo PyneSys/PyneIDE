@@ -235,6 +235,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "pyneide.openSymbolMap",
+        "title": "Open Symbol Map",
+        "category": "PyneIDE",
+        "icon": "$(references)"
+      },
+      {
         "command": "pyneide.showDataRequirements",
         "title": "Show Data Requirements",
         "category": "PyneIDE",
@@ -275,6 +281,12 @@
         "title": "Truncate & Re-download…",
         "category": "PyneIDE",
         "icon": "$(trash)"
+      },
+      {
+        "command": "pyneide.dataDownloadTimeframe",
+        "title": "Download Other Timeframe…",
+        "category": "PyneIDE",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "pyneide.dataPreviewChart",
@@ -424,13 +436,28 @@
           "group": "inline@1"
         },
         {
-          "command": "pyneide.dataDownloadWizard",
+          "command": "pyneide.openSymbolMap",
           "when": "view == pyneide.workspace && viewItem == pyneSection.data",
           "group": "inline@1"
         },
         {
           "command": "pyneide.dataDownloadWizard",
           "when": "view == pyneide.workspace && viewItem == pyneSection.data",
+          "group": "inline@2"
+        },
+        {
+          "command": "pyneide.openSymbolMap",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.data",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.dataDownloadWizard",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.data",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.openSymbolMap",
+          "when": "view == pyneide.workspace && viewItem == pyneSymbolMapRoot",
           "group": "pyneide@1"
         },
         {
@@ -502,6 +529,11 @@
           "command": "pyneide.dataTruncate",
           "when": "view == pyneide.workspace && viewItem == pyneData",
           "group": "pyneide@4"
+        },
+        {
+          "command": "pyneide.dataDownloadTimeframe",
+          "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "pyneide@5"
         },
         {
           "command": "pyneide.workspace.revealInExplorer",
@@ -832,6 +864,7 @@
     "test:bridge-security": "node esbuild.mjs --smoke-bridge-security && node dist/bridge-security-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "test:library-imports": "node esbuild.mjs --smoke-library-imports && node dist/library-imports-smoke.js",
+    "test:symbol-map": "node esbuild.mjs --smoke-symbol-map && node dist/symbol-map-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

@@ -8,6 +8,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { parseSymInfo } from '../data/syminfo';
 import { execChecked } from '../env/exec';
 import { pyneBinPath } from '../env/uv';
 
@@ -222,6 +223,19 @@ async function runDownloadWizard(
   if (!timeframe) return null;
   await context.globalState.update(LAST_TIMEFRAME_KEY, timeframe.label);
 
+  const from = await pickDownloadRange();
+  if (from === null) return null;
+
+  return ['data', 'download', provider, '-s', symbol.trim(), '-tf', timeframe.label, '-f', from];
+}
+
+/**
+ * The "how far back" range picker, shared by the full download wizard and the
+ * per-file "download another timeframe" action. Returns the `-f`/`--from`
+ * value (`continue`, a day count, or a `YYYY-MM-DD` start date), or null on
+ * cancel.
+ */
+async function pickDownloadRange(): Promise<string | null> {
   const range = await vscode.window.showQuickPick(
     [
       { label: 'Continue / last year', description: 'resume previous download, or 1 year if new', value: 'continue' },
@@ -233,20 +247,16 @@ async function runDownloadWizard(
     { placeHolder: 'How far back to download?' }
   );
   if (!range) return null;
-  let from = range.value;
-  if (from === 'custom') {
-    const date = await vscode.window.showInputBox({
-      title: 'Download start date',
-      prompt: 'Start date (YYYY-MM-DD)',
-      ignoreFocusOut: true,
-      validateInput: (v) =>
-        /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? undefined : 'Expected YYYY-MM-DD',
-    });
-    if (!date) return null;
-    from = date.trim();
-  }
-
-  return ['data', 'download', provider, '-s', symbol.trim(), '-tf', timeframe.label, '-f', from];
+  if (range.value !== 'custom') return range.value;
+  const date = await vscode.window.showInputBox({
+    title: 'Download start date',
+    prompt: 'Start date (YYYY-MM-DD)',
+    ignoreFocusOut: true,
+    validateInput: (v) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? undefined : 'Expected YYYY-MM-DD',
+  });
+  if (!date) return null;
+  return date.trim();
 }
 
 /** Shell out to `pyne <args>` with a progress notification; returns true on
@@ -365,4 +375,55 @@ export async function truncateData(
     `Re-downloading ${name}`,
     output
   );
+}
+
+/**
+ * Download a DIFFERENT timeframe of the same instrument as an existing
+ * `.ohlcv`: read the provider string saved in its sibling `.toml`, drop the
+ * `@timeframe` suffix, and re-run `pyne data download` with a new `-tf`. The
+ * provider, broker and symbol are taken verbatim from the saved string (so the
+ * provider constructor names the new file correctly — see the OHLCV naming
+ * rule); a provider string without `@timeframe` is the `request.security()`
+ * form, so `-tf` is honored rather than ignored.
+ */
+export async function downloadOtherTimeframe(
+  workdir: string,
+  pythonBin: string,
+  ohlcvPath: string,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const tomlPath = `${ohlcvPath.slice(0, -path.extname(ohlcvPath).length)}.toml`;
+  let providerString: string | undefined;
+  try {
+    providerString = parseSymInfo(fs.readFileSync(tomlPath, 'utf8')).provider;
+  } catch {
+    providerString = undefined;
+  }
+  if (!providerString) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: this data file has no saved provider — use "Download Data…" to re-download it once.'
+    );
+    return;
+  }
+  const at = providerString.lastIndexOf('@');
+  const base = at > 0 ? providerString.slice(0, at) : providerString;
+  const currentTf = at > 0 ? providerString.slice(at + 1) : undefined;
+
+  const timeframe = await vscode.window.showQuickPick(
+    TIMEFRAMES.map((tf) => ({ label: tf, description: tf === currentTf ? 'current' : undefined })),
+    { placeHolder: `New timeframe for ${base}` }
+  );
+  if (!timeframe) return;
+  const from = await pickDownloadRange();
+  if (from === null) return;
+
+  const pyneBin = pyneBinPath(pythonBin);
+  const ok = await runPyne(
+    pyneBin,
+    workdir,
+    ['data', 'download', base, '-tf', timeframe.label, '-f', from],
+    `Downloading ${base}@${timeframe.label}`,
+    output
+  );
+  if (ok) void vscode.commands.executeCommand('pyneide.workspace.refresh');
 }

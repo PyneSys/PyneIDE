@@ -47,6 +47,12 @@ interface DataNode {
   uri: vscode.Uri;
 }
 
+/** The single "Symbol Map" entry point at the top of the Data section; a click
+ * opens the whole-map webview editor (the map itself is not a tree child). */
+interface SymbolMapRootNode {
+  type: 'symbolMapRoot';
+}
+
 interface OutputNode {
   type: 'output';
   uri: vscode.Uri;
@@ -66,6 +72,7 @@ export type PyneNode =
   | ScriptNode
   | LibraryFolderNode
   | DataNode
+  | SymbolMapRootNode
   | OutputNode
   | CompanionNode;
 
@@ -144,6 +151,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.libraryFolderItem(node);
       case 'data':
         return this.dataItem(node);
+      case 'symbolMapRoot':
+        return this.symbolMapRootItem();
       case 'output':
         return this.outputItem(node);
       case 'companion':
@@ -355,16 +364,31 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     return relative === 'lib' || relative.startsWith(`lib${path.sep}`);
   }
 
-  private dataChildren(): DataNode[] {
+  private dataChildren(): PyneNode[] {
+    const symbolMapRoot: SymbolMapRootNode = { type: 'symbolMapRoot' };
     const dir = path.join(this.workdir!, 'data');
     let names: string[];
     try {
       names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.ohlcv'));
     } catch {
-      return [];
+      return [symbolMapRoot];
     }
     names.sort((a, b) => a.localeCompare(b));
-    return names.map((n) => ({ type: 'data', uri: vscode.Uri.file(path.join(dir, n)) }));
+    const dataNodes: DataNode[] = names.map((n) => ({
+      type: 'data',
+      uri: vscode.Uri.file(path.join(dir, n)),
+    }));
+    return [symbolMapRoot, ...dataNodes];
+  }
+
+  /** The "Symbol Map" leaf that opens the whole-map webview editor. */
+  private symbolMapRootItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem('Symbol Map', vscode.TreeItemCollapsibleState.None);
+    item.iconPath = new vscode.ThemeIcon('references');
+    item.contextValue = 'pyneSymbolMapRoot';
+    item.tooltip = 'TradingView symbols -> provider-qualified native symbols';
+    item.command = { command: 'pyneide.openSymbolMap', title: 'Open Symbol Map' };
+    return item;
   }
 
   private dataItem(node: DataNode): vscode.TreeItem {
@@ -697,7 +721,7 @@ export function registerWorkspaceView(
 }
 
 function nodeUri(node?: PyneNode): vscode.Uri | undefined {
-  if (node && node.type !== 'section') return node.uri;
+  if (node && node.type !== 'section' && node.type !== 'symbolMapRoot') return node.uri;
   return undefined;
 }
 

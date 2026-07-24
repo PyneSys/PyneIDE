@@ -10,6 +10,7 @@ import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { buildOhlcvPreview } from './data/ohlcvPreview';
 import { SymbolBrowserPanel, type SecurityPrefill } from './data/symbolBrowserPanel';
+import { SymbolMapPanel } from './data/symbolMapPanel';
 import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { EnvManager, type EnvState } from './env/manager';
@@ -26,7 +27,7 @@ import {
 import { resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
-import { downloadData, truncateData, updateData } from './run/dataSelect';
+import { downloadData, downloadOtherTimeframe, truncateData, updateData } from './run/dataSelect';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
@@ -202,10 +203,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.dataTruncate', (node?: { uri?: vscode.Uri }) =>
       dataFileAction(manager, output, node, truncateData)
     ),
+    vscode.commands.registerCommand('pyneide.dataDownloadTimeframe', (node?: { uri?: vscode.Uri }) =>
+      dataFileAction(manager, output, node, downloadOtherTimeframe)
+    ),
     vscode.commands.registerCommand('pyneide.dataPreviewChart', (node?: { uri?: vscode.Uri }) =>
       previewDataChart(chartManager, node)
     ),
     vscode.commands.registerCommand('pyneide.editSymbolMap', () => editSymbolMapCommand()),
+    vscode.commands.registerCommand('pyneide.openSymbolMap', () =>
+      openSymbolMapCommand(context, manager, output, securityStatus)
+    ),
     vscode.commands.registerCommand('pyneide.showDataRequirements', (uri?: vscode.Uri) =>
       runService.showDataRequirements(uri)
     )
@@ -365,6 +372,35 @@ async function editSymbolMapCommand(): Promise<void> {
   const filePath = ensureSymbolMapFile(workdir.path);
   const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
   await vscode.window.showTextDocument(doc);
+}
+
+/**
+ * Open the whole-map Symbol Map webview editor for the active workdir. A map
+ * edit inside the panel redirects downloads to the Symbol Browser (reusing the
+ * same prefill flow the run-time security "Download…" choice uses) and, via
+ * `onChanged`, refreshes the workspace tree and the request.security() status.
+ */
+function openSymbolMapCommand(
+  context: vscode.ExtensionContext,
+  manager: EnvManager,
+  output: vscode.OutputChannel,
+  securityStatus: SecurityStatusService
+): void {
+  const workdir = resolveWorkspaceWorkdir();
+  if (!workdir?.exists) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: no Pyne workspace found — initialize one first.'
+    );
+    return;
+  }
+  SymbolMapPanel.show(context, {
+    workdir: workdir.path,
+    showSymbolBrowser: (prefill) => void openSymbolBrowser(context, manager, output, prefill),
+    onChanged: () => {
+      void vscode.commands.executeCommand('pyneide.workspace.refresh');
+      securityStatus.refreshAll();
+    },
+  });
 }
 
 async function initialCheck(

@@ -52,8 +52,12 @@ export interface SecurityPrefill {
   /** TV symbol the map entry is keyed under. */
   mapKey: string;
   workdir: string;
-  /** Source path of the script to offer a "Run" action for after the download. */
-  chartKey: string;
+  /**
+   * Source path of the script to offer a "Run" action for after the download.
+   * Absent for a Symbol Map-initiated download, which has no waiting script — the
+   * map write still happens, only the "Run" offer is skipped.
+   */
+  chartKey?: string;
 }
 
 export interface SymbolBrowserDeps {
@@ -304,14 +308,16 @@ export class SymbolBrowserPanel {
     if (prefill) {
       this.prefill = undefined;
       await this.recordPrefillMapping(prefill, res.ohlcv_path);
-      const script = path.basename(prefill.chartKey);
+      // A Symbol Map-initiated download carries no script, so the "Run" offer is
+      // dropped; the map write above still happened either way.
+      const runLabel = prefill.chartKey ? `Run ${path.basename(prefill.chartKey)}` : undefined;
+      const actions = runLabel ? [runLabel, 'Open Table'] : ['Open Table'];
       const choice = await vscode.window.showInformationMessage(
         `PyneIDE: downloaded ${symbol} (${res.bars_written.toLocaleString('en-US')} bars) ` +
           `and mapped ${prefill.mapKey}.`,
-        `Run ${script}`,
-        'Open Table'
+        ...actions
       );
-      if (choice === `Run ${script}`) {
+      if (runLabel && choice === runLabel && prefill.chartKey) {
         await vscode.commands.executeCommand('pyneide.runScript', vscode.Uri.file(prefill.chartKey));
       } else if (choice === 'Open Table') {
         await vscode.commands.executeCommand('vscode.openWith', uri, OhlcvEditorProvider.viewType);

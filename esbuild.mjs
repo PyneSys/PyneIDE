@@ -13,6 +13,7 @@ const smokeBridgeViz = process.argv.includes('--smoke-bridge-viz');
 const smokeChartBreakpoints = process.argv.includes('--smoke-chart-breakpoints');
 const smokeLibraryImports = process.argv.includes('--smoke-library-imports');
 const smokeBridgeSecurity = process.argv.includes('--smoke-bridge-security');
+const smokeSymbolMap = process.argv.includes('--smoke-symbol-map');
 
 const common = {
   bundle: true,
@@ -128,6 +129,13 @@ if (smoke) {
     outfile: 'dist/bridge-security-smoke.js',
     minify: false,
   });
+} else if (smokeSymbolMap) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/symbolMapSmoke.ts'],
+    outfile: 'dist/symbol-map-smoke.js',
+    minify: false,
+  });
 } else {
   copyPyright();
 
@@ -188,12 +196,25 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // Symbol-map webview bundle: browser code, no vscode API.
+  const symbolMapCtx = await esbuild.context({
+    ...common,
+    entryPoints: ['src/data/webview/symbolMap.ts'],
+    outfile: 'dist/symbol-map.js',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
     await webviewCtx.watch();
     await tableCtx.watch();
     await inputsCtx.watch();
     await symbolBrowserCtx.watch();
+    await symbolMapCtx.watch();
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
@@ -201,10 +222,12 @@ if (smoke) {
     await tableCtx.rebuild();
     await inputsCtx.rebuild();
     await symbolBrowserCtx.rebuild();
+    await symbolMapCtx.rebuild();
     await ctx.dispose();
     await webviewCtx.dispose();
     await tableCtx.dispose();
     await inputsCtx.dispose();
     await symbolBrowserCtx.dispose();
+    await symbolMapCtx.dispose();
   }
 }

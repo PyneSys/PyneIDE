@@ -111,6 +111,95 @@ export function writeSymbolMapEntry(workdir: string, key: string, value: string)
   fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
 }
 
+/**
+ * Read the `[symbol_map]` table of `workdir/config/symbol_map.toml` as an
+ * ordered list of `{ key, value }` pairs — declaration order preserved, keys
+ * and values unquoted. A missing file yields `[]`; comment/blank lines, any
+ * line outside the table, and any malformed line (no top-level `=` or an empty
+ * key) are skipped. The line-oriented counterpart to {@link writeSymbolMapEntry}
+ * for callers that need the whole map at once (the symbol-map panel) rather than
+ * a single-key update.
+ */
+export function readSymbolMapEntries(workdir: string): Array<{ key: string; value: string }> {
+  let text: string;
+  try {
+    text = fs.readFileSync(symbolMapPath(workdir), 'utf8');
+  } catch {
+    return [];
+  }
+  const out: Array<{ key: string; value: string }> = [];
+  let inTable = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('[') && line.endsWith(']')) {
+      inTable = line === '[symbol_map]';
+      continue;
+    }
+    if (!inTable) continue;
+    const eq = line.indexOf('=');
+    if (eq < 0) continue;
+    const key = stripQuotes(line.slice(0, eq).trim());
+    const value = stripQuotes(line.slice(eq + 1).trim());
+    if (key) out.push({ key, value });
+  }
+  return out;
+}
+
+/**
+ * Delete the `key` entry from the `[symbol_map]` table of
+ * `workdir/config/symbol_map.toml`, preserving the header, comments and every
+ * other entry. A no-op when the file, the table, or the key is absent. Removes
+ * every matching line within the table's span, so a duplicated key drops all of
+ * its lines while a same key in another table is left untouched.
+ */
+export function removeSymbolMapEntry(workdir: string, key: string): void {
+  const filePath = symbolMapPath(workdir);
+  if (!fs.existsSync(filePath)) return;
+
+  const text = fs.readFileSync(filePath, 'utf8');
+  const lines = text.split('\n');
+  const keyRe = new RegExp(`^\\s*(?:"${escapeRe(key)}"|'${escapeRe(key)}'|${escapeRe(key)})\\s*=`);
+
+  // Bound the [symbol_map] span so only its own lines are considered.
+  let tableStart = -1;
+  let tableEnd = lines.length; // exclusive: first line of the NEXT table
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (tableStart < 0) {
+      if (trimmed === '[symbol_map]') tableStart = i;
+      continue;
+    }
+    if (/^\[.*\]\s*$/.test(trimmed) && trimmed !== '[symbol_map]') {
+      tableEnd = i;
+      break;
+    }
+  }
+  if (tableStart < 0) return;
+
+  const kept: string[] = [];
+  let removed = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (i > tableStart && i < tableEnd && keyRe.test(lines[i])) {
+      removed = true;
+      continue;
+    }
+    kept.push(lines[i]);
+  }
+  if (removed) fs.writeFileSync(filePath, kept.join('\n'), 'utf8');
+}
+
+/** Strip a single pair of surrounding single/double quotes from a TOML scalar. */
+function stripQuotes(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 function escapeRe(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

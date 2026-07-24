@@ -30,7 +30,7 @@ import * as vscode from 'vscode';
 
 import { canonicalChartKey } from '../chart/chartKey';
 import { loadSourcemapFor, pineLineFor } from '../compile/sourcemap';
-import { parseSymInfo } from '../data/syminfo';
+import { fileForMappedValue, readDataFiles } from '../data/symbolMapModel';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { getRememberedData } from '../run/dataSelect';
@@ -317,8 +317,7 @@ export class SecurityStatusService {
       overrides,
       dataStems,
       mapValue: (symbol, tf) => map.get(`${symbol}:${tf}`) ?? map.get(symbol),
-      fileForProvider: (provider, tf) =>
-        dataFiles.find((f) => f.provider === provider && f.period === tf)?.stem,
+      fileForProvider: (provider, tf) => fileForMappedValue(dataFiles, provider, tf),
     };
   }
 
@@ -345,14 +344,6 @@ interface LocalContext {
   fileForProvider: (provider: string, tf: string) => string | undefined;
 }
 
-interface DataFileMeta {
-  stem: string;
-  symbol?: string;
-  period?: string;
-  /** Provider-qualified native symbol (the `[download]` string minus `@TF`). */
-  provider?: string;
-}
-
 /** Read the `[symbol_map]` table of `config/symbol_map.toml` (flat key→value). */
 function readSymbolMap(workdir: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -376,39 +367,6 @@ function readSymbolMap(workdir: string): Map<string, string> {
     const key = stripQuotes(line.slice(0, eq).trim());
     const value = stripQuotes(line.slice(eq + 1).trim());
     if (key) out.set(key, value);
-  }
-  return out;
-}
-
-/** Metadata of every `.ohlcv` in `<workdir>/data`, from its sibling `.toml`. */
-function readDataFiles(workdir: string): DataFileMeta[] {
-  const dataDir = path.join(workdir, 'data');
-  let names: string[];
-  try {
-    names = fs.readdirSync(dataDir);
-  } catch {
-    return [];
-  }
-  const out: DataFileMeta[] = [];
-  for (const name of names) {
-    if (!name.endsWith('.ohlcv')) continue;
-    const stem = name.slice(0, -'.ohlcv'.length);
-    const meta: DataFileMeta = { stem };
-    try {
-      const info = parseSymInfo(fs.readFileSync(path.join(dataDir, `${stem}.toml`), 'utf8'));
-      const prefix = info.symbol.prefix;
-      const ticker = info.symbol.ticker;
-      if (prefix && ticker) meta.symbol = `${prefix}:${ticker}`;
-      else if (ticker) meta.symbol = ticker;
-      meta.period = info.symbol.period;
-      if (info.provider) {
-        const at = info.provider.lastIndexOf('@');
-        meta.provider = at > 0 ? info.provider.slice(0, at) : info.provider;
-      }
-    } catch {
-      // A file with no readable sibling toml stays a bare stem.
-    }
-    out.push(meta);
   }
   return out;
 }
