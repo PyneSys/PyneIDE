@@ -2,9 +2,10 @@
   "name": "pyneide",
   "displayName": "PyneIDE",
   "description": "Pine Script and Pyne language support: syntax highlighting for .pine files and Pyne script detection. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "preview": true,
   "publisher": "pynesys",
+  "icon": "icon.png",
   "license": "GPL-3.0-only",
   "engines": {
     "vscode": "^1.90.0"
@@ -118,7 +119,7 @@
       },
       {
         "command": "pyneide.showUsage",
-        "title": "Show API Usage",
+        "title": "Show Compile Usage",
         "category": "PyneIDE"
       },
       {

@@ -14,7 +14,7 @@ import {
 
 import type { EnvManager } from '../env/manager';
 import { ensurePyrightConfig } from '../env/workdir';
-import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
+import { resolvePyneIdeWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
 import { isExactSpan, isSeriesAccess, seriesSpanIndex } from './seriesFilter';
@@ -193,12 +193,13 @@ export class PyrightService {
   }
 
   /**
-   * The server only runs in Pyne contexts: a resolvable workdir in the
-   * workspace, or at least one open `@pyne` document. Plain Python projects
-   * are left to the user's own tooling.
+   * The server only runs in Pyne contexts: a workspace initialized as a Pyne
+   * project, or at least one open `@pyne` document. Plain Python projects are
+   * left to the user's own tooling — including one that merely sits below a
+   * folder named `workdir`, which the name-based search would claim.
    */
   private isPyneContext(): boolean {
-    if (resolveWorkspaceWorkdir()?.exists) return true;
+    if (resolvePyneIdeWorkdir()) return true;
     return vscode.workspace.textDocuments.some(
       (doc) => doc.languageId === 'python' && this.isPyneDocument(doc)
     );
@@ -256,8 +257,10 @@ export class PyrightService {
    * would hand them ~175 series-history false positives per corpus.
    */
   private reconcileIndexRule(ours: boolean): void {
-    const workdir = resolveWorkspaceWorkdir();
-    if (!workdir?.exists) return;
+    // Only a config we generated is ours to flip; a workdir without one belongs
+    // to a project that never opted into the Pyne setup.
+    const workdir = resolvePyneIdeWorkdir();
+    if (!workdir) return;
     if (ensurePyrightConfig(workdir.path, { preciseIndexFilter: ours })) {
       this.output.appendLine(
         `reportIndexIssue ${ours ? 'restored for the per-access filter' : 'suppressed for other checkers'}`

@@ -133,6 +133,17 @@ export function venvLocation(
 }
 
 /**
+ * Marker naming a config as ours. It rides in `defineConstant`, which takes
+ * arbitrary user-defined constants, so the file stays a valid pyright config
+ * with no "unknown option" warning — while nothing else can plausibly collide
+ * with it. The settings themselves are not a fingerprint: a hand-written config
+ * for Pyne/PyneCore development carries the very same `typeCheckingMode` +
+ * `TYPECHECKER` + `reportIndexIssue` trio, and reconciling one of those (or
+ * treating its project as PyneIDE's) would corrupt someone's own setup.
+ */
+const PYNEIDE_MARKER = 'PYNEIDE';
+
+/**
  * The generated pyright/Pylance config for Pyne projects. The pieces are the
  * outcome of the L5 typing spike (work/SPIKE-L5.md in this repo):
  * - `defineConstant TYPECHECKER` selects the pyright branch of pynecore's
@@ -160,7 +171,7 @@ export function venvLocation(
  */
 const PYRIGHT_CONFIG = {
   typeCheckingMode: 'basic',
-  defineConstant: { TYPECHECKER: 'pyright' },
+  defineConstant: { TYPECHECKER: 'pyright', [PYNEIDE_MARKER]: true },
   reportIndexIssue: 'none',
   reportRedeclaration: 'none',
   pythonVersion: PYTHON_VERSION_FLOOR,
@@ -168,19 +179,32 @@ const PYRIGHT_CONFIG = {
 };
 
 /**
- * Whether a parsed config carries our generator's fingerprint. Only configs we
- * wrote get their `extraPaths` reconciled; anything a user authored (or a config
- * shaped differently) is left untouched.
+ * Whether a parsed config carries our generator's marker. Only configs we wrote
+ * get their `extraPaths` and rule severities reconciled; anything a user
+ * authored is left untouched.
  */
 function isGeneratedConfig(config: unknown): boolean {
   if (!config || typeof config !== 'object') return false;
-  const c = config as Record<string, unknown>;
-  const define = c.defineConstant as Record<string, unknown> | undefined;
-  return (
-    c.typeCheckingMode === 'basic' &&
-    (c.reportIndexIssue === 'none' || c.reportIndexIssue === INDEX_RULE_ON) &&
-    define?.TYPECHECKER === 'pyright'
-  );
+  const define = (config as Record<string, unknown>).defineConstant as
+    | Record<string, unknown>
+    | undefined;
+  return define?.[PYNEIDE_MARKER] === true;
+}
+
+/**
+ * Whether `dir` holds a `pyrightconfig.json` this extension generated — proof
+ * that "Initialize Pyne Project" ran here, as opposed to a workdir search
+ * merely landing on the directory. Written by the init command only, and
+ * tracked in the repository (it is just hidden from the Explorer), so a clone
+ * is still recognized as a Pyne project.
+ */
+export function hasGeneratedPyrightConfig(dir: string): boolean {
+  const configPath = path.join(dir, 'pyrightconfig.json');
+  try {
+    return isGeneratedConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -325,13 +349,14 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
 }
 
 /**
- * Write `"pyneide.workdir": "."` into `<projectDir>/.vscode/settings.json`,
- * marking the project folder itself as the workdir. Used when no workspace is
- * open, so the VSCode configuration API is not available. Returns false when
- * an existing settings.json could not be parsed (e.g. JSONC comments) — in
- * that case the file is left untouched.
+ * Merge `values` into `<projectDir>/.vscode/settings.json`. Used on the init
+ * path that has no folder open yet, where the VSCode configuration API cannot
+ * reach the project. Only keys the caller did not already set are added, so a
+ * value the user chose is never overwritten. Returns false when an existing
+ * settings.json could not be parsed (e.g. JSONC comments) — the file is then
+ * left untouched.
  */
-export function markProjectAsWorkdir(projectDir: string): boolean {
+function addProjectSettings(projectDir: string, values: Record<string, unknown>): boolean {
   const vscodeDir = path.join(projectDir, '.vscode');
   const settingsPath = path.join(vscodeDir, 'settings.json');
   let settings: Record<string, unknown> = {};
@@ -342,10 +367,25 @@ export function markProjectAsWorkdir(projectDir: string): boolean {
       return false;
     }
   }
-  settings['pyneide.workdir'] = '.';
+  for (const [key, value] of Object.entries(values)) {
+    if (!(key in settings)) settings[key] = value;
+  }
   fs.mkdirSync(vscodeDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   return true;
+}
+
+/**
+ * Mark the project folder itself as the workdir, and — when Pylance would
+ * otherwise supersede the bundled pyright — hand Python analysis to PyneIDE
+ * (see `takeOverPythonAnalysis` for why). The workspace-API equivalents cannot
+ * run here: this folder is not open yet, and by the time it is, the extension
+ * no longer knows that an init was what created it.
+ */
+export function markProjectAsWorkdir(projectDir: string, takeOverAnalysis: boolean): boolean {
+  const values: Record<string, unknown> = { 'pyneide.workdir': '.' };
+  if (takeOverAnalysis) values['python.languageServer'] = 'None';
+  return addProjectSettings(projectDir, values);
 }
 
 /**

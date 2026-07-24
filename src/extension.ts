@@ -26,7 +26,7 @@ import {
   recommendTomlExtension,
   scaffoldWorkdirWithCli,
 } from './env/workdir';
-import { resolveWorkspaceWorkdir } from './env/workdirConfig';
+import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { downloadData, downloadOtherTimeframe, truncateData, updateData } from './run/dataSelect';
@@ -128,17 +128,18 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  // Existing workdirs predating the generated typing config get it on
-  // activation; user-authored configs are never touched.
-  const workdir = resolveWorkspaceWorkdir();
-  if (workdir?.exists) {
-    ensurePyrightConfig(workdir.path);
+  // Refresh the generated scaffolding of a project PyneIDE set up itself, so a
+  // shipped snippet change or a new config field reaches it. Everything here is
+  // gated on our own marker in the workdir's config, never on a merely
+  // resolvable workdir: that search walks parent directories, so a single
+  // `workdir` folder high up would drag every plain Python project below it
+  // into the Pyne setup — including having its Python analysis taken over.
+  // Setting a project up in the first place is what the init command is for.
+  const pyneWorkdir = resolvePyneIdeWorkdir();
+  if (pyneWorkdir) {
+    ensurePyrightConfig(pyneWorkdir.path);
     const wsFolder = vscode.workspace.workspaceFolders?.[0];
-    if (wsFolder) {
-      hideGeneratedFiles(wsFolder.uri.fsPath);
-      ensurePyneSnippets(wsFolder.uri.fsPath, context.extensionPath);
-    }
-    void takeOverPythonAnalysis();
+    if (wsFolder) ensurePyneSnippets(wsFolder.uri.fsPath, context.extensionPath);
   }
 
   // Once the interpreter is known, point the generated config at it: where
@@ -460,9 +461,11 @@ async function initialCheck(
  * its server off for this workspace, letting the bundled server take over with
  * the full Pyne-aware pipeline, while other (non-Pyne) workspaces keep Pylance.
  *
- * Written once at workspace scope. An explicit workspace-level value the user
- * set themselves — including switching back to "Pylance" — is respected and
- * never overwritten.
+ * Written once at workspace scope, and only from "Initialize Pyne Project" —
+ * turning another extension off is intrusive enough that it must follow an
+ * explicit request, never a guess about what kind of project this is. An
+ * explicit workspace-level value the user set themselves — including switching
+ * back to "Pylance" — is respected and never overwritten.
  */
 async function takeOverPythonAnalysis(): Promise<void> {
   if (!vscode.extensions.getExtension(PYLANCE_EXTENSION)) return;
@@ -509,10 +512,10 @@ function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
  */
 function reconcilePyrightConfig(state: EnvState): void {
   if (state.kind !== 'ready') return;
+  const workdir = resolvePyneIdeWorkdir();
+  if (!workdir) return;
   const root = state.verify.pynecoreRoot;
   const editable = root !== undefined && path.basename(root) !== 'site-packages';
-  const workdir = resolveWorkspaceWorkdir();
-  if (!workdir?.exists) return;
   ensurePyrightConfig(workdir.path, {
     extraPaths: editable && root ? [root] : [],
     pythonVersion: state.verify.pythonVersion,
@@ -615,7 +618,8 @@ async function initProjectCommand(
 
   try {
     await scaffoldWorkdirWithCli(pyneBin, baseDir, log);
-    if (!markProjectAsWorkdir(baseDir)) {
+    const pylance = vscode.extensions.getExtension(PYLANCE_EXTENSION) !== undefined;
+    if (!markProjectAsWorkdir(baseDir, pylance)) {
       void vscode.window.showWarningMessage(
         'PyneIDE: could not update .vscode/settings.json (unparseable); ' +
           'set "pyneide.workdir": "." there manually.'
