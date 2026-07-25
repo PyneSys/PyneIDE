@@ -733,6 +733,12 @@
           "scope": "resource",
           "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
         },
+        "pyneide.run.revealOutputOnLog": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Reveal the **PyneIDE Run** output channel the first time a run writes a log line, so `log.info()` output is not buried under the other channels. The editor keeps the focus; turn off to never switch automatically."
+        },
         "pyneide.pyright.enabled": {
           "type": "boolean",
           "default": true,

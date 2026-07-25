@@ -66,7 +66,11 @@ interface PreparedRun {
 }
 
 export class RunService {
-  private readonly output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Run'));
+  // The languageId must be spelled lowercase: createOutputChannel's documented
+  // default is the string "Log", which is not a registered language id, so a
+  // channel created without it silently falls back to plaintext and loses the
+  // level/timestamp colouring (microsoft/vscode#176902, closed as not planned).
+  private readonly output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Run', 'log'));
   /** Runtime errors mapped back to the Pine source via the .py.map sourcemap. */
   private readonly runtimeDiagnostics = vscode.languages.createDiagnosticCollection('pyne-runtime');
   private readonly statusItem = vscode.window.createStatusBarItem(
@@ -1163,6 +1167,18 @@ export class RunService {
     let endBars = 0;
     let cancelled = false;
 
+    // Script log output is easy to lose among the other channels, so the first
+    // log line of a run brings this one up. Once per run only — a per-bar
+    // log.info() would otherwise re-open the panel on every single bar — and
+    // preserveFocus so the reveal never steals the caret from the editor.
+    let outputRevealed = false;
+    const revealOutput = (): void => {
+      if (outputRevealed) return;
+      outputRevealed = true;
+      const cfg = vscode.workspace.getConfiguration('pyneide', vscode.Uri.file(opts.scriptPath));
+      if (cfg.get<boolean>('run.revealOutputOnLog', true)) this.output.show(true);
+    };
+
     // A fresh run invalidates previous runtime-error markers.
     this.runtimeDiagnostics.clear();
 
@@ -1250,6 +1266,7 @@ export class RunService {
             break;
           case 'log':
             this.output.appendLine(`[${event.level}] ${event.message}`);
+            revealOutput();
             break;
           case 'end':
             endBars = event.bars;
@@ -1258,7 +1275,10 @@ export class RunService {
         }
         this.listener?.onEvent(event, chartKey);
       },
-      onLog: (line) => this.output.appendLine(line),
+      onLog: (line) => {
+        this.output.appendLine(line);
+        revealOutput();
+      },
     });
     this.activeRun = run;
     if (opts.debug) run.setChartBreakpointTimestamps(this.fastChartBreakpointTimestamps);

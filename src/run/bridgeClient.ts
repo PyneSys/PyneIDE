@@ -259,6 +259,12 @@ export class BridgeRun {
         PYTHONPATH: pythonPath,
         PYNE_WORK_DIR: opts.workdir,
         PYTHONUNBUFFERED: '1',
+        // Take pynecore's plain (non-Rich) log path. Its RichHandler renders an
+        // expanding Table.grid against a 200-column virtual console for non-TTY
+        // sinks, so every log line arrives padded to 200 chars and soft-wraps in
+        // the output channel. The plain formatter emits the identical layout
+        // unpadded, and colouring comes from the channel's `log` grammar anyway.
+        PYNE_NO_COLOR_LOG: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
