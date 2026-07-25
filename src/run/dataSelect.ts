@@ -11,6 +11,7 @@ import * as vscode from 'vscode';
 import { parseSymInfo } from '../data/syminfo';
 import { execChecked } from '../env/exec';
 import { pyneBinPath } from '../env/uv';
+import { listInstalledPlugins } from '../plugins/installed';
 
 const LAST_DATA_KEY = 'pyneide.lastRunData';
 const LAST_PROVIDER_KEY = 'pyneide.lastProvider';
@@ -138,8 +139,8 @@ interface ProviderInfo {
   summary?: string;
 }
 
-/** Installed data providers, from `pyne plugin list --type provider --json`
- * (entry-point discovery). Falls back to the shipped names if the CLI call
+/** Installed data providers, filtered out of the shared plugin listing
+ * (entry-point discovery). Falls back to the shipped names when the CLI call
  * fails or predates the `--json` flag. */
 async function listProviders(
   pyneBin: string,
@@ -147,17 +148,18 @@ async function listProviders(
   output: vscode.OutputChannel
 ): Promise<ProviderInfo[]> {
   try {
-    const result = await execChecked(
-      pyneBin,
-      ['plugin', 'list', '--type', 'provider', '--json'],
-      (line) => output.appendLine(line),
-      {
-        timeoutMs: 60 * 1000,
-        env: { ...process.env, PYNE_WORK_DIR: workdir, PYNE_NO_LOGO: '1' },
-      }
+    const { plugins } = await listInstalledPlugins(pyneBin, workdir, (line) =>
+      output.appendLine(line)
     );
-    const parsed = JSON.parse(result.stdout.trim()) as { plugins?: ProviderInfo[] };
-    if (parsed.plugins?.length) return parsed.plugins;
+    const providers = plugins
+      .filter((p) => p.capabilities.includes('provider'))
+      .map((p) => ({
+        name: p.name,
+        display_name: p.displayName,
+        version: p.version,
+        summary: p.summary,
+      }));
+    if (providers.length) return providers;
   } catch (err) {
     output.appendLine(`PyneIDE: provider discovery failed: ${err instanceof Error ? err.message : String(err)}`);
   }

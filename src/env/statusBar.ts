@@ -4,6 +4,7 @@ import type { AuthService } from '../api/auth';
 import type { Usage } from '../api/client';
 import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
+import type { PluginService } from '../plugins/service';
 import type { EnvManager, EnvState } from './manager';
 
 type MenuItem = vscode.QuickPickItem & {
@@ -17,6 +18,11 @@ type UsageState =
   | { kind: 'ready'; usage: Usage }
   | { kind: 'error'; message: string };
 
+type PluginsState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; installed: number; updates: number }
+  | { kind: 'unknown' };
+
 /** Status bar item reflecting the environment state, with a quickpick menu. */
 export class EnvStatusBar {
   private readonly item: vscode.StatusBarItem;
@@ -24,7 +30,8 @@ export class EnvStatusBar {
   constructor(
     private readonly manager: EnvManager,
     private readonly auth: AuthService,
-    private readonly pineLs: PineLsService
+    private readonly pineLs: PineLsService,
+    private readonly plugins: PluginService
   ) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     this.item.name = 'PyneIDE Environment';
@@ -84,6 +91,7 @@ export class EnvStatusBar {
     picker.matchOnDetail = true;
 
     let usageState: UsageState = { kind: 'loading' };
+    let pluginsState: PluginsState = { kind: 'loading' };
     let closed = false;
 
     const render = (): void => {
@@ -180,6 +188,30 @@ export class EnvStatusBar {
         ...environmentItems
       );
 
+      items.push({ label: 'Plugins', kind: vscode.QuickPickItemKind.Separator });
+      const pluginsLabel = (): { label: string; description?: string } => {
+        switch (pluginsState.kind) {
+          case 'loading':
+            return { label: '$(loading~spin) Plugins: loading…' };
+          case 'unknown':
+            return {
+              label: '$(extensions) Manage Plugins…',
+              description: 'Browse and install PyneCore plugins',
+            };
+          case 'ready':
+            return {
+              label: `$(extensions) Plugins: ${pluginsState.installed} installed`,
+              description: pluginsState.updates
+                ? `${pluginsState.updates} update${pluginsState.updates > 1 ? 's' : ''} available`
+                : 'Browse and install PyneCore plugins',
+            };
+        }
+      };
+      items.push({
+        ...pluginsLabel(),
+        action: () => void vscode.commands.executeCommand('pyneide.openPlugins'),
+      });
+
       const ls = this.pineLs.state;
       items.push({ label: 'Pine Language Server', kind: vscode.QuickPickItemKind.Separator });
       if (ls.kind === 'ready') {
@@ -240,8 +272,26 @@ export class EnvStatusBar {
         }
       );
 
-      picker.busy = usageState.kind === 'loading';
+      picker.busy = usageState.kind === 'loading' || pluginsState.kind === 'loading';
       picker.items = items;
+    };
+
+    /** Plugin counts come from the same model the panel renders; a failure
+     * degrades to the plain "Manage Plugins…" entry rather than an error row. */
+    const loadPlugins = async (): Promise<void> => {
+      try {
+        const model = await this.plugins.model();
+        pluginsState = model.env.installedKnown
+          ? {
+              kind: 'ready',
+              installed: model.rows.filter((r) => r.installed && !r.builtin).length,
+              updates: model.rows.filter((r) => r.updateAvailable).length,
+            }
+          : { kind: 'unknown' };
+      } catch {
+        pluginsState = { kind: 'unknown' };
+      }
+      render();
     };
 
     const loadUsage = async (): Promise<void> => {
@@ -280,5 +330,6 @@ export class EnvStatusBar {
     render();
     picker.show();
     void loadUsage();
+    void loadPlugins();
   }
 }

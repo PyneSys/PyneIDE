@@ -1,17 +1,24 @@
 /**
- * Pinned toolchain versions. Bump them together and update ENV_SCHEMA_VERSION
- * so existing installs get a reinstall offer.
+ * Pinned toolchain versions. Changing any of them already marks existing
+ * installs outdated (the env.json marker carries all four), which reinstalls
+ * into the venv in place. ENV_SCHEMA_VERSION is for LAYOUT changes only — it
+ * wipes the venv, taking installed plugins (and a dev editable pynecore) with it.
  */
 
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.5.7';
+export const PYNECORE_VERSION = '6.6.1';
 export const DEBUGPY_VERSION = '1.8.21';
 
-/** Minimum pynecore accepted when the user brings their own install. */
-export const PYNECORE_MIN_VERSION = '6.5.7';
+/**
+ * Minimum pynecore accepted when the user brings their own install. Held at the
+ * release that introduced the plugin system (`pyne.plugin` entry points, `pyne
+ * plugin list`), which every indexed plugin also requires — the extension needs
+ * that floor, not the exact pin.
+ */
+export const PYNECORE_MIN_VERSION = '6.6.0';
 
-/** Bump when the managed environment layout or pins change. */
+/** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;
 
 export interface UvArtifact {

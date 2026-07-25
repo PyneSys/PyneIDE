@@ -96,6 +96,18 @@ export class SymbolBrowserPanel {
     SymbolBrowserPanel.current = new SymbolBrowserPanel(context, deps, prefill);
   }
 
+  /**
+   * Re-read the provider list after a plugin was installed or removed. The
+   * service discovers entry points at import time, so the live process has to
+   * go before the new provider can show up.
+   */
+  static reloadProviders(): void {
+    const panel = SymbolBrowserPanel.current;
+    if (!panel) return;
+    panel.service.restart();
+    void panel.sendInit();
+  }
+
   private constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly deps: SymbolBrowserDeps,

@@ -135,6 +135,20 @@ export class ProviderService {
   dispose(): void {
     this.disposed = true;
     this.rejectAll(new Error('Provider service disposed'));
+    this.killChild();
+  }
+
+  /**
+   * Drop the running process so the next request spawns a fresh one. Needed
+   * after a plugin install/uninstall: entry points are discovered at import
+   * time, so a live service would keep serving the old provider set.
+   */
+  restart(): void {
+    this.rejectAll(new Error('Provider service restarted'));
+    this.killChild();
+  }
+
+  private killChild(): void {
     const child = this.child;
     this.child = undefined;
     child?.stdin.end();

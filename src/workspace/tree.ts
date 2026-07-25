@@ -17,6 +17,7 @@ import { OhlcvEditorProvider } from '../data/ohlcvEditor';
 import { buildOutputPreview, resolveOutputPair } from '../data/outputPreview';
 import { parseSymInfo, readOhlcvStats } from '../data/syminfo';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
+import type { PluginService } from '../plugins/service';
 import { detectPyne, DETECT_HEAD_BYTES, type PyneKind } from '../pyneDetect';
 import { createNewScript } from './createScript';
 
@@ -67,6 +68,11 @@ interface CompanionNode {
   pyneKind?: PyneKind;
 }
 
+/** Entry point to the plugin manager; environment-wide, not workdir content. */
+interface PluginsRootNode {
+  type: 'pluginsRoot';
+}
+
 export type PyneNode =
   | SectionNode
   | ScriptNode
@@ -74,7 +80,8 @@ export type PyneNode =
   | DataNode
   | SymbolMapRootNode
   | OutputNode
-  | CompanionNode;
+  | CompanionNode
+  | PluginsRootNode;
 
 interface DataMeta {
   label: string;
@@ -121,6 +128,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
   private readonly dataCache = new Map<string, { mtimeMs: number; meta: DataMeta }>();
 
   private workdir: string | undefined;
+  private pluginSummary: string | undefined;
 
   constructor(private readonly extensionUri: vscode.Uri) {
     this.workdir = this.currentWorkdir();
@@ -153,6 +161,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.dataItem(node);
       case 'symbolMapRoot':
         return this.symbolMapRootItem();
+      case 'pluginsRoot':
+        return this.pluginsRootItem();
       case 'output':
         return this.outputItem(node);
       case 'companion':
@@ -167,6 +177,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         { type: 'section', kind: 'scripts' },
         { type: 'section', kind: 'data' },
         { type: 'section', kind: 'output' },
+        { type: 'pluginsRoot' },
       ];
     }
     if (node.type === 'script') return this.companionChildren(node);
@@ -379,6 +390,24 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       uri: vscode.Uri.file(path.join(dir, n)),
     }));
     return [symbolMapRoot, ...dataNodes];
+  }
+
+  /** The "Plugins" leaf that opens the plugin manager panel. */
+  private pluginsRootItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem('Plugins', vscode.TreeItemCollapsibleState.None);
+    item.iconPath = new vscode.ThemeIcon('extensions');
+    item.contextValue = 'pynePluginsRoot';
+    item.description = this.pluginSummary;
+    item.tooltip = 'Browse and install PyneCore plugins (providers, brokers, CLI tools)';
+    item.command = { command: 'pyneide.openPlugins', title: 'Manage Plugins' };
+    return item;
+  }
+
+  /** Installed-count suffix of the Plugins leaf; empty until it is known. */
+  setPluginSummary(summary: string | undefined): void {
+    if (this.pluginSummary === summary) return;
+    this.pluginSummary = summary;
+    this.emitter.fire(undefined);
   }
 
   /** The "Symbol Map" leaf that opens the whole-map webview editor. */
@@ -594,7 +623,8 @@ function detectScriptKind(file: string): PyneKind | undefined {
  */
 export function registerWorkspaceView(
   context: vscode.ExtensionContext,
-  chartManager?: ChartManager
+  chartManager?: ChartManager,
+  plugins?: PluginService
 ): PyneWorkspaceProvider {
   const provider = new PyneWorkspaceProvider(context.extensionUri);
   const view = vscode.window.createTreeView(PYNE_WORKSPACE_VIEW_ID, {
@@ -602,6 +632,20 @@ export function registerWorkspaceView(
     showCollapseAll: false,
   });
   context.subscriptions.push(view);
+
+  if (plugins) {
+    const syncPlugins = async (): Promise<void> => {
+      try {
+        const model = await plugins.model();
+        const installed = model.rows.filter((r) => r.installed && !r.builtin).length;
+        provider.setPluginSummary(model.env.installedKnown ? `${installed} installed` : undefined);
+      } catch {
+        provider.setPluginSummary(undefined);
+      }
+    };
+    context.subscriptions.push(plugins.onDidChange(() => void syncPlugins()));
+    void syncPlugins();
+  }
 
   const syncContext = (): void => {
     void vscode.commands.executeCommand('setContext', 'pyneide.hasWorkdir', provider.hasWorkdir());
@@ -721,7 +765,9 @@ export function registerWorkspaceView(
 }
 
 function nodeUri(node?: PyneNode): vscode.Uri | undefined {
-  if (node && node.type !== 'section' && node.type !== 'symbolMapRoot') return node.uri;
+  if (node && node.type !== 'section' && node.type !== 'symbolMapRoot' && node.type !== 'pluginsRoot') {
+    return node.uri;
+  }
   return undefined;
 }
 

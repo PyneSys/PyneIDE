@@ -3,6 +3,10 @@ import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 
 import { bootstrapManagedEnv, markerUpToDate, verifyPython, type VerifyResult } from './bootstrap';
+import {
+  installPackages as uvInstallPackages,
+  uninstallPackages as uvUninstallPackages,
+} from './packages';
 import { managedVenvDir, venvPythonPath } from './uv';
 
 export type EnvState =
@@ -211,6 +215,57 @@ export class EnvManager {
     } finally {
       this.setupRunning = false;
     }
+  }
+
+  /** True when PyneIDE owns the environment, i.e. may install into it. */
+  get managesEnvironment(): boolean {
+    return this.resolveTarget().source === 'managed';
+  }
+
+  /**
+   * Install extra packages (plugins) into the managed venv, with progress UI.
+   * Refuses user-provided environments — PyneIDE never writes into those.
+   */
+  async installPackages(packages: string[], title: string): Promise<void> {
+    await this.runPackageOperation(packages, title, uvInstallPackages);
+  }
+
+  /** Remove packages from the managed venv. Same rules as installPackages. */
+  async uninstallPackages(packages: string[], title: string): Promise<void> {
+    await this.runPackageOperation(packages, title, uvUninstallPackages);
+  }
+
+  private async runPackageOperation(
+    packages: string[],
+    title: string,
+    operation: (op: {
+      storageDir: string;
+      pythonBin: string;
+      packages: string[];
+      log: (message: string) => void;
+      proxyUrl?: string;
+    }) => Promise<void>
+  ): Promise<void> {
+    const target = this.resolveTarget();
+    if (target.source !== 'managed') {
+      throw new Error(
+        'PyneIDE does not install into user-provided environments ' +
+          `(${target.source === 'venvPath' ? 'pyneide.venvPath' : 'pyneide.pythonPath'} is set).`
+      );
+    }
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title, cancellable: false },
+      async () => {
+        await operation({
+          storageDir: this.storageDir,
+          pythonBin: target.pythonBin,
+          packages,
+          log: this.log,
+          proxyUrl: this.proxyUrl(),
+        });
+      }
+    );
+    await this.check();
   }
 
   /**

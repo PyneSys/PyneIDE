@@ -28,6 +28,8 @@ import {
 } from './env/workdir';
 import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
+import { PluginsPanel } from './plugins/panel';
+import { PluginService } from './plugins/service';
 import { registerReportCommand } from './report/command';
 import { logHub } from './report/logTee';
 import { PyneDecorationProvider } from './pyneDecorations';
@@ -73,7 +75,19 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(pineLsOutput);
   pineLs.register();
 
-  new EnvStatusBar(manager, auth, pineLs).register(context);
+  const plugins = new PluginService(context, manager, auth, output);
+  context.subscriptions.push(plugins);
+  // A changed plugin set changes the provider list, the tree counts and the
+  // panel's own model — everything downstream refreshes from one event.
+  context.subscriptions.push(
+    plugins.onDidChange(() => {
+      PluginsPanel.refresh();
+      SymbolBrowserPanel.reloadProviders();
+      void vscode.commands.executeCommand('pyneide.workspace.refresh');
+    })
+  );
+
+  new EnvStatusBar(manager, auth, pineLs, plugins).register(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.setup()),
@@ -185,7 +199,7 @@ export function activate(context: vscode.ExtensionContext): void {
   registerLibraryDefinition(context);
   registerLibraryHelp(context);
 
-  registerWorkspaceView(context, chartManager);
+  registerWorkspaceView(context, chartManager, plugins);
   const inputsView = new InputsViewManager(
     context,
     manager,
@@ -210,6 +224,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.openSymbolBrowser', () =>
       openSymbolBrowser(context, manager, output)
     ),
+    vscode.commands.registerCommand('pyneide.openPlugins', () =>
+      PluginsPanel.show(context, plugins)
+    ),
     vscode.commands.registerCommand('pyneide.dataUpdate', (node?: { uri?: vscode.Uri }) =>
       dataFileAction(manager, output, node, updateData)
     ),
@@ -231,6 +248,7 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
+  watchForLostPlugins(context, manager, plugins);
   void initialCheck(context, manager);
   void pineLs.initialize();
 }
@@ -414,6 +432,50 @@ function openSymbolMapCommand(
       securityStatus.refreshAll();
     },
   });
+}
+
+/**
+ * A venv rebuild (Repair, or a pin bump raising the env schema) wipes the
+ * plugins PyneIDE installed. Nothing else notices — the environment verifies as
+ * healthy — so compare what we installed against what is loadable whenever the
+ * environment turns ready, and offer to put them back. Declining is remembered
+ * for the session only, so the next window asks again.
+ */
+function watchForLostPlugins(
+  context: vscode.ExtensionContext,
+  manager: EnvManager,
+  plugins: PluginService
+): void {
+  let running = false;
+  let declined = false;
+  const check = async (state: EnvState): Promise<void> => {
+    if (state.kind !== 'ready' || running || declined) return;
+    running = true;
+    try {
+      const missing = await plugins.missingManagedPlugins();
+      if (missing.length === 0) return;
+      const names = missing.map((p) => p.package).join(', ');
+      const choice = await vscode.window.showInformationMessage(
+        `PyneIDE: ${missing.length} plugin${missing.length > 1 ? 's are' : ' is'} ` +
+          `missing from the Python environment (${names}). Reinstall?`,
+        'Reinstall',
+        'Not Now'
+      );
+      if (choice !== 'Reinstall') {
+        declined = true;
+        return;
+      }
+      await plugins.restoreManagedPlugins(missing);
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `PyneIDE: reinstalling plugins failed — ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      running = false;
+    }
+  };
+  context.subscriptions.push(manager.onDidChangeState((state) => void check(state)));
+  void check(manager.state);
 }
 
 async function initialCheck(
