@@ -7,7 +7,7 @@
 
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.6.1';
+export const PYNECORE_VERSION = '6.6.2';
 export const DEBUGPY_VERSION = '1.8.21';
 
 /**

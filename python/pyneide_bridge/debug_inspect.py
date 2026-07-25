@@ -460,6 +460,16 @@ def _match_layout(layouts: dict[str, Any], owner: str, state: list) -> dict[str,
     return None
 
 
+def _series_slots(layout: dict[str, Any]) -> set[int]:
+    """Slot indices of the series slots of one scope layout.
+
+    Only the leading index is read: a ``series`` entry grew a third element
+    (``series_elem``) next to ``max_bars_back`` in pynecore 6.6.1, and the tail
+    may grow again — positional unpacking would break on every such change.
+    """
+    return {entry[0] for entry in layout.get("series", ())}
+
+
 def _is_internal_slot_name(name: str) -> bool:
     """True for a slot name that is compiler plumbing, not a source variable.
 
@@ -496,7 +506,7 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
         if layout is None:
             continue
         names = layout.get("names") or ()
-        series_slots = {slot for slot, _mbb in layout.get("series", ())}
+        series_slots = _series_slots(layout)
         child_slots = {slot for slot, _cid, _loop in layout.get("children", ())}
         seen: set[str] = set()
         for i in range(len(state)):
@@ -550,7 +560,7 @@ def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
         if layout is None:
             continue
         names = layout.get("names") or ()
-        series_slots = {slot for slot, _mbb in layout.get("series", ())}
+        series_slots = _series_slots(layout)
         for i in range(len(state)):
             name = names[i] if i < len(names) else None
             if not name:

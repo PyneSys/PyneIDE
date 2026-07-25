@@ -67,8 +67,9 @@ export interface CreatedWorkspace {
 
 /**
  * Scaffold the workdir with the pynecore CLI itself (single source of truth:
- * its app-callback creates the directory layout, config/providers.toml,
- * config/api.toml and the demo script + data). The workdir directory is
+ * its app-callback creates the directory layout, config/api.toml, a
+ * config/plugins/<name>.toml per installed provider plugin, and the demo
+ * script + data). The workdir directory is
  * pre-created so the CLI's interactive "create it?" confirmation is skipped;
  * `run --help` is the cheapest invocation that triggers the callback without
  * doing anything else. `--recreate-demo` is only passed when the demo script

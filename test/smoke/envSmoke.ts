@@ -483,8 +483,15 @@ async function main(): Promise<void> {
     throw new Error(`findWorkdir mismatch: ${after.path} != ${ws.workdir}`);
   }
   if (!fs.existsSync(ws.demoScript)) throw new Error('demo script missing');
-  for (const rel of ['config/providers.toml', 'config/api.toml', 'data/demo.ohlcv', 'data/demo.toml']) {
+  for (const rel of ['config/api.toml', 'data/demo.ohlcv', 'data/demo.toml']) {
     if (!fs.existsSync(path.join(ws.workdir, rel))) throw new Error(`${rel} missing`);
+  }
+  // Provider config is per-plugin since pynecore 6.6.0 (config/plugins/<name>.toml,
+  // one per `pyne.plugin` entry point); assert the layout, not a plugin name.
+  const pluginConfigs = path.join(ws.workdir, 'config', 'plugins');
+  if (!fs.existsSync(pluginConfigs)) throw new Error('config/plugins missing');
+  if (!fs.readdirSync(pluginConfigs).some((f) => f.endsWith('.toml'))) {
+    throw new Error('config/plugins has no provider config');
   }
 
   // Runner bridge end-to-end: demo script on demo data through the NDJSON

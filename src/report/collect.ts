@@ -2,7 +2,7 @@
  * Assemble a problem report from the live extension state.
  *
  * Hard rule: this module never reads anything under `<workdir>/config/`.
- * `api.toml` holds the PyneSys API key and `providers.toml` the broker
+ * `api.toml` holds the PyneSys API key and `plugins/<name>.toml` the broker
  * credentials — neither may ever end up in a report.
  *
  * Everything collected here is still a *draft*: it goes through
