@@ -53,6 +53,14 @@ export interface PluginLinkInfo {
 }
 
 export interface PluginDetail extends PluginListItem {
+  /**
+   * The plugin author's own description: the docstring of the entry point's
+   * class, read statically out of the wheel — the same text `pyne plugin info`
+   * prints. Third-party plain text, so it must be escaped before display.
+   * Absent on index entries written before the field existed (they carry it
+   * only after a re-check), hence optional.
+   */
+  description?: string;
   requires_python?: string | null;
   entry_points: PluginEntryPointInfo[];
   exchange_capabilities: PluginExchangeCapabilityInfo[];

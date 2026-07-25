@@ -49,7 +49,10 @@ export class PluginsPanel {
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [distRoot] }
     );
-    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'icons', 'pyne-view.svg');
+    // The colored logo, not the activity-bar `pyne-view.svg`: that one paints
+    // with `currentColor`, and a webview tab icon is never theme-tinted, so it
+    // would show up as a flat gray block.
+    this.panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'icons', 'pyne-core.svg');
     this.panel.webview.html = this.html(this.panel.webview, distRoot);
     this.panel.webview.onDidReceiveMessage(
       (msg: PluginsOutMessage) => void this.onMessage(msg),
@@ -260,6 +263,8 @@ export class PluginsPanel {
     color: var(--vscode-descriptionForeground); margin: 18px 0 6px;
   }
   #detail p { margin: 6px 0; line-height: 1.5; }
+  /* Author docstrings hand-wrap their own lists, so their line breaks stay. */
+  #detail p.doc { white-space: pre-wrap; margin: 8px 0; }
   #actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
   .meta { border-collapse: collapse; width: 100%; }
   .meta td { padding: 3px 0; vertical-align: top; font-size: 12px; }

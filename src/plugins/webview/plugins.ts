@@ -5,6 +5,7 @@
  * every model change arrives as a whole new model.
  */
 import type { PluginDetail } from '../catalog';
+import { docstringParagraphs } from '../docstring';
 import type { PluginsInMessage, PluginsOutMessage } from '../messages';
 import type { PluginRow, PluginsModel } from '../service';
 
@@ -217,6 +218,9 @@ function detailHtml(row: PluginRow): string {
     `<table class="meta">${rows.join('')}</table>`,
   ];
 
+  if (detail?.description?.trim()) {
+    sections.push('<h3>Description</h3>', descriptionHtml(detail.description));
+  }
   if (detail?.yanked && detail.yanked_reason) {
     sections.push(`<div class="note error">Yanked: ${escapeHtml(detail.yanked_reason)}</div>`);
   }
@@ -258,6 +262,21 @@ function detailHtml(row: PluginRow): string {
 
 function metaRow(key: string, value: string): string {
   return `<tr><td class="k">${key}</td><td>${value}</td></tr>`;
+}
+
+/**
+ * The author's class docstring: escaped first (third-party text), then given
+ * back the little markup a docstring carries — RST ``literals``. Line breaks
+ * inside a paragraph survive via pre-wrap, because these texts hand-wrap their
+ * own lists.
+ */
+function descriptionHtml(text: string): string {
+  return docstringParagraphs(text)
+    .map(
+      (paragraph) =>
+        `<p class="doc">${escapeHtml(paragraph).replace(/``([^`]+)``/g, '<span class="mono">$1</span>')}</p>`
+    )
+    .join('');
 }
 
 function renderDetail(): void {

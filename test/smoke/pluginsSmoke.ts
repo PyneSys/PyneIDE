@@ -16,7 +16,9 @@
  *   (e) fetchPluginIndex parses the snapshot and returns the ETag;
  *   (f) a known ETag is sent as If-None-Match and a 304 comes back as
  *       `not-modified` (so the caller keeps its cached copy);
- *   (g) fetchPluginDetail maps 404 to a readable error.
+ *   (g) fetchPluginDetail maps 404 to a readable error;
+ *   (h) docstringParagraphs dedents the class docstring and splits it on blank
+ *       lines while keeping the hand-wrapped line breaks inside a paragraph.
  */
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -27,6 +29,7 @@ import {
   normalizePackageName,
   satisfiesMinPynecore,
 } from '../../src/plugins/catalog';
+import { docstringParagraphs } from '../../src/plugins/docstring';
 import { parsePluginListJson } from '../../src/plugins/installed';
 
 let failed = false;
@@ -173,6 +176,20 @@ async function main(): Promise<void> {
   } finally {
     server.close();
   }
+
+  // A docstring as it arrives from the index: first line unindented, the rest
+  // indented to the class block, paragraphs separated by blank lines.
+  const docstring =
+    'Bybit v5 integration.\n\n    Historical OHLCV download and live streaming.\n' +
+    '    Spot pairs use the plain symbol.\n\n    Order idempotency is exchange-native.\n    ';
+  const paragraphs = docstringParagraphs(docstring);
+  check('(h) blank lines split paragraphs', paragraphs.length === 3, JSON.stringify(paragraphs));
+  check(
+    '(h) the class-block indentation is stripped',
+    paragraphs[1] === 'Historical OHLCV download and live streaming.\nSpot pairs use the plain symbol.',
+    JSON.stringify(paragraphs[1])
+  );
+  check('(h) an empty docstring yields nothing', docstringParagraphs('   \n\n  ').length === 0);
 
   if (failed) {
     console.log('PLUGINS SMOKE FAILED');
