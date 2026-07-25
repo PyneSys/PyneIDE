@@ -33,12 +33,17 @@ export class CompileService {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly auth: AuthService,
-    private readonly output: vscode.OutputChannel
+    private readonly output: vscode.OutputChannel,
+    private readonly pineLs: { readonly serverRunning: boolean }
   ) {}
 
   register(): void {
     this.context.subscriptions.push(
       this.diagnostics,
+      // Compile diagnostics are a snapshot of one API response, not a live
+      // analysis: the next compile only happens on Run or an explicit compile
+      // command, so without this they would outlive the edit that fixes them.
+      vscode.workspace.onDidChangeTextDocument((e) => this.diagnostics.delete(e.document.uri)),
       vscode.commands.registerCommand('pyneide.compilePine', () => this.compileActiveEditor()),
       vscode.commands.registerCommand('pyneide.convertToV6', () => this.convertActiveEditor()),
       vscode.commands.registerCommand('pyneide.showUsage', () => this.showUsage())
@@ -328,13 +333,17 @@ export class CompileService {
     });
 
     if (status === 400 && detail.line) {
-      // Pine compilation error with a line number -> Problems panel.
-      // The API reports no column, so the whole line is marked.
-      const line = Math.max(0, Math.min(detail.line - 1, doc.lineCount - 1));
-      const range = doc.lineAt(line).range;
-      const diagnostic = new vscode.Diagnostic(range, detail.error, vscode.DiagnosticSeverity.Error);
-      diagnostic.source = 'PyneComp';
-      this.diagnostics.set(doc.uri, [diagnostic]);
+      // Pine compilation error with a line number -> Problems panel, but only
+      // as a fallback: a running Pine LS already reports the same error live,
+      // and duplicating it there would just show every message twice.
+      if (!this.pineLs.serverRunning) {
+        // The API reports no column, so the whole line is marked.
+        const line = Math.max(0, Math.min(detail.line - 1, doc.lineCount - 1));
+        const range = doc.lineAt(line).range;
+        const diagnostic = new vscode.Diagnostic(range, detail.error, vscode.DiagnosticSeverity.Error);
+        diagnostic.source = 'PyneComp';
+        this.diagnostics.set(doc.uri, [diagnostic]);
+      }
       vscode.window.setStatusBarMessage('$(error) Pine compilation failed — see Problems panel', 5000);
       return;
     }

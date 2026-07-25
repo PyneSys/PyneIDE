@@ -101,7 +101,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.signIn', () => auth.signIn()),
     vscode.commands.registerCommand('pyneide.signOut', () => auth.signOut())
   );
-  const compileService = new CompileService(context, auth, compileOutput);
+  const compileService = new CompileService(context, auth, compileOutput, pineLs);
   compileService.register();
   registerStrictCompileToggle(context);
 
