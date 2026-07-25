@@ -14,7 +14,7 @@ import { SymbolMapPanel } from './data/symbolMapPanel';
 import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
 import { currentMarker } from './env/bootstrap';
-import { PYNECORE_VERSION } from './env/constants';
+import { PYNECORE_VERSION, SETUP_DOWNLOAD_MB } from './env/constants';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
 import { pyneBinPath } from './env/uv';
@@ -504,12 +504,13 @@ async function initialCheck(
     return;
   }
 
-  // First install (missing): ask once instead of silently downloading ~100 MB.
+  // First install (missing): ask once instead of silently downloading ~80 MB.
   if (context.globalState.get<boolean>(SETUP_PROMPTED_KEY)) return;
   await context.globalState.update(SETUP_PROMPTED_KEY, true);
   const choice = await vscode.window.showInformationMessage(
     'PyneIDE needs a Python environment to run Pyne scripts ' +
-      '(downloads uv + Python + PyneCore into extension storage). Set it up now?',
+      `(downloads uv + Python + PyneCore into extension storage, ~${SETUP_DOWNLOAD_MB} MB, ` +
+      'a few minutes on a typical connection). Set it up now?',
     'Setup Now',
     'Later'
   );

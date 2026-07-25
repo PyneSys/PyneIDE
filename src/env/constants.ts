@@ -21,6 +21,16 @@ export const PYNECORE_MIN_VERSION = '6.6.0';
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;
 
+/**
+ * Rough total download of a first-time managed setup, shown in the setup
+ * prompt. Measured for the pins above (uv release assets + the CPython
+ * standalone build uv fetches for 3.14 + the resolved wheel set): macOS arm64
+ * ~75 MB, Windows x64 ~71 MB, Linux x64 ~88 MB. Rounded to one number instead
+ * of per-platform figures — no API exposes the Python/wheel bytes at prompt
+ * time, so this is an estimate that needs re-measuring on pin bumps.
+ */
+export const SETUP_DOWNLOAD_MB = 80;
+
 export interface UvArtifact {
   name: string;
   sha256: string;
