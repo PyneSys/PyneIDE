@@ -140,6 +140,22 @@ export class AuthService {
   }
 
   async signOut(): Promise<void> {
+    if (!(await this.getKey())) {
+      void vscode.window.showInformationMessage('PyneIDE: not signed in to PyneSys.');
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      'Sign out from PyneSys?',
+      {
+        modal: true,
+        detail:
+          'The stored API key is removed from this machine. It is write-only, so ' +
+          'signing back in means pasting the full key again — make sure you still ' +
+          `have it, or create a new one at ${KEYS_PAGE_URL}.`,
+      },
+      'Sign Out'
+    );
+    if (choice !== 'Sign Out') return;
     await this.context.secrets.delete(SECRET_KEY);
     void vscode.window.showInformationMessage('PyneIDE: signed out, API key removed.');
   }
