@@ -66,7 +66,17 @@ First public preview. This is everything the initial preview ships with.
 - On-demand input form editor for a script's inputs, canonicalized through
   PyneCore's own TOML I/O.
 
+#### Help
+
+- **Report a Problem** — from a failed compile or run, or from the status bar
+  menu. It gathers versions, environment state and the recent logs, replaces
+  every path with a placeholder and strips credential-shaped strings. The
+  script itself is only attached when you pick "Send with my code"; choosing
+  otherwise also removes the source lines Python quotes inside tracebacks.
+  Nothing is ever sent without an explicit confirmation, and the full payload
+  can be previewed first.
+
 ### Notes
 
-- **No telemetry.** The extension collects and sends no usage data.
+- **No automatic telemetry.** The extension collects and sends no usage data.
 - Licensed under **GPL-3.0-only**.

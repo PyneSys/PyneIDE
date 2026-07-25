@@ -65,6 +65,19 @@ export class AuthService {
   }
 
   /**
+   * Client for sending a problem report. Reporting must work signed out too,
+   * so a missing key is not an error here — it only means the report goes out
+   * anonymously (`authenticated: false`, and the caller skips the auth header).
+   */
+  async reportClient(): Promise<{ client: PyneApiClient; authenticated: boolean }> {
+    const key = await this.getKey();
+    return {
+      client: new PyneApiClient(key ?? '', this.baseUrl(), this.log),
+      authenticated: key !== undefined,
+    };
+  }
+
+  /**
    * Interactive sign-in: paste (or import) an API key, validate it, store it
    * in SecretStorage. Returns true when a valid key is stored.
    */

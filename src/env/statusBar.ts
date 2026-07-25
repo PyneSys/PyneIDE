@@ -231,6 +231,15 @@ export class EnvStatusBar {
         });
       }
 
+      items.push(
+        { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
+        {
+          label: '$(report) Report a Problem…',
+          description: 'Send an error report to the PyneIDE author',
+          action: () => void vscode.commands.executeCommand('pyneide.reportProblem'),
+        }
+      );
+
       picker.busy = usageState.kind === 'loading';
       picker.items = items;
     };

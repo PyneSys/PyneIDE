@@ -58,7 +58,7 @@ model; PyneIDE ships analysis built for it.
 - ✓ One-click compile and run on an interactive, streaming candlestick chart.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
-- ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no telemetry**.
+- ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
 
 <!--
   SCREENSHOT SLOTS — capture these before publishing and drop them in `media/`.
@@ -188,10 +188,12 @@ the PyneSys cloud compiler. PyneIDE is the editor for both paths.
 
 ## Privacy
 
-PyneIDE contains **no telemetry** and sends no usage data. The only feature that
-talks to the network is Pine compilation: your Pine source is uploaded to the
-PyneSys cloud compiler when you compile it. Everything else — running, charting and
-debugging Pyne code — happens entirely on your machine.
+PyneIDE contains **no automatic telemetry** and sends no usage data on its own.
+Two features talk to the network, both only when you ask for them: Pine
+compilation uploads your Pine source to the PyneSys cloud compiler, and
+**Report a Problem** sends an error report — only after you click it, and it
+always asks separately whether your code may go with it. Everything else —
+running, charting and debugging Pyne code — happens entirely on your machine.
 
 ## License
 

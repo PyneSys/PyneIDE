@@ -18,6 +18,7 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: npm run test:grammar
+      - run: npm run test:report
       - run: npx vsce package --out pyneide.vsix
       - uses: actions/upload-artifact@v4
         with:

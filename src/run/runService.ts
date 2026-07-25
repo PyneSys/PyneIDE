@@ -28,6 +28,8 @@ import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPineVersion } from '../pineVersion';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { failures } from '../report/lastFailure';
+import { logHub } from '../report/logTee';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
 import { getRememberedData, pickRunData } from './dataSelect';
@@ -64,7 +66,7 @@ interface PreparedRun {
 }
 
 export class RunService {
-  private readonly output = vscode.window.createOutputChannel('PyneIDE Run');
+  private readonly output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Run'));
   /** Runtime errors mapped back to the Pine source via the .py.map sourcemap. */
   private readonly runtimeDiagnostics = vscode.languages.createDiagnosticCollection('pyne-runtime');
   private readonly statusItem = vscode.window.createStatusBarItem(
@@ -1154,6 +1156,8 @@ export class RunService {
 
     let stats: Record<string, number | null> | undefined;
     let errorMessage: string | undefined;
+    let errorKind: string | undefined;
+    let errorTraceback: string | undefined;
     let errorPineLocation: { pinePath: string; pineLine: number } | undefined;
     const trades: TradeRecord[] = [];
     let endBars = 0;
@@ -1223,6 +1227,8 @@ export class RunService {
             break;
           case 'error':
             errorMessage = event.message;
+            errorKind = event.kind;
+            errorTraceback = event.traceback;
             this.output.appendLine(event.traceback);
             // Map traceback frames back to the Pine source (needs the
             // .py.map written at compile time); the deepest mapped frame
@@ -1296,11 +1302,35 @@ export class RunService {
         }
         location = ` (${path.basename(pinePath)}:${pineLine})`;
       }
+      // Paths (script, workdir, chart key) stay out of the record on purpose;
+      // the report layer only ever scrubs what it cannot avoid carrying.
+      failures.record({
+        kind: 'runtime',
+        summary: errorMessage,
+        detail: {
+          errorKind,
+          exitCode: code,
+          barsDone: this.barsDone,
+          barsTotal: this.barsTotal,
+          debug: opts.debug !== undefined,
+          securityCount: opts.security?.length ?? 0,
+          data: path.basename(opts.data),
+          pineLine: errorPineLocation?.pineLine,
+        },
+        traceback: errorTraceback,
+        // The user's own source (chartKey), not the compiled .py the bridge ran.
+        scriptPath: chartKey,
+        scriptLanguage: /\.pine$/i.test(chartKey) ? 'pine' : 'python',
+      });
       const choice = await vscode.window.showErrorMessage(
         `PyneIDE: run failed: ${errorMessage}${location}`,
-        'Show Log'
+        'Show Log',
+        'Report a Problem'
       );
       if (choice === 'Show Log') this.output.show();
+      else if (choice === 'Report a Problem') {
+        void vscode.commands.executeCommand('pyneide.reportProblem');
+      }
       return;
     }
 

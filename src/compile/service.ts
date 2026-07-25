@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import type { AuthService } from '../api/auth';
 import type { CompileResult, ConvertResult, PyneApiClient } from '../api/client';
 import { detectPineVersion } from '../pineVersion';
+import { failures } from '../report/lastFailure';
 import { sha256, sourcemapPathFor, type StoredSourcemap } from './sourcemap';
 
 interface CacheEntry {
@@ -167,7 +168,21 @@ export class CompileService {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.log(`Compile failed: ${message}`);
-        void vscode.window.showErrorMessage(`PyneIDE: compilation failed: ${message}`);
+        failures.record({
+          kind: 'compile',
+          summary: message,
+          detail: { trigger, unexpected: true },
+          traceback: err instanceof Error ? err.stack : undefined,
+          scriptPath: doc.uri.fsPath,
+          scriptLanguage: 'pine',
+        });
+        const choice = await vscode.window.showErrorMessage(
+          `PyneIDE: compilation failed: ${message}`,
+          'Report a Problem'
+        );
+        if (choice === 'Report a Problem') {
+          await vscode.commands.executeCommand('pyneide.reportProblem');
+        }
       }
     };
     this.queue = this.queue.then(run);
@@ -220,7 +235,7 @@ export class CompileService {
     );
 
     if (!result.ok) {
-      await this.handleCompileError(doc, result);
+      await this.handleCompileError(doc, result, { strict, trigger });
       return;
     }
 
@@ -296,10 +311,21 @@ export class CompileService {
 
   private async handleCompileError(
     doc: vscode.TextDocument,
-    result: Extract<CompileResult, { ok: false }>
+    result: Extract<CompileResult, { ok: false }>,
+    ctx: { strict: boolean; trigger: 'manual' | 'run' }
   ): Promise<void> {
     const { status, detail } = result;
     this.log(`Compile error (HTTP ${status}): ${detail.error}` + (detail.line ? ` [line ${detail.line}]` : ''));
+
+    // Recorded before any branching, so even the Problems-panel path (400 with
+    // a line number, no toast) can be reported later from the status bar menu.
+    failures.record({
+      kind: 'compile',
+      summary: detail.error,
+      detail: { status, line: detail.line, file: detail.file, ...ctx },
+      scriptPath: doc.uri.fsPath,
+      scriptLanguage: 'pine',
+    });
 
     if (status === 400 && detail.line) {
       // Pine compilation error with a line number -> Problems panel.
@@ -344,7 +370,13 @@ export class CompileService {
       return;
     }
     // 413 and anything else: the API message is already human-readable.
-    void vscode.window.showErrorMessage(`PyneIDE: ${detail.error}`);
+    const choice = await vscode.window.showErrorMessage(
+      `PyneIDE: ${detail.error}`,
+      'Report a Problem'
+    );
+    if (choice === 'Report a Problem') {
+      await vscode.commands.executeCommand('pyneide.reportProblem');
+    }
   }
 
   private async showUsage(): Promise<void> {

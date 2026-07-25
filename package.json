@@ -66,6 +66,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.reportProblem",
+        "title": "Report a Problem",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.environmentMenu",
         "title": "Environment Menu",
         "category": "PyneIDE"
@@ -740,6 +745,12 @@
           "scope": "machine",
           "markdownDescription": "Enable the Pine language server (diagnostics, completion, navigation for `.pine` files). Uses a signed native binary installed into extension storage."
         },
+        "pyneide.reportProblem.includeLogs": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "Attach the recent output-channel logs to a **Report a Problem** submission. Paths and credential-shaped strings are removed before sending; nothing is ever sent without an explicit confirmation."
+        },
         "pyneide.pineLs.autoUpdate": {
           "type": "boolean",
           "default": true,
@@ -860,6 +871,7 @@
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "test:library-imports": "node esbuild.mjs --smoke-library-imports && node dist/library-imports-smoke.js",
     "test:symbol-map": "node esbuild.mjs --smoke-symbol-map && node dist/symbol-map-smoke.js",
+    "test:report": "node esbuild.mjs --smoke-report && node dist/report-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

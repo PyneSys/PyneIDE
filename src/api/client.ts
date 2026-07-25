@@ -12,6 +12,8 @@
  * microsoft/vscode#173861.
  */
 
+import { REPORT_CLIENT_HEADER, REPORT_CLIENT_KEY } from '../report/payload';
+
 export const DEFAULT_API_BASE_URL = 'https://api.pynesys.io';
 
 export interface CompileErrorDetail {
@@ -56,6 +58,10 @@ export interface Usage {
   hourly: UsagePeriod;
 }
 
+export type SubmitReportResult =
+  | { ok: true; reference: string; message: string }
+  | { ok: false; status: number; error: string };
+
 export interface TokenVerification {
   valid: boolean;
   message: string;
@@ -91,11 +97,17 @@ export class PyneApiClient {
   private async request(
     method: 'GET' | 'POST',
     path: string,
-    options: { body?: string; contentType?: string; auth?: boolean; timeoutMs?: number } = {}
+    options: {
+      body?: string;
+      contentType?: string;
+      auth?: boolean;
+      timeoutMs?: number;
+      extraHeaders?: Record<string, string>;
+    } = {}
   ): Promise<HttpResponse> {
-    const { body, contentType, auth = true, timeoutMs = 30000 } = options;
+    const { body, contentType, auth = true, timeoutMs = 30000, extraHeaders } = options;
     const url = this.baseUrl.replace(/\/$/, '') + path;
-    const headers: Record<string, string> = { 'User-Agent': 'PyneIDE' };
+    const headers: Record<string, string> = { 'User-Agent': 'PyneIDE', ...extraHeaders };
     if (auth) headers.Authorization = `Bearer ${this.apiKey}`;
     if (contentType) headers['Content-Type'] = contentType;
 
@@ -249,6 +261,29 @@ export class PyneApiClient {
       resetAt: p.reset_at,
     });
     return { daily: period(data.daily), hourly: period(data.hourly) };
+  }
+
+  /**
+   * Send a problem report. Works signed out (`auth: false`), in which case the
+   * report is stored anonymously.
+   */
+  async submitReport(payload: unknown, auth = true): Promise<SubmitReportResult> {
+    const res = await this.request('POST', '/report', {
+      body: JSON.stringify(payload),
+      contentType: 'application/json',
+      auth,
+      timeoutMs: 30000,
+      extraHeaders: { [REPORT_CLIENT_HEADER]: REPORT_CLIENT_KEY },
+    });
+    if (res.status !== 200) {
+      return {
+        ok: false,
+        status: res.status,
+        error: PyneApiClient.parseErrorDetail(res.text, res.status).error,
+      };
+    }
+    const data = PyneApiClient.parseJson<{ reference?: string; message?: string }>(res, 'report');
+    return { ok: true, reference: data.reference ?? '', message: data.message ?? '' };
   }
 
   /** Server-side token verification (also works before storing the key). */

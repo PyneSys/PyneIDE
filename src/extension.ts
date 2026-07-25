@@ -28,6 +28,8 @@ import {
 } from './env/workdir';
 import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
 import { PineLsService } from './pinels/service';
+import { registerReportCommand } from './report/command';
+import { logHub } from './report/logTee';
 import { PyneDecorationProvider } from './pyneDecorations';
 import { downloadData, downloadOtherTimeframe, truncateData, updateData } from './run/dataSelect';
 import { RunService } from './run/runService';
@@ -59,14 +61,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(new OhlcvEditorProvider(context).register());
 
-  const output = vscode.window.createOutputChannel('PyneIDE Environment');
+  const output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Environment'));
   const manager = new EnvManager(context.globalStorageUri.fsPath, output);
   context.subscriptions.push(output, manager);
 
-  const compileOutput = vscode.window.createOutputChannel('PyneIDE Compiler');
+  const compileOutput = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Compiler'));
   const auth = new AuthService(context, compileOutput);
 
-  const pineLsOutput = vscode.window.createOutputChannel('Pine Language Server');
+  const pineLsOutput = logHub.wrap(vscode.window.createOutputChannel('Pine Language Server'));
   const pineLs = new PineLsService(context, pineLsOutput);
   context.subscriptions.push(pineLsOutput);
   pineLs.register();
@@ -150,7 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   reconcilePyrightConfig(manager.state);
 
-  const pyrightOutput = vscode.window.createOutputChannel('Pyne Typing (pyright)');
+  const pyrightOutput = logHub.wrap(vscode.window.createOutputChannel('Pyne Typing (pyright)'));
   // One worker feeds both the pyright index filter (L5c) and the Pyne checker
   // (L5d); its lifecycle lives here so neither service owns the other.
   const seriesAnalyzer = new SeriesAnalyzer(
@@ -191,6 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
     (chartKey) => runService.refreshChartAfterInputsSave(chartKey)
   );
   context.subscriptions.push(
+    registerReportCommand(context, { context, manager, pineLs }, auth, compileOutput),
     vscode.commands.registerCommand('pyneide.editInputs', async (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
       const explicitUri = arg instanceof vscode.Uri ? arg : arg?.uri;
       const explicitScript = explicitUri && /\.(?:pine|py)$/i.test(explicitUri.fsPath)
