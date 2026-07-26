@@ -10,12 +10,11 @@
  * legacy palette-by-index lines when no meta arrives (pynecore < 6.6).
  * Strategy performance is rendered as a full-run equity curve in its own
  * bottom-panel tab; trades become TradingView-style, background-free markers
- * at run end.
+ * at run end, painted by a figure-less indicator (see tradeMarkers.ts).
  */
 import {
   init,
   dispose,
-  registerFigure,
   registerIndicator,
   registerOverlay,
   utils,
@@ -68,45 +67,24 @@ import {
   type PlotDrawItem,
   type PlotFigureSpec,
 } from './plotStyles';
+import {
+  buildTradeMarkerIndex,
+  drawTradeMarkers,
+  type TradeMarkerIndex,
+  type TradeMarkerTheme,
+} from './tradeMarkers';
 
 declare function acquireVsCodeApi(): { postMessage(msg: ChartOutMessage): void };
 
 const vscode = acquireVsCodeApi();
 
 const UI_TICK_MS = 400;
-const MAX_TRADE_MARKERS = 2000;
 const MEASURE_OVERLAY_NAME = 'PyneMeasure';
 const BREAKPOINT_OVERLAY_NAME = 'PyneBreakpoint';
-const TRADE_MARKER_OVERLAY_NAME = 'PyneTradeMarker';
-const TRADE_MARKER_FIGURE_NAME = 'pyneTradeMarker';
-const TRADE_EXIT_OVERLAY_NAME = 'PyneTradeExit';
-const TRADE_EXIT_FIGURE_NAME = 'pyneTradeExit';
+const TRADE_MARKER_INDICATOR_NAME = 'PyneTradeMarkers';
 const BREAKPOINT_CLICK_DRAG_THRESHOLD_PX = 4;
 
 interface BreakpointOverlayData extends ChartBreakpointTarget {}
-
-interface TradeMarkerOverlayData {
-  direction: 'up' | 'down';
-  title: string;
-  detail?: string;
-  color: string;
-}
-
-interface TradeMarkerFigureAttrs extends TradeMarkerOverlayData {
-  x: number;
-  y: number;
-  textColor: string;
-  fontFamily: string;
-}
-
-interface TradeExitOverlayData {
-  color: string;
-}
-
-interface TradeExitFigureAttrs extends TradeExitOverlayData {
-  x: number;
-  y: number;
-}
 
 function formatMeasureDuration(durationMs: number): string {
   let seconds = Math.max(0, Math.round(durationMs / 1000));
@@ -276,118 +254,6 @@ registerOverlay<BreakpointOverlayData>({
   },
 });
 
-registerFigure<TradeMarkerFigureAttrs, Record<string, never>>({
-  name: TRADE_MARKER_FIGURE_NAME,
-  checkEventOn: () => false,
-  draw: (ctx, attrs) => {
-    const pointsUp = attrs.direction === 'up';
-    const tipY = attrs.y + (pointsUp ? 16 : -16);
-    const tailY = attrs.y + (pointsUp ? 34 : -34);
-    const titleY = attrs.y + (pointsUp ? 44 : -44);
-    const detailY = attrs.y + (pointsUp ? 59 : -59);
-
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = attrs.color;
-    ctx.fillStyle = attrs.color;
-    ctx.lineWidth = 2.5;
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-    ctx.shadowBlur = 4;
-    ctx.shadowOffsetY = 1;
-    ctx.beginPath();
-    ctx.moveTo(attrs.x, tailY);
-    ctx.lineTo(attrs.x, tipY);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(attrs.x, tipY);
-    ctx.lineTo(attrs.x - 6, tipY + (pointsUp ? 7 : -7));
-    ctx.lineTo(attrs.x + 6, tipY + (pointsUp ? 7 : -7));
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.font = `500 12px ${attrs.fontFamily}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = pointsUp ? 'top' : 'bottom';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-    ctx.fillStyle = attrs.textColor;
-    ctx.shadowBlur = 3;
-    const drawText = (text: string, y: number): void => {
-      ctx.strokeText(text, attrs.x, y);
-      ctx.fillText(text, attrs.x, y);
-    };
-    drawText(attrs.title, titleY);
-    if (attrs.detail) drawText(attrs.detail, detailY);
-    ctx.restore();
-  },
-});
-
-registerOverlay<TradeMarkerOverlayData>({
-  name: TRADE_MARKER_OVERLAY_NAME,
-  totalStep: 2,
-  createPointFigures: ({ overlay, coordinates }) => {
-    const point = coordinates[0];
-    if (!point) return [];
-    return [{
-      type: TRADE_MARKER_FIGURE_NAME,
-      attrs: {
-        x: point.x,
-        y: point.y,
-        ...overlay.extendData,
-        textColor: cssVar(
-          '--vscode-editor-foreground',
-          isDark() ? '#b2b5be' : '#434651',
-        ),
-        fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
-      },
-      styles: {},
-      ignoreEvent: true,
-    }];
-  },
-});
-
-registerFigure<TradeExitFigureAttrs, Record<string, never>>({
-  name: TRADE_EXIT_FIGURE_NAME,
-  checkEventOn: () => false,
-  draw: (ctx, attrs) => {
-    const tipX = attrs.x;
-    const backX = tipX - 8;
-
-    ctx.save();
-    ctx.lineJoin = 'round';
-    ctx.fillStyle = attrs.color;
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
-    ctx.lineWidth = 1.5;
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetY = 1;
-    ctx.beginPath();
-    ctx.moveTo(tipX, attrs.y);
-    ctx.lineTo(backX, attrs.y - 5);
-    ctx.lineTo(backX, attrs.y + 5);
-    ctx.closePath();
-    ctx.stroke();
-    ctx.fill();
-    ctx.restore();
-  },
-});
-
-registerOverlay<TradeExitOverlayData>({
-  name: TRADE_EXIT_OVERLAY_NAME,
-  totalStep: 2,
-  createPointFigures: ({ overlay, coordinates }) => {
-    const point = coordinates[0];
-    if (!point) return [];
-    return [{
-      type: TRADE_EXIT_FIGURE_NAME,
-      attrs: { x: point.x, y: point.y, ...overlay.extendData },
-      styles: {},
-      ignoreEvent: true,
-    }];
-  },
-});
-
 const PLOT_COLORS = [
   '#2962ff',
   '#ff6d00',
@@ -440,6 +306,11 @@ interface RunState {
   paneBgIndicatorId?: string;
   overlayDrawIndicatorId?: string;
   paneDrawIndicatorId?: string;
+  /** Bar index -> trade glyphs, rebuilt whenever trades/bars grow. */
+  tradeMarkers?: TradeMarkerIndex;
+  /** [trades.length, bars.length] the index above was built from. */
+  tradeMarkersBuiltFor?: [number, number];
+  tradeMarkerIndicatorId?: string;
   barcolorIndicatorId?: string;
   showVolume: boolean;
   volumeIndicatorId?: string;
@@ -1190,6 +1061,73 @@ function ensureDrawingIndicators(st: RunState): void {
   }
 }
 
+/** Theme values for the trade-marker text, memoized on the body class list —
+ * VS Code swaps vscode-light/vscode-dark/vscode-high-contrast there. Reading
+ * computed style per marker per frame is a forced style recalc on the hot
+ * path, which is exactly what the overlay implementation used to do. */
+let tradeMarkerTheme: (TradeMarkerTheme & { key: string }) | undefined;
+
+function markerTheme(): TradeMarkerTheme {
+  const key = document.body.className;
+  if (!tradeMarkerTheme || tradeMarkerTheme.key !== key) {
+    tradeMarkerTheme = {
+      key,
+      textColor: cssVar('--vscode-editor-foreground', isDark() ? '#b2b5be' : '#434651'),
+      fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
+    };
+  }
+  return tradeMarkerTheme;
+}
+
+/** Rebuild the bar-index -> glyph map when the trade or bar count moved. The
+ * stamp check keeps this off the per-frame path; a full rebuild (rather than
+ * an incremental append) also absorbs the fact that open trades arrive after
+ * the closed ones, so `st.trades` is not strictly chronological. */
+function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
+  const built = st.tradeMarkersBuiltFor;
+  if (
+    !st.tradeMarkers ||
+    !built ||
+    built[0] !== st.trades.length ||
+    built[1] !== st.bars.length
+  ) {
+    st.tradeMarkers = buildTradeMarkerIndex(st.trades, st.bars, st.tsToIndex);
+    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length];
+  }
+  return st.tradeMarkers;
+}
+
+/**
+ * Create/remove the figure-less trade-marker indicator. zLevel 3 puts it above
+ * the plots (-1/0/1) and the drawing layer (2). Unlike the overlay API this
+ * costs one draw call per frame and only touches the visible bar range, so no
+ * marker cap is needed.
+ */
+function ensureTradeMarkerIndicator(st: RunState): void {
+  const want = st.start.scriptType === 'strategy' && st.trades.length > 0;
+  if (want && !st.tradeMarkerIndicatorId) {
+    registerIndicator({
+      name: TRADE_MARKER_INDICATOR_NAME,
+      shortName: TRADE_MARKER_INDICATOR_NAME,
+      figures: [],
+      calc: () => [],
+      styles: { tooltip: { showRule: 'none' } },
+      draw: (params: IndicatorDrawParams) => {
+        drawTradeMarkers(drawEnv(st, params, true), tradeMarkerIndex(st), markerTheme());
+        return false;
+      },
+    } as never);
+    st.tradeMarkerIndicatorId =
+      st.chart.createIndicator(
+        { name: TRADE_MARKER_INDICATOR_NAME, paneId: 'candle_pane', zLevel: 3 },
+        true,
+      ) ?? undefined;
+  } else if (!want && st.tradeMarkerIndicatorId) {
+    st.chart.removeIndicator({ id: st.tradeMarkerIndicatorId });
+    st.tradeMarkerIndicatorId = undefined;
+  }
+}
+
 // --- Pine tables as an HTML layer -------------------------------------------
 // The canvas has no table primitive; tables render as absolutely positioned
 // HTML over the chart, anchored to their pane's bounding box per the Pine
@@ -1441,88 +1379,6 @@ function closePlotsPopup(): void {
 function togglePlotsPopup(): void {
   if (plotsPopupEl && !plotsPopupEl.hidden) closePlotsPopup();
   else openPlotsPopup();
-}
-
-function tradeEntryTitle(long: boolean, entryId: string | null): string {
-  const side = long ? 'Long' : 'Short';
-  const id = entryId?.trim();
-  if (!id || id.toLowerCase() === side.toLowerCase()) return side;
-  return `${side} ${id}`;
-}
-
-function signedTradeSize(size: number | null): string | undefined {
-  if (size == null || !Number.isFinite(size) || size === 0) return undefined;
-  const rounded = Number(size.toFixed(6));
-  if (rounded === 0) return undefined;
-  return `${rounded > 0 ? '+' : ''}${rounded}`;
-}
-
-function tradeEntryPoint(
-  st: RunState,
-  trade: TradeRecord,
-  long: boolean,
-): { timestamp: number; dataIndex: number; value: number } | undefined {
-  let dataIndex = st.tsToIndex.get(trade.entryTime);
-  if (dataIndex === undefined && Number.isInteger(trade.entryBar)) {
-    dataIndex = trade.entryBar;
-  }
-  if (dataIndex === undefined) return undefined;
-  const bar = st.bars[dataIndex];
-  if (!bar) return undefined;
-  const value = long ? bar.low : bar.high;
-  if (!Number.isFinite(value)) return undefined;
-  return { timestamp: bar.timestamp, dataIndex, value };
-}
-
-function tradeExitPoint(
-  st: RunState,
-  trade: TradeRecord,
-): { timestamp: number; dataIndex: number; value: number } | undefined {
-  if (trade.exitPrice == null || !Number.isFinite(trade.exitPrice)) return undefined;
-  let dataIndex = st.tsToIndex.get(trade.exitTime);
-  if (dataIndex === undefined && Number.isInteger(trade.exitBar)) {
-    dataIndex = trade.exitBar;
-  }
-  if (dataIndex === undefined) return undefined;
-  const bar = st.bars[dataIndex];
-  if (!bar) return undefined;
-  return { timestamp: bar.timestamp, dataIndex, value: trade.exitPrice };
-}
-
-function addTradeAnnotations(st: RunState): void {
-  let budget = MAX_TRADE_MARKERS;
-  for (const trade of st.trades) {
-    if (budget <= 0) break;
-    const long = (trade.size ?? 0) > 0;
-    const entryPoint = tradeEntryPoint(st, trade, long);
-    if (entryPoint) {
-      st.chart.createOverlay({
-        name: TRADE_MARKER_OVERLAY_NAME,
-        paneId: 'candle_pane',
-        points: [entryPoint],
-        extendData: {
-          direction: long ? 'up' : 'down',
-          title: tradeEntryTitle(long, trade.entryId),
-          detail: signedTradeSize(trade.size),
-          color: long ? '#2962ff' : '#ff5252',
-        },
-        lock: true,
-      });
-      budget--;
-    }
-
-    if (budget <= 0) break;
-    const exitPoint = tradeExitPoint(st, trade);
-    if (!exitPoint) continue;
-    st.chart.createOverlay({
-      name: TRADE_EXIT_OVERLAY_NAME,
-      paneId: 'candle_pane',
-      points: [exitPoint],
-      extendData: { color: long ? '#ff5252' : '#2962ff' },
-      lock: true,
-    });
-    budget--;
-  }
 }
 
 /**
@@ -2309,7 +2165,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         ensureDrawingIndicators(state);
         syncBreakpointOverlays(state);
         renderDrawingTables(state);
-        addTradeAnnotations(state);
+        ensureTradeMarkerIndicator(state);
         if (state.start.scriptType === 'strategy') {
           activeTab = 'performance';
           setCollapsed(false);

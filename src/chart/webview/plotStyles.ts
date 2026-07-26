@@ -272,7 +272,7 @@ export interface MarkerDrawEnv {
 
 const MARKER_EDGE_PAD = 8;
 const MARKER_BAR_PAD = 6;
-const MARKER_STACK_GAP = 4;
+export const MARKER_STACK_GAP = 4;
 
 /** The plot's value as displayed at barIndex: offset shifts the source bar,
  * show_last blanks everything before the last N bars (same rules the
