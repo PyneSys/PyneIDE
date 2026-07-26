@@ -118,6 +118,12 @@ export class RunService {
   private readonly previewRuns = new Map<string, BridgeRun>();
   /** Chart key of the currently active real run (undefined when idle). */
   private activeChartKey: string | undefined;
+  /** True between a Run click and the moment the bridge is spawned. A second
+   * click in that window would start a parallel bridge (the activeRun guard is
+   * not armed yet), so it is ignored. */
+  private startPending = false;
+  /** Owns the Run/Stop/Debug lenses; refreshed whenever a run starts or ends. */
+  private codeLensProvider: RunCodeLensProvider | undefined;
 
   /** How many trailing bars of a run-to-bar crawl on the per-bar breakpoint
    * (the rest fly with breakpoints removed). */
@@ -149,8 +155,11 @@ export class RunService {
 
   register(): void {
     const selector = [{ language: 'python' }, { language: 'pine' }];
+    this.codeLensProvider = new RunCodeLensProvider(() =>
+      this.activeRunIsDebug ? undefined : this.activeChartKey
+    );
     this.statusItem.command = 'pyneide.runControlMenu';
-    this.statusItem.tooltip = 'Pyne run — bar-level controls';
+    this.statusItem.tooltip = 'Pyne run — pause, step, stop';
     this.context.subscriptions.push(
       this.output,
       this.statusItem,
@@ -189,9 +198,9 @@ export class RunService {
         this.fastChartBreakpointTimestamps = [];
         // Stopping the debug session stops the run: a detached-but-running
         // backtest with no debugger and no chart control would be a trap.
-        this.activeRun?.cancel();
+        if (this.activeRun) void this.stopRun(this.activeRun);
       }),
-      vscode.languages.registerCodeLensProvider(selector, new RunCodeLensProvider()),
+      vscode.languages.registerCodeLensProvider(selector, this.codeLensProvider),
       vscode.window.onDidChangeActiveTextEditor(() => this.updateContextKey()),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document === vscode.window.activeTextEditor?.document) this.updateContextKey();
@@ -207,6 +216,15 @@ export class RunService {
       (doc?.languageId === 'python' &&
         detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined);
     void vscode.commands.executeCommand('setContext', 'pyneide.isPyneScript', isPyne === true);
+    // True only on the tab whose own (non-debug) run is streaming. This has to
+    // be per-file, not the global runActive: the editor-title Run/Debug entries
+    // hide behind it so the split button's primary action becomes Stop — with a
+    // global key that would also strip the play button off every other script.
+    const runningHere =
+      doc !== undefined &&
+      !this.activeRunIsDebug &&
+      this.activeChartKey === canonicalChartKey(doc.uri.fsPath);
+    void vscode.commands.executeCommand('setContext', 'pyneide.runActiveHere', runningHere);
   }
 
   private async runFromCommand(uri?: vscode.Uri): Promise<void> {
@@ -399,7 +417,19 @@ export class RunService {
   }
 
   async runDocument(doc: vscode.TextDocument): Promise<void> {
-    const prepared = await this.prepareRun(doc);
+    // Run now restarts a run in flight, so a double-click is a plausible
+    // accident: without this guard both clicks would pass the activeRun check
+    // (it is only armed once the bridge is spawned) and start two bridges.
+    if (this.startPending) return;
+    this.startPending = true;
+    let prepared: PreparedRun | undefined;
+    try {
+      prepared = await this.prepareRun(doc);
+    } finally {
+      // executeRun runs synchronously up to `activeRun = run`, so the guard can
+      // be dropped here — no click can interleave before the slot is taken.
+      this.startPending = false;
+    }
     if (!prepared) return;
     await this.executeRun(prepared);
   }
@@ -576,7 +606,7 @@ export class RunService {
     const ep = await Promise.race([endpoint, runDone.then(() => undefined)]);
     if (!ep) {
       this.output.appendLine('Debug launch aborted: no debugpy endpoint from the bridge.');
-      this.activeRun?.cancel();
+      if (this.activeRun) void this.stopRun(this.activeRun);
       return undefined;
     }
     return ep;
@@ -604,12 +634,16 @@ export class RunService {
     return this.spawnDebugRun(prepared);
   }
 
-  /** Cancel the active run and wait for the process to exit (hard-kill on
-   * grace timeout), so a restart's fresh launch never hits the "in progress"
-   * guard. executeRun clears `activeRun` on exit, before this await resumes. */
-  private async drainActiveRun(): Promise<void> {
-    const run = this.activeRun;
-    if (!run) return;
+  /**
+   * Stop a run: graceful cancel first, hard kill if the process does not exit
+   * within the grace window. The escalation is not optional — `cancel()` is
+   * only a JSON line on the bridge's stdin, so a bridge that hangs before it
+   * reads stdin (broken venv, failed debugpy attach, a tight loop in user code
+   * that never yields between bars) would never exit, and because there is
+   * exactly one run slot that would wedge every later run until a window
+   * reload. Resolves once the process is really gone.
+   */
+  private async stopRun(run: BridgeRun): Promise<void> {
     run.cancel();
     const killer = setTimeout(() => run.kill(), RUN_DRAIN_GRACE_MS);
     try {
@@ -619,16 +653,44 @@ export class RunService {
     }
   }
 
+  /** Stop the active run and wait for the process to exit, so a restart's fresh
+   * launch never hits the "in progress" guard. executeRun clears `activeRun` on
+   * exit, before this await resumes. */
+  private async drainActiveRun(): Promise<void> {
+    const run = this.activeRun;
+    if (!run) return;
+    await this.stopRun(run);
+  }
+
   /** Shared pipeline: compile (Pine), env, workdir, data, security. */
   private async prepareRun(
     doc: vscode.TextDocument,
     overrides?: { data?: string; security?: string[] }
   ): Promise<PreparedRun | undefined> {
+    // There is exactly one run slot, so starting a run means the one in flight
+    // has to go. Asking to run is unambiguous — restart instead of refusing.
     if (this.activeRun) {
-      void vscode.window.showWarningMessage(
-        'PyneIDE: a run is already in progress. Cancel it first.'
-      );
-      return undefined;
+      // A debug run is the exception: killing its bridge would leave VSCode's
+      // debug session pointing at a dead debuggee, so that stays user-driven.
+      if (this.activeRunIsDebug || this.debugSession) {
+        const session = this.debugSession;
+        void vscode.window
+          .showWarningMessage(
+            'PyneIDE: a debug session is running. Stop it first.',
+            ...(session ? ['Stop Debugging'] : [])
+          )
+          .then((choice) => {
+            if (choice === 'Stop Debugging' && session) void vscode.debug.stopDebugging(session);
+          });
+        return undefined;
+      }
+      const previous = this.activeScriptName;
+      const sameScript = this.activeChartKey === canonicalChartKey(doc.uri.fsPath);
+      this.output.appendLine(`Stopping the run in progress (${previous}) to start a new one.`);
+      await this.drainActiveRun();
+      if (!sameScript) {
+        vscode.window.setStatusBarMessage(`$(debug-stop) PyneIDE: stopped ${previous}`, 4000);
+      }
     }
     if (doc.isDirty) await doc.save();
     const libraryErrors = this.libraryDiagnostics?.checkNow(doc) ?? [];
@@ -999,7 +1061,7 @@ export class RunService {
         break;
       case 'cancel':
         void this.debugControl?.disarmBarStop();
-        run.cancel();
+        void this.stopRun(run);
         break;
     }
   }
@@ -1099,12 +1161,12 @@ export class RunService {
             ...(this.paused ? [{ label: '$(debug-continue) Resume', action: 'resume' } as Item] : []),
             { label: '$(debug-step-over) Next bar', action: 'step' },
             { label: '$(run-below) Run to bar…', action: 'runToBar' },
-            { label: '$(debug-stop) Cancel run', action: 'cancel' },
+            { label: '$(debug-stop) Stop run', action: 'cancel' },
           ]
         : [
             { label: '$(debug-pause) Pause at next bar', action: 'pause' },
             { label: '$(run-below) Run to bar…', action: 'runToBar' },
-            { label: '$(debug-stop) Cancel run', action: 'cancel' },
+            { label: '$(debug-stop) Stop run', action: 'cancel' },
           ];
     const pick = await vscode.window.showQuickPick(items, {
       placeHolder: `${this.activeScriptName}: bar ${this.barsDone} / ${this.barsTotal}`,
@@ -1118,6 +1180,8 @@ export class RunService {
     void vscode.commands.executeCommand('setContext', 'pyneide.runActive', active);
     if (!active) this.setPaused(false);
     this.updateStatusItem(active);
+    this.updateContextKey();
+    this.codeLensProvider?.refresh();
   }
 
   private setPaused(paused: boolean): void {
@@ -1372,6 +1436,18 @@ export class RunService {
 
 /** "Run ..." / "Debug" CodeLenses on the first line of Pyne/Pine scripts. */
 class RunCodeLensProvider implements vscode.CodeLensProvider {
+  private readonly changed = new vscode.EventEmitter<void>();
+  readonly onDidChangeCodeLenses = this.changed.event;
+
+  /** @param stopTarget chart key of the running non-debug script, or undefined
+   * when nothing is running — its lens row gets a Stop entry. */
+  constructor(private readonly stopTarget: () => string | undefined) {}
+
+  /** Re-render the lenses (a run started or ended). */
+  refresh(): void {
+    this.changed.fire();
+  }
+
   provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     let title: string | undefined;
     if (doc.languageId === 'pine') {
@@ -1384,17 +1460,28 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
     }
     if (!title) return [];
     const range = new vscode.Range(0, 0, 0, 0);
-    return [
+    const lenses = [
       new vscode.CodeLens(range, {
         title,
         command: 'pyneide.runScript',
         arguments: [doc.uri],
       }),
+    ];
+    lenses.push(
       new vscode.CodeLens(range, {
         title: '$(bug) Debug',
         command: 'pyneide.debugScript',
         arguments: [doc.uri],
-      }),
-    ];
+      })
+    );
+    // Appended last so Run and Debug keep their position while a run streams.
+    // A .pine and its compiled .py fold onto one chart key, so the Stop lens
+    // shows on whichever of the pair the user is looking at.
+    if (this.stopTarget() === canonicalChartKey(doc.uri.fsPath)) {
+      lenses.push(
+        new vscode.CodeLens(range, { title: '$(debug-stop) Stop', command: 'pyneide.cancelRun' })
+      );
+    }
+    return lenses;
   }
 }

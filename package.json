@@ -209,8 +209,9 @@
       },
       {
         "command": "pyneide.cancelRun",
-        "title": "Cancel Run",
+        "title": "Stop Run",
         "category": "PyneIDE",
+        "icon": "$(debug-stop)",
         "enablement": "pyneide.runActive"
       },
       {
@@ -405,13 +406,18 @@
       ],
       "editor/title/run": [
         {
+          "command": "pyneide.cancelRun",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && pyneide.runActiveHere",
+          "group": "navigation@0"
+        },
+        {
           "command": "pyneide.runScript",
-          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere",
           "group": "navigation@1"
         },
         {
           "command": "pyneide.debugScript",
-          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere",
           "group": "navigation@2"
         }
       ],

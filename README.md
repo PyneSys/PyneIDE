@@ -60,12 +60,6 @@ model; PyneIDE ships analysis built for it.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
 - ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
 
-<!--
-  SCREENSHOT SLOTS — capture these before publishing and drop them in `media/`.
-  Each section points to the file it needs. Keep a consistent width (~1200px),
-  a clean theme, and no personal data on screen.
--->
-
 ## Full Pine Script language support
 
 Open a `.pine` file and you get Pine v6 syntax highlighting, plus completion, hover
@@ -76,7 +70,7 @@ TradingView's own editor, now in VS Code with your own files and tooling. Your
 workspace libraries resolve too — import completion, go-to-definition, hover, and
 call-argument checks across both Pine and Pyne.
 
-<!-- media/pine-ls.png — a .pine file with an inline diagnostic (red squiggle + Problems entry), a completion popup, and signature help visible -->
+![Pine language completion and diagnostics in PyneIDE](media/pine-ls.png)
 
 ## A step-through debugger for Pine
 
@@ -94,7 +88,7 @@ and watch series history such as `close[1]` right in the Watch panel.
 
 It works the same whether you wrote Pine or Pyne code.
 
-<!-- media/debug.png — a debug session paused on a .pine line: the Pyne scope expanded (OHLCV), close[1] in Watch, and a chart-bar breakpoint marker on the chart -->
+![PyneIDE debugger paused with OHLCV variables, series history, and the live chart](media/debug.png)
 
 ## One-click compile and run
 
@@ -105,7 +99,7 @@ Python unless you want to. Compiling Pine needs a PyneSys account and API key
 ([create one at app.pynesys.io](https://app.pynesys.io)); running **Pyne code** needs
 no account and runs entirely on your machine.
 
-<!-- media/compile.png — the "Run Pine Script" CodeLens on a .pine file and the streaming chart opening beside it -->
+![Compile and run a Pine script with a live chart](media/compile.png)
 
 ## Interactive chart and backtests
 
@@ -117,7 +111,7 @@ equity/performance curve, and Trades / Stats tables. A per-plot layers popup, a
 measure tool, go-to-date, fullscreen, and CSV export of plot and trade data are all
 built in.
 
-<!-- media/chart.png — a strategy run: candles + overlay plot + long/short trade markers, with the equity/performance tab and Trades table -->
+![Interactive strategy chart with trade markers and performance](media/chart.png)
 
 ## Pyne code, done right
 
@@ -136,7 +130,7 @@ from Pylance so your diagnostics are *correct* instead of noisy — and defers p
 if you already run pyright or basedpyright. Everything else in your Python workflow
 keeps working. Snippets and workspace-library intelligence round it out.
 
-<!-- media/pyne.png — a @pyne .py file: Series[T] typing with hover, no false-positive squiggles, and the Pyne activity-bar view -->
+![Pyne code typing and the dedicated Pyne workspace view](media/pyne.png)
 
 ## Zero-setup Python environment
 
@@ -145,7 +139,7 @@ the PyneCore runtime — with **no dependency on the Microsoft Python extension*
 nothing to configure. It sets itself up on first run so you can go straight to
 writing scripts.
 
-<!-- media/env.png — the environment status-bar item and the one-time setup prompt -->
+![PyneIDE managed environment setup](media/env.png)
 
 ## Data and symbols
 
@@ -154,7 +148,7 @@ Browse and download OHLCV market data from multiple providers with the built-in
 `request.security()` sources with the Symbol Map. A dedicated **Pyne** activity-bar
 view keeps your Scripts, Data, and Output in one place.
 
-<!-- media/data.png — the Symbol Browser (search + download) and the Pyne activity-bar tree -->
+![Symbol Browser and the dedicated Pyne workspace tree](media/data.png)
 
 ## Getting started
 
@@ -186,14 +180,49 @@ indicators and strategies run anywhere Python runs, independently of TradingView
 You can write Pyne code directly, or convert existing **Pine Script** to Pyne with
 the PyneSys cloud compiler. PyneIDE is the editor for both paths.
 
-## Privacy
+## Privacy and data handling
 
-PyneIDE contains **no automatic telemetry** and sends no usage data on its own.
-Two features talk to the network, both only when you ask for them: Pine
-compilation uploads your Pine source to the PyneSys cloud compiler, and
-**Report a Problem** sends an error report — only after you click it, and it
-always asks separately whether your code may go with it. Everything else —
-running, charting and debugging Pyne code — happens entirely on your machine.
+PyneIDE has **no telemetry of its own**: it never reports on you in the
+background, and it collects nothing about how you use the editor. It does talk
+to the network in a handful of well-defined places, and it is worth knowing
+exactly which ones.
+
+**Pine compilation — PyneSys cloud.** Every Pine path goes through the PyneSys
+cloud compiler: the explicit **Compile Pine** and **Convert to v6** commands,
+and — this is the one that is easy to miss — **Run and Debug as well**. Running
+a `.pine` file compiles it first, automatically and without a separate
+confirmation: if you are signed in, your Pine source is uploaded at that moment.
+(If you are not signed in, PyneIDE asks you to sign in first, and nothing is
+sent until you do; if the file has not changed since the last compile, a local
+content-hash cache answers it and there is no upload at all.)
+
+Per the PyneSys [Terms of Use](https://pynesys.io/terms) and
+[Privacy Policy](https://pynesys.io/privacy), the service **caches both the
+submitted Pine source and the generated Python** — for performance and for
+quality assurance. That cached code is tied to your account, is **not shared
+with third parties**, and is retained only while your account exists. You keep
+all rights to your code. Your account also carries the usual account and usage
+records. The linked documents are the authoritative wording — the summary here
+only tells you *when* PyneIDE triggers any of it.
+
+**Market data — third-party APIs.** Symbol lookup and OHLCV downloads go
+straight from your machine to the data provider you picked — an exchange or
+broker, through its own API, with the credentials you configured. These requests
+do **not** pass through PyneSys, and what the provider logs is governed by that
+provider's own terms. Your API keys stay in the local workdir configuration.
+
+**Report a Problem.** Fully opt-in: nothing leaves your machine until you click
+it, it asks separately whether your script may be attached, and it never reads
+your API key or broker credentials.
+
+**Downloads.** The one-time environment setup fetches `uv` from GitHub releases,
+then Python and PyneCore through it; the optional Pine language server and the
+plugin catalogue come from PyneSys (the catalogue is public — no API key, no
+account), and plugins install from PyPI.
+
+Everything else — running, charting and debugging Pyne code, and Pine editing
+support once the language server is installed — happens **entirely on your
+machine**.
 
 ## License
 
