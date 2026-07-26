@@ -38,6 +38,48 @@ function readApiTomlKey(workdir: string): string | undefined {
   }
 }
 
+/**
+ * API-key input with a clickable "create a key" title button. `showInputBox`
+ * cannot carry buttons, so the raw QuickInput API is used here: a brand-new
+ * user needs a way to reach the key page, not a URL printed as plain text.
+ */
+function promptForApiKey(initialValue: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const input = vscode.window.createInputBox();
+    input.title = 'PyneSys API Key';
+    input.prompt = `Paste your PyneSys API key — no key yet? Create one at ${KEYS_PAGE_URL}`;
+    input.value = initialValue;
+    input.password = true;
+    input.ignoreFocusOut = true;
+    input.buttons = [
+      {
+        iconPath: new vscode.ThemeIcon('link-external'),
+        tooltip: `Create an API key at ${KEYS_PAGE_URL}`,
+      },
+    ];
+    let accepted: string | undefined;
+    input.onDidChangeValue((value) => {
+      input.validationMessage = value.trim() ? undefined : 'API key must not be empty';
+    });
+    input.onDidTriggerButton(() => {
+      void vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
+    });
+    input.onDidAccept(() => {
+      if (!input.value.trim()) {
+        input.validationMessage = 'API key must not be empty';
+        return;
+      }
+      accepted = input.value;
+      input.hide();
+    });
+    input.onDidHide(() => {
+      input.dispose();
+      resolve(accepted);
+    });
+    input.show();
+  });
+}
+
 export class AuthService {
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -95,14 +137,7 @@ export class AuthService {
       if (choice === 'Use CLI Key') initialValue = cliKey;
     }
 
-    const key = await vscode.window.showInputBox({
-      title: 'PyneSys API Key',
-      prompt: `Paste your PyneSys API key (create one at ${KEYS_PAGE_URL})`,
-      value: initialValue,
-      password: true,
-      ignoreFocusOut: true,
-      validateInput: (value) => (value.trim() ? undefined : 'API key must not be empty'),
-    });
+    const key = await promptForApiKey(initialValue);
     if (!key) return false;
 
     const trimmed = key.trim();
@@ -165,10 +200,18 @@ export class AuthService {
     const existing = await this.client();
     if (existing) return existing;
     const choice = await vscode.window.showInformationMessage(
-      'PyneIDE: compiling Pine Script requires a PyneSys API key.',
-      'Sign In'
+      'PyneIDE: compiling Pine Script requires a PyneSys API key. Pyne scripts run ' +
+        'locally without one.',
+      'Sign In',
+      'Create API Key'
     );
-    if (choice !== 'Sign In') return undefined;
+    if (choice === 'Create API Key') {
+      // The key page opens, then the input box waits (ignoreFocusOut) for the
+      // key the user is about to create.
+      await vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
+    } else if (choice !== 'Sign In') {
+      return undefined;
+    }
     if (!(await this.signIn())) return undefined;
     return this.client();
   }

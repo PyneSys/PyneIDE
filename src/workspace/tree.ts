@@ -73,6 +73,14 @@ interface PluginsRootNode {
   type: 'pluginsRoot';
 }
 
+/** Call-to-action shown in place of an empty section's children — the inline
+ * section-header actions only appear on hover, so an empty tree would otherwise
+ * offer no visible next step. */
+interface HintNode {
+  type: 'hint';
+  kind: 'newScript' | 'downloadData';
+}
+
 export type PyneNode =
   | SectionNode
   | ScriptNode
@@ -81,7 +89,23 @@ export type PyneNode =
   | SymbolMapRootNode
   | OutputNode
   | CompanionNode
-  | PluginsRootNode;
+  | PluginsRootNode
+  | HintNode;
+
+const HINTS: Record<HintNode['kind'], { label: string; icon: string; tooltip: string; command: string }> = {
+  newScript: {
+    label: 'New Script…',
+    icon: 'add',
+    tooltip: 'Create a Pine or Pyne indicator, strategy or library',
+    command: 'pyneide.workspace.createScript',
+  },
+  downloadData: {
+    label: 'Download market data…',
+    icon: 'cloud-download',
+    tooltip: 'Download OHLCV data for a symbol and timeframe',
+    command: 'pyneide.dataDownloadWizard',
+  },
+};
 
 interface DataMeta {
   label: string;
@@ -167,6 +191,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.outputItem(node);
       case 'companion':
         return this.companionItem(node);
+      case 'hint':
+        return this.hintItem(node);
     }
   }
 
@@ -240,6 +266,9 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     const libraries: LibraryFolderNode[] = hasLibraries
       ? [{ type: 'libraryFolder', uri: vscode.Uri.file(libraryDir), depth: 0 }]
       : [];
+    if (libraries.length === 0 && nodes.length === 0) {
+      return [{ type: 'hint', kind: 'newScript' }];
+    }
     return [...libraries, ...nodes];
   }
 
@@ -378,12 +407,14 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
   private dataChildren(): PyneNode[] {
     const symbolMapRoot: SymbolMapRootNode = { type: 'symbolMapRoot' };
     const dir = path.join(this.workdir!, 'data');
+    const downloadHint: HintNode = { type: 'hint', kind: 'downloadData' };
     let names: string[];
     try {
       names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.ohlcv'));
     } catch {
-      return [symbolMapRoot];
+      return [symbolMapRoot, downloadHint];
     }
+    if (names.length === 0) return [symbolMapRoot, downloadHint];
     names.sort((a, b) => a.localeCompare(b));
     const dataNodes: DataNode[] = names.map((n) => ({
       type: 'data',
@@ -408,6 +439,17 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     if (this.pluginSummary === summary) return;
     this.pluginSummary = summary;
     this.emitter.fire(undefined);
+  }
+
+  /** Empty-section call-to-action leaf (see {@link HintNode}). */
+  private hintItem(node: HintNode): vscode.TreeItem {
+    const hint = HINTS[node.kind];
+    const item = new vscode.TreeItem(hint.label, vscode.TreeItemCollapsibleState.None);
+    item.iconPath = new vscode.ThemeIcon(hint.icon);
+    item.tooltip = hint.tooltip;
+    item.contextValue = 'pyneHint';
+    item.command = { command: hint.command, title: hint.label };
+    return item;
   }
 
   /** The "Symbol Map" leaf that opens the whole-map webview editor. */
@@ -765,10 +807,7 @@ export function registerWorkspaceView(
 }
 
 function nodeUri(node?: PyneNode): vscode.Uri | undefined {
-  if (node && node.type !== 'section' && node.type !== 'symbolMapRoot' && node.type !== 'pluginsRoot') {
-    return node.uri;
-  }
-  return undefined;
+  return node && 'uri' in node ? node.uri : undefined;
 }
 
 type DeletableScriptNode = ScriptNode | CompanionNode | LibraryFolderNode;
