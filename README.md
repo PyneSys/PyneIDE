@@ -165,7 +165,9 @@ view keeps your Scripts, Data, and Output in one place.
 ## Requirements
 
 - **Visual Studio Code** 1.90 or newer.
-- An internet connection for the one-time environment setup.
+- An internet connection for the one-time environment setup, and whenever a Pine
+  script compiles — every Run and Debug of a `.pine` file goes through the cloud
+  compiler unless the file is unchanged since the last compile.
 - For **Pine** compilation: a **PyneSys account and API key**
   ([app.pynesys.io](https://app.pynesys.io)). Writing, running and debugging **Pyne
   code** needs no account — it runs entirely on your machine on the open-source
