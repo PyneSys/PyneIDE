@@ -1,0 +1,55 @@
+<svg viewBox="0 0 410 370" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs><clipPath id="scrWin"><rect x="10" y="20" width="390" height="330" rx="6"/></clipPath></defs>
+<g clip-path="url(#scrWin)">
+  <rect x="10" y="20" width="390" height="330" fill="var(--vscode-editor-background, #1e1e1e)"/>
+  <rect x="10" y="20" width="26" height="330" fill="var(--vscode-activityBar-background, #333333)"/>
+  <path d="M17 42 l6 -4 6 4 -6 4 z" fill="var(--vscode-activityBar-foreground, #ffffff)" fill-opacity="0.6"/>
+  <rect x="36" y="20" width="110" height="330" fill="var(--vscode-sideBar-background, #252526)"/>
+  <text x="46" y="42" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="8" letter-spacing="0.6" fill="var(--vscode-sideBarTitle-foreground, #cccccc)" fill-opacity="0.6">PYNE: WORKSPACE</text>
+  <rect x="46" y="60" width="46" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.18"/>
+  <rect x="56" y="76" width="58" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.12"/>
+  <rect x="56" y="92" width="50" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.12"/>
+  <rect x="46" y="112" width="38" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.18"/>
+  <rect x="56" y="128" width="62" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.12"/>
+  <rect x="146" y="20" width="254" height="24" fill="var(--vscode-editorGroupHeader-tabsBackground, #252526)"/>
+  <rect x="10" y="332" width="390" height="18" fill="var(--vscode-statusBar-background, #007acc)"/>
+  <rect x="10" y="20" width="390" height="330" fill="var(--vscode-editor-background, #1e1e1e)" fill-opacity="0.35"/>
+</g>
+
+<g>
+  <rect x="80" y="52" width="250" height="230" rx="5" fill="var(--vscode-quickInput-background, #252526)" stroke="var(--vscode-widget-border, #454545)"/>
+  <text x="92" y="72" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="8.5" letter-spacing="0.4" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.85">New Script</text>
+  <rect x="92" y="80" width="226" height="20" rx="2" fill="var(--vscode-input-background, #3c3c3c)" stroke="var(--vscode-focusBorder, #007fd4)"/>
+  <rect x="100" y="86" width="1.5" height="9" fill="var(--vscode-editorCursor-foreground, #aeafad)"/>
+  <text x="108" y="94" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="8.5" fill="var(--vscode-input-placeholderForeground, #cccccc)" fill-opacity="0.55">Pick a script type</text>
+
+  <rect x="86" y="108" width="238" height="24" rx="3" fill="var(--vscode-list-activeSelectionBackground, #04395e)"/>
+  <rect x="94" y="115" width="9" height="10" rx="2" fill="var(--vscode-charts-orange, #d18616)"/>
+  <text x="110" y="124" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-list-activeSelectionForeground, #ffffff)">Pine Indicator</text>
+  <text x="184" y="124" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-list-activeSelectionForeground, #ffffff)" fill-opacity="0.65">Pine Script v6 · .pine</text>
+
+  <rect x="94" y="139" width="9" height="10" rx="2" fill="var(--vscode-charts-blue, #3794ff)"/>
+  <text x="110" y="148" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Pyne Indicator</text>
+  <text x="184" y="148" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.6">Pyne code · .py</text>
+
+  <rect x="94" y="163" width="9" height="10" rx="2" fill="var(--vscode-charts-orange, #d18616)"/>
+  <text x="110" y="172" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Pine Strategy</text>
+  <text x="184" y="172" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.6">Pine Script v6 · .pine</text>
+
+  <rect x="94" y="187" width="9" height="10" rx="2" fill="var(--vscode-charts-blue, #3794ff)"/>
+  <text x="110" y="196" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Pyne Strategy</text>
+  <text x="184" y="196" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.6">Pyne code · .py</text>
+
+  <rect x="94" y="211" width="9" height="10" rx="2" fill="var(--vscode-charts-orange, #d18616)"/>
+  <text x="110" y="220" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Pine Library</text>
+  <text x="184" y="220" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.6">Pine Script v6 · .pine</text>
+
+  <rect x="94" y="235" width="9" height="10" rx="2" fill="var(--vscode-charts-blue, #3794ff)"/>
+  <text x="110" y="244" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Pyne Library</text>
+  <text x="184" y="244" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.6">Pyne code · .py</text>
+
+  <text x="92" y="268" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="7.5" fill="var(--vscode-descriptionForeground, #cccccc)" fill-opacity="0.55">Both run on the same PyneCore runtime</text>
+</g>
+
+<rect x="10" y="20" width="390" height="330" rx="6" fill="none" stroke="var(--vscode-panel-border, #454545)"/>
+</svg>

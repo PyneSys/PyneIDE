@@ -53,6 +53,9 @@ export class EnvManager {
 
   private setState(state: EnvState): void {
     this.stateValue = state;
+    // The walkthrough's setup step completes off this key: an environment that
+    // is already working must show up as done, not as a pending first step.
+    void vscode.commands.executeCommand('setContext', 'pyneide.envReady', state.kind === 'ready');
     this.onDidChangeStateEmitter.fire(state);
   }
 

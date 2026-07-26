@@ -90,6 +90,25 @@ export class AuthService {
     this.output.appendLine(message);
   };
 
+  /**
+   * Publish whether a key is stored as a context key. The walkthrough's Pine
+   * step completes off it, so an already-signed-in user must not be asked to
+   * sign in again. `onDidChange` also carries the state over from other windows.
+   */
+  register(): void {
+    void this.refreshSignedInContext();
+    this.context.subscriptions.push(
+      this.context.secrets.onDidChange((e) => {
+        if (e.key === SECRET_KEY) void this.refreshSignedInContext();
+      })
+    );
+  }
+
+  private async refreshSignedInContext(): Promise<void> {
+    const key = await this.getKey();
+    void vscode.commands.executeCommand('setContext', 'pyneide.signedIn', key !== undefined);
+  }
+
   baseUrl(): string {
     return (
       vscode.workspace.getConfiguration('pyneide').get<string>('apiBaseUrl')?.trim() ||

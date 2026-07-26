@@ -51,6 +51,8 @@ import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
 const UPDATE_PROMPTED_KEY = 'pyneide.updatePromptedFor';
+/** Must match `contributes.walkthroughs[].id` in package.json. */
+const WALKTHROUGH_ID = 'pyneide.gettingStarted';
 
 /** Stable tag of the pinned target, so an outdated-env prompt fires once per new pin. */
 function pinnedTargetTag(): string {
@@ -69,6 +71,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const compileOutput = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Compiler'));
   const auth = new AuthService(context, compileOutput);
+  auth.register();
 
   const pineLsOutput = logHub.wrap(vscode.window.createOutputChannel('Pine Language Server'));
   const pineLs = new PineLsService(context, pineLsOutput);
@@ -94,6 +97,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.showEnvironmentLog', () => output.show()),
     vscode.commands.registerCommand('pyneide.createWorkspace', () =>
       initProjectCommand(context, manager, output)
+    ),
+    // The walkthrough is otherwise only reachable from the Welcome page, which
+    // most users never open again after the first launch.
+    vscode.commands.registerCommand('pyneide.openWalkthrough', () =>
+      vscode.commands.executeCommand(
+        'workbench.action.openWalkthrough',
+        `${context.extension.id}#${WALKTHROUGH_ID}`
+      )
     )
   );
 

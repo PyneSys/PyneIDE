@@ -1,0 +1,54 @@
+<svg viewBox="0 0 410 370" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs><clipPath id="prjWin"><rect x="10" y="20" width="390" height="330" rx="6"/></clipPath></defs>
+<g clip-path="url(#prjWin)">
+  <rect x="10" y="20" width="390" height="330" fill="var(--vscode-editor-background, #1e1e1e)"/>
+  <rect x="10" y="20" width="30" height="330" fill="var(--vscode-activityBar-background, #333333)"/>
+  <rect x="40" y="20" width="160" height="330" fill="var(--vscode-sideBar-background, #252526)"/>
+
+  <rect x="10" y="52" width="2" height="20" fill="var(--vscode-activityBar-activeBorder, #ffffff)"/>
+  <rect x="19" y="32" width="12" height="12" rx="2" fill="var(--vscode-activityBar-inactiveForeground, #cccccc)" fill-opacity="0.3"/>
+  <path d="M20 58 l6 -4 6 4 -6 4 z" fill="var(--vscode-activityBar-foreground, #ffffff)" fill-opacity="0.9"/>
+  <path d="M20 66 l6 -4 6 4 -6 4 z" fill="var(--vscode-activityBar-foreground, #ffffff)" fill-opacity="0.45"/>
+  <rect x="19" y="86" width="12" height="12" rx="2" fill="var(--vscode-activityBar-inactiveForeground, #cccccc)" fill-opacity="0.3"/>
+  <rect x="19" y="110" width="12" height="12" rx="2" fill="var(--vscode-activityBar-inactiveForeground, #cccccc)" fill-opacity="0.3"/>
+
+  <text x="50" y="42" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="8" letter-spacing="0.6" fill="var(--vscode-sideBarTitle-foreground, #cccccc)" fill-opacity="0.85">PYNE: WORKSPACE</text>
+
+  <path d="M52 58 l5 4 -5 4 z" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.7" transform="rotate(90 54.5 62)"/>
+  <text x="64" y="65" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Scripts</text>
+  <rect x="72" y="76" width="8" height="9" rx="1.5" fill="var(--vscode-charts-blue, #3794ff)" fill-opacity="0.7"/>
+  <text x="85" y="84" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.85">demo.py</text>
+  <rect x="72" y="94" width="8" height="9" rx="1.5" fill="var(--vscode-charts-orange, #d18616)" fill-opacity="0.7"/>
+  <text x="85" y="102" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.85">strategy.pine</text>
+
+  <path d="M52 116 l5 4 -5 4 z" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.7" transform="rotate(90 54.5 120)"/>
+  <text x="64" y="123" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Data</text>
+  <rect x="72" y="134" width="8" height="9" rx="1.5" fill="var(--vscode-charts-green, #89d185)" fill-opacity="0.7"/>
+  <text x="85" y="142" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.85">BYBIT BTC/USDT 1D</text>
+
+  <path d="M52 156 l5 4 -5 4 z" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.7"/>
+  <text x="64" y="163" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Outputs</text>
+  <path d="M52 178 l5 4 -5 4 z" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.7"/>
+  <text x="64" y="185" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-foreground, #cccccc)">Plugins</text>
+
+  <rect x="200" y="20" width="200" height="24" fill="var(--vscode-editorGroupHeader-tabsBackground, #252526)"/>
+  <rect x="200" y="20" width="80" height="24" fill="var(--vscode-tab-activeBackground, #1e1e1e)"/>
+  <rect x="210" y="29" width="8" height="9" rx="1.5" fill="var(--vscode-charts-blue, #3794ff)" fill-opacity="0.6"/>
+  <rect x="224" y="30" width="42" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.35"/>
+
+  <rect x="212" y="62" width="40" height="6" rx="3" fill="var(--vscode-charts-purple, #b180d7)" fill-opacity="0.6"/>
+  <rect x="258" y="62" width="66" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.22"/>
+  <rect x="212" y="80" width="52" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.22"/>
+  <rect x="224" y="98" width="48" height="6" rx="3" fill="var(--vscode-charts-blue, #3794ff)" fill-opacity="0.5"/>
+  <rect x="278" y="98" width="76" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.22"/>
+  <rect x="224" y="116" width="94" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.22"/>
+  <rect x="224" y="134" width="62" height="6" rx="3" fill="var(--vscode-foreground, #cccccc)" fill-opacity="0.22"/>
+
+  <rect x="10" y="332" width="390" height="18" fill="var(--vscode-statusBar-background, #007acc)"/>
+  <text x="315" y="345" font-family="var(--vscode-font-family, system-ui, sans-serif)" font-size="9" fill="var(--vscode-statusBar-foreground, #ffffff)">PyneIDE</text>
+  <path d="M303 341 l3 3 5 -6" stroke="var(--vscode-statusBar-foreground, #ffffff)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</g>
+
+<rect x="40" y="20" width="160" height="330" fill="none" stroke="var(--vscode-focusBorder, #007fd4)" stroke-width="1.5"/>
+<rect x="10" y="20" width="390" height="330" rx="6" fill="none" stroke="var(--vscode-panel-border, #454545)"/>
+</svg>

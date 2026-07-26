@@ -266,6 +266,11 @@ export class EnvStatusBar {
       items.push(
         { label: 'Help', kind: vscode.QuickPickItemKind.Separator },
         {
+          label: '$(rocket) Get Started',
+          description: 'Setup, first run, debugging and Pine compilation in seven steps',
+          action: () => void vscode.commands.executeCommand('pyneide.openWalkthrough'),
+        },
+        {
           label: '$(report) Report a Problem…',
           description: 'Send an error report to the PyneIDE author',
           action: () => void vscode.commands.executeCommand('pyneide.reportProblem'),

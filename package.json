@@ -65,6 +65,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.openWalkthrough",
+        "title": "Get Started",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.showEnvironmentLog",
         "title": "Show Environment Log",
         "category": "PyneIDE"
@@ -620,7 +625,111 @@
       {
         "view": "pyneide.workspace",
         "when": "!pyneide.hasWorkdir",
-        "contents": "No Pyne workspace found in this folder.\n[Initialize Pyne Project](command:pyneide.createWorkspace)"
+        "contents": "No Pyne workspace found in this folder.\n[Initialize Pyne Project](command:pyneide.createWorkspace)\n[Get Started](command:pyneide.openWalkthrough)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "pyneide.gettingStarted",
+        "title": "Get Started with PyneIDE",
+        "description": "Set up the runtime, scaffold a project, and run your first indicator or strategy on a real chart — then step through it bar by bar.",
+        "featuredFor": [
+          "**/*.pine",
+          "**/*.psc"
+        ],
+        "steps": [
+          {
+            "id": "environment",
+            "title": "Set up the Pyne runtime",
+            "description": "PyneIDE brings its own Python. It downloads uv, Python and the PyneCore runtime into extension storage — no system Python, no Microsoft Python extension, nothing to configure.\nIt offers this by itself the first time you need it, or you can start it now.\n[Set Up Environment](command:pyneide.setupEnvironment)",
+            "media": {
+              "svg": "media/walkthrough/environment.svg",
+              "altText": "A VS Code window with a notification showing the one-time environment setup progress, and the PyneIDE status bar item."
+            },
+            "completionEvents": [
+              "onContext:pyneide.envReady",
+              "onCommand:pyneide.setupEnvironment"
+            ]
+          },
+          {
+            "id": "project",
+            "title": "Initialize a Pyne project",
+            "description": "Scaffold a workdir with a runnable demo script and sample data. Scripts, data, outputs and plugins all appear in the Pyne view in the Activity Bar.\n[Initialize Pyne Project](command:pyneide.createWorkspace)",
+            "media": {
+              "svg": "media/walkthrough/project.svg",
+              "altText": "The Pyne view in the Activity Bar with Scripts, Data, Outputs and Plugins sections and a scaffolded demo script."
+            },
+            "completionEvents": [
+              "onContext:pyneide.hasWorkdir",
+              "onCommand:pyneide.createWorkspace"
+            ]
+          },
+          {
+            "id": "run",
+            "title": "Run it on a chart",
+            "description": "Open a script and press Run above its entry point, or use the Run action in the Pyne view. The run streams onto a candlestick chart with faithful Pine plots; strategies also get trade markers, an equity curve and Trades / Stats tables.\n[Open the Pyne View](command:workbench.view.extension.pyneide)",
+            "media": {
+              "svg": "media/walkthrough/run.svg",
+              "altText": "A script in the editor next to a candlestick chart with an overlay plot, volume bars and a results table."
+            },
+            "completionEvents": [
+              "onCommand:pyneide.runScript",
+              "onCommand:pyneide.workspace.runScript"
+            ]
+          },
+          {
+            "id": "debug",
+            "title": "Debug it bar by bar",
+            "description": "Set a breakpoint in your Pine or Pyne file and press Debug. Step line by line or bar by bar, inspect the current bar's OHLCV in the Pyne scope, and watch series history such as close[1] — in Pine terms, not the generated Python.\n[Open the Pyne View](command:workbench.view.extension.pyneide)",
+            "media": {
+              "svg": "media/walkthrough/debug.svg",
+              "altText": "A paused debug session: a breakpoint in the editor gutter, the debug toolbar with a next-bar action, the paused bar marked on the chart, and the Pyne scope showing close and close[1]."
+            },
+            "completionEvents": [
+              "onCommand:pyneide.debugScript",
+              "onCommand:pyneide.workspace.debugScript"
+            ]
+          },
+          {
+            "id": "script",
+            "title": "Write your own script",
+            "description": "Create an indicator, strategy or library — as Pine Script (.pine) or as Pyne code (a @pyne .py file). Both run on the same PyneCore runtime, and libraries land in the TradingView-compatible versioned layout.\n[New Script…](command:pyneide.workspace.createScript)",
+            "media": {
+              "svg": "media/walkthrough/script.svg",
+              "altText": "The New Script quick pick listing Pine and Pyne indicator, strategy and library templates."
+            },
+            "completionEvents": [
+              "onCommand:pyneide.workspace.createScript"
+            ]
+          },
+          {
+            "id": "data",
+            "title": "Bring your own market data",
+            "description": "Search symbols across providers and download OHLCV data into the workdir, then inspect it in a read-only table or preview it on a chart. The Symbol Map points request.security() at the right source.\n[Download Data…](command:pyneide.dataDownloadWizard)\n[Open Symbol Browser](command:pyneide.openSymbolBrowser)",
+            "media": {
+              "svg": "media/walkthrough/data.svg",
+              "altText": "The Symbol Browser searching for BTC across providers, with a download in progress into the workdir."
+            },
+            "completionEvents": [
+              "onCommand:pyneide.dataDownloadWizard",
+              "onCommand:pyneide.openSymbolBrowser"
+            ]
+          },
+          {
+            "id": "pine",
+            "title": "Compile Pine Script",
+            "description": "Running a .pine file compiles it through the PyneSys cloud compiler and caches the result, so unchanged scripts never re-compile. That needs a PyneSys API key; Pyne code runs locally without one. Older sources get a free v4/v5 to v6 conversion.\n[Sign In to PyneSys](command:pyneide.signIn)",
+            "media": {
+              "svg": "media/walkthrough/pine.svg",
+              "altText": "A .pine file compiled through the PyneSys cloud compiler into a chart, with the API key input below."
+            },
+            "completionEvents": [
+              "onContext:pyneide.signedIn",
+              "onCommand:pyneide.signIn",
+              "onCommand:pyneide.compilePine"
+            ]
+          }
+        ]
       }
     ],
     "breakpoints": [
