@@ -7,20 +7,50 @@ import type { Logger } from './constants';
 const MAX_REDIRECTS = 5;
 
 /**
+ * Socket inactivity timeout. A connection that never completes, or a server
+ * that accepts the socket and then goes silent, produces no 'error' and no
+ * 'end' event at all, so without this the promise would never settle and a
+ * stuck setup would hang forever instead of failing.
+ */
+export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+
+/**
  * Download a URL to a file using node:https. In the VSCode extension host the
  * http/https modules are proxy-patched (http.proxy / http.proxySupport), so
  * this honours the user's proxy settings without extra work.
  */
 export function downloadFile(url: string, dest: string, log: Logger): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let file: fs.WriteStream | undefined;
+
+    const succeed = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+    const fail = (err: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      file?.destroy();
+      fs.rmSync(dest, { force: true });
+      reject(err);
+    };
+
     const request = (target: string, redirectsLeft: number): void => {
-      https
-        .get(target, { headers: { 'User-Agent': 'PyneIDE' } }, (res) => {
+      const req = https.get(
+        target,
+        { headers: { 'User-Agent': 'PyneIDE' }, timeout: DOWNLOAD_IDLE_TIMEOUT_MS },
+        (res) => {
           const status = res.statusCode ?? 0;
           if (status >= 300 && status < 400 && res.headers.location) {
             res.resume();
             if (redirectsLeft <= 0) {
-              reject(new Error(`Too many redirects while downloading ${url}`));
+              fail(new Error(`Too many redirects while downloading ${url}`));
               return;
             }
             request(new URL(res.headers.location, target).toString(), redirectsLeft - 1);
@@ -28,23 +58,26 @@ export function downloadFile(url: string, dest: string, log: Logger): Promise<vo
           }
           if (status !== 200) {
             res.resume();
-            reject(new Error(`Download failed with HTTP ${status}: ${target}`));
+            fail(new Error(`Download failed with HTTP ${status}: ${target}`));
             return;
           }
-          const file = fs.createWriteStream(dest);
+          file = fs.createWriteStream(dest);
           res.pipe(file);
-          file.on('finish', () => file.close(() => resolve()));
-          file.on('error', (err) => {
-            fs.rmSync(dest, { force: true });
-            reject(err);
-          });
-          res.on('error', (err) => {
-            file.destroy();
-            fs.rmSync(dest, { force: true });
-            reject(err);
-          });
-        })
-        .on('error', reject);
+          file.on('finish', () => file?.close(() => succeed()));
+          file.on('error', fail);
+          res.on('error', fail);
+        }
+      );
+      req.on('timeout', () => {
+        req.destroy();
+        fail(
+          new Error(
+            `Download timed out: no data for ${Math.round(DOWNLOAD_IDLE_TIMEOUT_MS / 1000)}s ` +
+              `from ${target}`
+          )
+        );
+      });
+      req.on('error', fail);
     };
     log(`Downloading ${url}`);
     request(url, MAX_REDIRECTS);
