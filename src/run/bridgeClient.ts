@@ -239,7 +239,13 @@ export class BridgeRun {
   }
 
   static start(opts: BridgeRunOptions): BridgeRun {
-    const args = ['-X', 'utf8', '-m', 'pyneide_bridge', '--data', opts.data, '--workdir', opts.workdir];
+    const args = ['-X', 'utf8'];
+    // CPython freezes part of the stdlib into the binary, and pydevd cannot map
+    // breakpoints into `<frozen ...>` code — it detects this and prints a
+    // four-line warning on every attach. The flag costs a little interpreter
+    // startup, so it only goes on the runs that actually carry a debugger.
+    if (opts.debugpyPort !== undefined) args.push('-X', 'frozen_modules=off');
+    args.push('-m', 'pyneide_bridge', '--data', opts.data, '--workdir', opts.workdir);
     if (opts.script) args.push('--script', opts.script);
     if (opts.dataOnly) args.push('--data-only');
     if (opts.timeFrom !== undefined) args.push('--time-from', String(opts.timeFrom));

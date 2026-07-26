@@ -84,6 +84,15 @@ const BREAKPOINT_OVERLAY_NAME = 'PyneBreakpoint';
 const TRADE_MARKER_INDICATOR_NAME = 'PyneTradeMarkers';
 const BREAKPOINT_CLICK_DRAG_THRESHOLD_PX = 4;
 
+/**
+ * Short name for the figure-less layers that paint straight onto the canvas —
+ * they have nothing to say in the chart legend, and an empty name is the only
+ * way to say so. `IndicatorTooltipView` takes its tooltip styles from the chart
+ * store, never from the indicator, so a per-indicator `tooltip.showRule` is
+ * silently ignored; a layer with no name and no figures is skipped instead.
+ */
+const NO_LEGEND = '';
+
 interface BreakpointOverlayData extends ChartBreakpointTarget {}
 
 function formatMeasureDuration(durationMs: number): string {
@@ -323,6 +332,9 @@ let breakpointSelectionLabel: string | undefined;
 let breakpointPointerGesture:
   | { pointerId: number; startX: number; startY: number; dragged: boolean }
   | undefined;
+/** Chart-wide, not per-run: a run rebuilds the chart from scratch, and having
+ * the legend come back every time would defeat the toggle. */
+let legendVisible = true;
 
 const container = document.getElementById('chart') as HTMLDivElement;
 
@@ -338,11 +350,27 @@ function isDark(): boolean {
   );
 }
 
+/**
+ * Legend styles, split out because the toolbar toggle re-applies them on the
+ * live chart. `showRule` is a chart-store style: the tooltip views read it from
+ * there, so switching it off hides the OHLCV block and every plot's values in
+ * one go — the whole top-left overlay, not just parts of it.
+ */
+function legendStyles(): DeepPartial<Styles> {
+  const text = cssVar('--vscode-editor-foreground', isDark() ? '#ccc' : '#333');
+  const showRule = legendVisible ? 'always' : 'none';
+  return {
+    candle: { tooltip: { showRule, legend: { color: text } } },
+    indicator: { tooltip: { showRule, legend: { color: text } } },
+  };
+}
+
 function chartStyles(): DeepPartial<Styles> {
   const dark = isDark();
   const text = cssVar('--vscode-editor-foreground', dark ? '#ccc' : '#333');
   const grid = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
   const axisLine = dark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
+  const legend = legendStyles();
   return {
     grid: {
       horizontal: { color: grid },
@@ -350,11 +378,9 @@ function chartStyles(): DeepPartial<Styles> {
     },
     candle: {
       priceMark: { last: { show: false } },
-      tooltip: { legend: { color: text } },
+      ...legend.candle,
     },
-    indicator: {
-      tooltip: { legend: { color: text } },
-    },
+    indicator: legend.indicator,
     xAxis: {
       axisLine: { color: axisLine },
       tickText: { color: text },
@@ -866,10 +892,9 @@ function rebuildPlotIndicators(st: RunState): void {
     overlay: boolean
   ) => ({
     name,
-    shortName: '',
+    shortName: NO_LEGEND,
     figures: [],
     calc: () => [],
-    styles: { tooltip: { showRule: 'none' } },
     draw: (params: IndicatorDrawParams) => {
       const env = drawEnv(st, params, overlay);
       drawArrows(env, arrows);
@@ -882,10 +907,9 @@ function rebuildPlotIndicators(st: RunState): void {
    * paint it with destination-over, i.e. behind the candles and plots. */
   const makeBgDefinition = (name: string, metas: PlotMetaRecord[]) => ({
     name,
-    shortName: name,
+    shortName: NO_LEGEND,
     figures: [],
     calc: () => [],
-    styles: { tooltip: { showRule: 'none' } },
     draw: (params: IndicatorDrawParams) => {
       drawBackgrounds(drawEnv(st, params, false), metas);
       return false;
@@ -901,10 +925,9 @@ function rebuildPlotIndicators(st: RunState): void {
   if (barcolorMetas.length) {
     registerIndicator({
       name: 'PyneBarcolor',
-      shortName: 'PyneBarcolor',
+      shortName: NO_LEGEND,
       figures: [],
       calc: () => [],
-      styles: { tooltip: { showRule: 'none' } },
       draw: (params: IndicatorDrawParams) => {
         drawBarcolors(drawEnv(st, params, true), barcolorMetas);
         return false;
@@ -1032,10 +1055,9 @@ function ensureDrawingIndicators(st: RunState): void {
   const xres = makeXResolver(st.bars, st.tsToIndex);
   const makeDef = (name: string, overlay: boolean) => ({
     name,
-    shortName: name,
+    shortName: NO_LEGEND,
     figures: [],
     calc: () => [],
-    styles: { tooltip: { showRule: 'none' } },
     draw: (params: IndicatorDrawParams) => {
       drawDrawings(drawEnv(st, params, overlay), st.drawings, xres, st.start.overlay);
       return false;
@@ -1108,10 +1130,9 @@ function ensureTradeMarkerIndicator(st: RunState): void {
   if (want && !st.tradeMarkerIndicatorId) {
     registerIndicator({
       name: TRADE_MARKER_INDICATOR_NAME,
-      shortName: TRADE_MARKER_INDICATOR_NAME,
+      shortName: NO_LEGEND,
       figures: [],
       calc: () => [],
-      styles: { tooltip: { showRule: 'none' } },
       draw: (params: IndicatorDrawParams) => {
         drawTradeMarkers(drawEnv(st, params, true), tradeMarkerIndex(st), markerTheme());
         return false;
@@ -1703,6 +1724,7 @@ tabBodyEl?.addEventListener('click', (event) => {
 
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
+const tbLegendEl = document.getElementById('tb-legend') as HTMLButtonElement | null;
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
 const tbBreakpointsEl = document.getElementById('tb-breakpoints') as HTMLButtonElement | null;
@@ -1927,6 +1949,25 @@ tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   togglePlotsPopup();
+});
+
+/** Reflect `legendVisible` on the button and, when a chart exists, on it. The
+ * button reads as "hiding is on", so it lights up with the legend switched off
+ * — that is the state worth signalling; a legend on screen speaks for itself. */
+function applyLegendVisibility(): void {
+  state?.chart.setStyles(legendStyles());
+  const label = legendVisible ? 'Hide the chart legend' : 'Show the chart legend';
+  if (tbLegendEl) {
+    tbLegendEl.classList.toggle('active', !legendVisible);
+    tbLegendEl.setAttribute('aria-pressed', String(!legendVisible));
+    tbLegendEl.title = label;
+    tbLegendEl.setAttribute('aria-label', label);
+  }
+}
+
+tbLegendEl?.addEventListener('click', () => {
+  legendVisible = !legendVisible;
+  applyLegendVisibility();
 });
 
 tbBreakpointsEl?.addEventListener('click', (event) => {

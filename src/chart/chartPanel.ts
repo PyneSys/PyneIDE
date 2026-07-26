@@ -368,6 +368,9 @@ export class ChartPanel {
     color: var(--vscode-button-foreground, #fff);
     background: var(--vscode-button-background, #0e639c);
   }
+  /* Struck-through variant of an icon, drawn only while the button is on. */
+  #toolbar .icon-button .slash { display: none; }
+  #toolbar .icon-button.active .slash { display: inline; }
   #toolbar .count-badge {
     position: absolute; right: 1px; top: 1px; min-width: 11px; height: 11px;
     box-sizing: border-box; padding: 0 2px; border-radius: 6px;
@@ -601,6 +604,14 @@ export class ChartPanel {
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="m10 3-7 3.6 7 3.6 7-3.6L10 3Z"></path>
         <path d="m4.5 9.5-1.5.8 7 3.7 7-3.7-1.5-.8M4.5 13.2l-1.5.8 7 3.5 7-3.5-1.5-.8"></path>
+      </svg>
+    </button>
+    <button id="tb-legend" class="icon-button" title="Hide the chart legend"
+            aria-label="Hide the chart legend" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="2.5" y="4" width="15" height="12" rx="1.5"></rect>
+        <path d="M5.5 8h3M5.5 11.5h3M11 8h3.5M11 11.5h3.5"></path>
+        <path class="slash" d="M4 16 16 4"></path>
       </svg>
     </button>
   </div>
