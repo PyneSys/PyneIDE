@@ -18,6 +18,8 @@ interface CacheEntry {
 const CACHE_KEY = 'pyneide.compileCache';
 const LOCK_RETRY_MS = 1500;
 const LOCK_RETRIES = 3;
+/** `//@version` sits in the head of the file; no need to scan the whole text. */
+const VERSION_HEAD_CHARS = 4096;
 
 /**
  * Compiles .pine documents through the PyneSys API: serial queue (the API
@@ -46,7 +48,29 @@ export class CompileService {
       vscode.workspace.onDidChangeTextDocument((e) => this.diagnostics.delete(e.document.uri)),
       vscode.commands.registerCommand('pyneide.compilePine', () => this.compileActiveEditor()),
       vscode.commands.registerCommand('pyneide.convertToV6', () => this.convertActiveEditor()),
-      vscode.commands.registerCommand('pyneide.showUsage', () => this.showUsage())
+      vscode.commands.registerCommand('pyneide.showUsage', () => this.showUsage()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.updateConvertContextKey()),
+      vscode.workspace.onDidChangeTextDocument((e) => {
+        if (e.document === vscode.window.activeTextEditor?.document) this.updateConvertContextKey();
+      })
+    );
+    this.updateConvertContextKey();
+  }
+
+  /**
+   * Drives `pyneide.canConvertToV6`, which hides the Convert action for
+   * scripts it cannot help with: already-v6 sources and v1-v3 (unsupported).
+   */
+  private updateConvertContextKey(): void {
+    const doc = vscode.window.activeTextEditor?.document;
+    const version =
+      doc?.languageId === 'pine'
+        ? detectPineVersion(doc.getText().slice(0, VERSION_HEAD_CHARS))
+        : undefined;
+    void vscode.commands.executeCommand(
+      'setContext',
+      'pyneide.canConvertToV6',
+      version !== undefined && version >= 4 && version < 6
     );
   }
 
@@ -105,6 +129,13 @@ export class CompileService {
     }
     if (doc.isDirty) {
       await doc.save();
+    }
+    const version = detectPineVersion(doc.getText().slice(0, VERSION_HEAD_CHARS));
+    if (version !== undefined && version >= 6) {
+      void vscode.window.showInformationMessage(
+        `PyneIDE: this script is already Pine v${version} — nothing to convert.`
+      );
+      return;
     }
     await this.convertActiveToV6(doc);
   }

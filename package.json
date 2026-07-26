@@ -344,6 +344,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "pyneide.convertToV6",
+          "when": "resourceLangId == pine && pyneide.canConvertToV6"
+        }
+      ],
       "editor/lineNumber/context": [
         {
           "command": "pyneide.selectBreakpointBar",
@@ -359,7 +365,7 @@
         },
         {
           "command": "pyneide.convertToV6",
-          "when": "resourceLangId == pine",
+          "when": "resourceLangId == pine && pyneide.canConvertToV6",
           "group": "pyneide@1"
         },
         {
