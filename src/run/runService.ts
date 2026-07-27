@@ -293,17 +293,32 @@ export class RunService {
   }
 
   /**
-   * Re-pick the OHLCV data bound to a script (its source path) without running.
-   * The choice is remembered, so the next run/chart-open uses it silently; if a
-   * chart is open for the script (and no run is streaming to it) its preview
-   * reloads on the new data. Returns the picked data name, or undefined.
+   * Re-pick the OHLCV data bound to a script (its source path). The choice is
+   * remembered, so every later run/chart-open uses it silently. An open chart
+   * follows the new data immediately: one that already shows computed results
+   * (or is running right now) is re-run on it — the same treatment an input
+   * save gets, since a bars-only preview would silently drop the plots and
+   * trades — while a script that never ran gets the raw-candle preview.
+   * Returns the picked data name, or undefined.
    */
   async changeRunData(uri?: vscode.Uri): Promise<string | undefined> {
     const ctx = await this.resolveChartContext(uri);
     if (!ctx) return undefined;
     const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
+    const previous = getRememberedData(this.context, ctx.workdir, chartKey);
     const data = await pickRunData(this.context, ctx.workdir, chartKey, ctx.pythonBin, this.output);
-    if (data && this.activeChartKey !== chartKey) {
+    if (!data) return undefined;
+
+    const hasResults = !!resolveScriptOutputPair(ctx.workdir, ctx.doc.uri.fsPath);
+    const chartOpen = this.chartManager?.hasOpenChart(chartKey) === true;
+    // Re-picking the very same feed must not recompute a chart that is already
+    // showing exactly that result.
+    if (chartOpen && data === previous && hasResults && this.activeChartKey !== chartKey) {
+      return data;
+    }
+    if (chartOpen && (hasResults || this.activeChartKey === chartKey)) {
+      await this.rerunOpenChart(chartKey);
+    } else if (this.activeChartKey !== chartKey) {
       this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
     }
     return data;
@@ -443,8 +458,9 @@ export class RunService {
     await this.executeRun(prepared);
   }
 
-  /** Re-run a visible script chart after its canonical input TOML was saved. */
-  async refreshChartAfterInputsSave(chartKey: string): Promise<void> {
+  /** Re-run a visible script chart after something its result depends on
+   * changed (input TOML saved, bound OHLCV data re-picked). */
+  async rerunOpenChart(chartKey: string): Promise<void> {
     if (
       this.debugSession ||
       this.activeRunIsDebug ||
@@ -454,7 +470,7 @@ export class RunService {
     }
 
     if (this.activeRun) {
-      // Never interrupt an unrelated script just because another form was saved.
+      // Never interrupt an unrelated script just because another chart changed.
       if (this.activeChartKey !== chartKey) return;
       await this.drainActiveRun();
     }

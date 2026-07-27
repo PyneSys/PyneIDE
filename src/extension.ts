@@ -215,7 +215,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context,
     manager,
     output,
-    (chartKey) => runService.refreshChartAfterInputsSave(chartKey)
+    (chartKey) => runService.rerunOpenChart(chartKey)
   );
   context.subscriptions.push(
     registerReportCommand(context, { context, manager, pineLs }, auth, compileOutput),

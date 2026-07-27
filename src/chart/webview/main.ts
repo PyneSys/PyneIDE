@@ -324,6 +324,28 @@ interface RunState {
   showVolume: boolean;
   volumeIndicatorId?: string;
   breakpointOverlays: Map<number, { id: string; enabled: boolean; count: number }>;
+  /** Where the view sat before this run replaced the chart (see captureView). */
+  viewAnchor?: ViewAnchor;
+}
+
+/**
+ * Zoom + scroll position carried across a chart rebuild. A re-run of the same
+ * script on the same feed (inputs saved) must change only the data under the
+ * view, not where the user is looking — but every run disposes the chart, and
+ * `resetData()` snaps the viewport back to the newest bar on every tick, so the
+ * position has to be captured before the rebuild and re-applied after each
+ * reset.
+ */
+interface ViewAnchor {
+  /** Bar width in px == the zoom level. */
+  barSpace: number;
+  /** Timestamp of the bar at the right edge; null when the view was following
+   * the newest bar, in which case only the zoom is restored. */
+  rightTimestamp: number | null;
+  /** The x pixel that bar sat on. `scrollToDataIndex` only lands within a bar
+   * of the original position — and always to the same side, so a chart re-run
+   * ten times would walk ten bars — so the pixel is what makes it exact. */
+  rightX: number | undefined;
 }
 
 let state: RunState | undefined;
@@ -435,13 +457,194 @@ function rowToBar(row: BarRow): PyneBar {
   };
 }
 
+/** Identity of the bars a run draws: the same script re-run on the same feed
+ * keeps its view, a different symbol/timeframe starts fresh. */
+function feedId(start: StartEvent): string {
+  const s = start.syminfo;
+  return `${s.tickerid ?? s.ticker ?? ''}|${s.period ?? ''}`;
+}
+
+/**
+ * Snapshot the viewport so the next run can restore it. Undefined whenever
+ * restoring would be wrong (nothing drawn yet, or the bars themselves change).
+ */
+function captureView(prev: RunState, next: StartEvent): ViewAnchor | undefined {
+  if (!prev.bars.length || feedId(prev.start) !== feedId(next)) return undefined;
+  const range = prev.chart.getVisibleRange();
+  // `to` is clamped to the data, so `to >= bars.length` means the newest bar
+  // still sits at the right edge. That is a RELATIVE position: pinning it to a
+  // timestamp would stop a re-run that produced more bars from following them.
+  const atRealtime = range.to >= prev.bars.length;
+  const rightIndex = range.to - 1;
+  return {
+    barSpace: prev.chart.getBarSpace().bar,
+    rightTimestamp: atRealtime ? null : prev.bars[rightIndex]?.timestamp ?? null,
+    rightX: atRealtime ? undefined : barX(prev.chart, rightIndex),
+  };
+}
+
+/** X pixel of a bar on the shared (candle-pane) x-axis; undefined before the
+ * pane is laid out. */
+function barX(chart: Chart, dataIndex: number): number | undefined {
+  const point = chart.convertToPixel({ dataIndex }, { paneId: 'candle_pane' });
+  const x = Array.isArray(point) ? point[0]?.x : point.x;
+  return typeof x === 'number' && Number.isFinite(x) ? x : undefined;
+}
+
+/**
+ * Put the view back where `captureView` found it. Called after every
+ * `resetData()`, which resets the scroll to the newest bar: without an anchor
+ * that IS the wanted behavior (a live run follows its bars).
+ */
+function restoreView(st: RunState): void {
+  const anchor = st.viewAnchor;
+  if (!anchor) {
+    st.chart.scrollToRealTime(0);
+    return;
+  }
+  st.chart.setBarSpace(anchor.barSpace);
+  const index = anchor.rightTimestamp === null
+    ? undefined
+    : st.tsToIndex.get(anchor.rightTimestamp);
+  // No anchor bar (the view followed the newest one, or it has not streamed in
+  // yet): stay at the right edge — a later tick lands the anchor.
+  if (index === undefined) {
+    st.chart.scrollToRealTime(0);
+    return;
+  }
+  // Coarse: puts the bar near the right edge. Then correct by the pixel it
+  // actually landed on — scrolling by +d moves the content right by d px.
+  st.chart.scrollToDataIndex(index, 0);
+  const x = barX(st.chart, index);
+  if (anchor.rightX !== undefined && x !== undefined && x !== anchor.rightX) {
+    st.chart.scrollByDistance(anchor.rightX - x, 0);
+  }
+}
+
+// --- Freeze frame ----------------------------------------------------------
+// A run tears the chart down (dispose + init) and refills it bar by bar, which
+// reads as a flash of empty chart. When the view is being preserved anyway,
+// paint the last frame over the chart and lift it only once the new run has
+// drawn — the old snapshot trick, far cheaper than double-buffering the whole
+// run state, at the cost of a picture that cannot be interacted with (any
+// input, or the deadline below, drops it early).
+
+/** Longest a stale picture may stay up. A run streaming for longer should show
+ * its progress instead, and a bridge that dies never sends `end` at all. */
+const FREEZE_MAX_MS = 1500;
+
+/** A re-run that finishes this fast needs no spinner — showing one would be a
+ * blink of its own, which is exactly what the held frame is there to avoid. */
+const BUSY_DELAY_MS = 250;
+
+let freezeEl: HTMLCanvasElement | undefined;
+let freezeDeadline: number | undefined;
+let freezeSize: { width: number; height: number } | undefined;
+let busyTimer: number | undefined;
+const busyEl = document.getElementById('chart-busy') as HTMLDivElement | null;
+
+function freezeChart(): void {
+  unfreezeChart();
+  const area = container.parentElement;
+  const rect = container.getBoundingClientRect();
+  if (!area || rect.width < 1 || rect.height < 1) return;
+  const dpr = window.devicePixelRatio || 1;
+  const snap = document.createElement('canvas');
+  snap.width = Math.round(rect.width * dpr);
+  snap.height = Math.round(rect.height * dpr);
+  const ctx = snap.getContext('2d');
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+  // KLineChart paints on transparent canvases (the background is the webview's
+  // own), so the snapshot needs that background painted in — otherwise the
+  // chart rebuilding underneath would show through the held picture.
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  ctx.fillStyle =
+    bodyBg && bodyBg !== 'rgba(0, 0, 0, 0)' && bodyBg !== 'transparent'
+      ? bodyBg
+      : cssVar('--vscode-editor-background', isDark() ? '#1e1e1e' : '#ffffff');
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  // Document order is paint order: every pane canvas shares the same z-index,
+  // and the per-pane overlay canvas is transparent above its main canvas.
+  container.querySelectorAll('canvas').forEach((canvas) => {
+    const r = canvas.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    ctx.drawImage(canvas, r.left - rect.left, r.top - rect.top, r.width, r.height);
+  });
+  // Under #pyne-tables (z-index 4): HTML cannot be rasterized into the
+  // snapshot, so that layer keeps its own old content until the reveal.
+  snap.style.cssText =
+    'position:absolute;inset:0;z-index:3;pointer-events:none;width:100%;height:100%;';
+  area.appendChild(snap);
+  freezeEl = snap;
+  freezeSize = { width: rect.width, height: rect.height };
+  freezeDeadline = window.setTimeout(unfreezeChart, FREEZE_MAX_MS);
+  busyTimer = window.setTimeout(() => {
+    busyTimer = undefined;
+    if (busyEl) busyEl.hidden = false;
+  }, BUSY_DELAY_MS);
+}
+
+function isFrozen(): boolean {
+  return freezeEl !== undefined;
+}
+
+/** A snapshot taken at another size would stretch with the area it covers, so
+ * a real resize drops it. Same-size relayouts (the bottom panel reopening at
+ * the end of a strategy run) must NOT, or the reveal loses its paint delay. */
+function unfreezeIfResized(): void {
+  if (!freezeEl || !freezeSize) return;
+  const rect = container.getBoundingClientRect();
+  if (
+    Math.abs(rect.width - freezeSize.width) > 0.5 ||
+    Math.abs(rect.height - freezeSize.height) > 0.5
+  ) {
+    unfreezeChart();
+  }
+}
+
+function unfreezeChart(): void {
+  if (freezeDeadline !== undefined) {
+    clearTimeout(freezeDeadline);
+    freezeDeadline = undefined;
+  }
+  if (busyTimer !== undefined) {
+    clearTimeout(busyTimer);
+    busyTimer = undefined;
+  }
+  if (busyEl) busyEl.hidden = true;
+  if (!freezeEl) return;
+  freezeEl.remove();
+  freezeEl = undefined;
+  freezeSize = undefined;
+  // The layers left untouched while frozen catch up in one go.
+  if (state) {
+    state.renderedTableVersion = -1;
+    renderDrawingTables(state);
+  }
+  renderTables();
+  drawPerformance();
+}
+
+/** Lift the freeze once the new chart has really painted: klinecharts lays out
+ * from a microtask, so the next frame is the first one that shows it. */
+function unfreezeAfterPaint(): void {
+  if (!freezeEl) return;
+  requestAnimationFrame(() => requestAnimationFrame(unfreezeChart));
+}
+
 function startRun(start: StartEvent): void {
   measureOverlayId = undefined;
   measureDrawing = false;
   tbMeasureEl?.classList.remove('active');
   tbMeasureEl?.setAttribute('aria-pressed', 'false');
   activeTab = start.scriptType === 'strategy' ? 'performance' : 'trades';
+  let viewAnchor: ViewAnchor | undefined;
   if (state) {
+    viewAnchor = captureView(state, start);
+    // Same script, same feed: hold the picture over the teardown and refill.
+    // A different feed must not keep showing bars it no longer draws.
+    if (viewAnchor) freezeChart();
     dispose(state.chart);
   }
   container.innerHTML = '';
@@ -487,10 +690,16 @@ function startRun(start: StartEvent): void {
     hidden: new Set(),
     showVolume: false,
     breakpointOverlays: new Map(),
+    viewAnchor,
   };
-  renderTables();
+  // The bottom panel is part of the held picture too: emptying its rows and
+  // equity curve while the chart still shows the old run would be the same
+  // flicker one layer down.
+  if (!isFrozen()) renderTables();
   renderPlotList(state);
-  const tables = document.getElementById('pyne-tables');
+  // While frozen the old tables stay up (they sit above the snapshot and are
+  // its missing half); the reveal clears and rebuilds them together.
+  const tables = isFrozen() ? null : document.getElementById('pyne-tables');
   if (tables) tables.innerHTML = '';
   const st = state;
 
@@ -1416,17 +1625,18 @@ function uiTick(): void {
     const t0 = performance.now();
     const paneChange = assignPlotPanes(st);
     st.chart.resetData();
-    // Follow the freshly streamed bars; resetData alone keeps the old anchor.
-    st.chart.scrollToRealTime(0);
+    // resetData snaps the viewport to the newest bar: follow the freshly
+    // streamed bars, or hold the position this run inherited.
+    restoreView(st);
     if (paneChange || st.metaDirty) {
       st.metaDirty = false;
       rebuildPlotIndicators(st);
       renderPlotList(st);
     }
-    drawPerformance();
+    if (!isFrozen()) drawPerformance();
     ensureDrawingIndicators(st);
     syncBreakpointOverlays(st);
-    renderDrawingTables(st);
+    if (!isFrozen()) renderDrawingTables(st);
     elapsed = performance.now() - t0;
   }
   setTimeout(uiTick, Math.max(UI_TICK_MS, elapsed * 3));
@@ -1558,6 +1768,7 @@ function bottomPanelLimits(): { min: number; max: number } {
 }
 
 function resizeChartAndPerformance(): void {
+  unfreezeIfResized();
   if (panelResizeFrame !== undefined) return;
   panelResizeFrame = requestAnimationFrame(() => {
     panelResizeFrame = undefined;
@@ -2200,12 +2411,14 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         state.dirty = false;
         assignPlotPanes(state);
         state.chart.resetData();
-        state.chart.scrollToRealTime(0);
+        restoreView(state);
+        // Final position reached; from here the view belongs to the user again.
+        state.viewAnchor = undefined;
         rebuildPlotIndicators(state);
         renderPlotList(state);
         ensureDrawingIndicators(state);
         syncBreakpointOverlays(state);
-        renderDrawingTables(state);
+        if (!isFrozen()) renderDrawingTables(state);
         ensureTradeMarkerIndicator(state);
         if (state.start.scriptType === 'strategy') {
           activeTab = 'performance';
@@ -2213,17 +2426,25 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         }
         renderTables();
         syncToolbar();
+        // The new chart is complete: swap the held picture for it.
+        unfreezeAfterPaint();
       }
       break;
   }
 });
 
 window.addEventListener('resize', () => {
+  unfreezeIfResized();
   if (bottomPanelHeight !== undefined && !bottomEl?.classList.contains('collapsed')) {
     setBottomPanelHeight(bottomPanelHeight);
   } else {
     resizeChartAndPerformance();
   }
 });
+
+// A held picture is not interactive (no crosshair, no scroll), so the first
+// input on the chart gives the live one back even mid-run.
+container.parentElement?.addEventListener('pointerdown', unfreezeChart);
+container.parentElement?.addEventListener('wheel', unfreezeChart, { passive: true });
 
 vscode.postMessage({ type: 'ready' });

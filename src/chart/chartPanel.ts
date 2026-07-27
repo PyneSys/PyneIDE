@@ -472,6 +472,17 @@ export class ChartPanel {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); font-size: 11px; user-select: none;
   }
   #breakpoint-pick[hidden] { display: none; }
+  /* Shown over a held frame while a re-run recomputes (see freezeChart). */
+  #chart-busy {
+    position: absolute; z-index: 5; top: 10px; left: 50%; transform: translateX(-50%);
+    width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%;
+    border: 2px solid var(--vscode-panel-border, #444);
+    border-top-color: var(--vscode-progressBar-background, var(--vscode-focusBorder, #007fd4));
+    opacity: 0.7; pointer-events: none; animation: chart-busy-spin 0.9s linear infinite;
+  }
+  #chart-busy[hidden] { display: none; }
+  @keyframes chart-busy-spin { to { transform: translateX(-50%) rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #chart-busy { animation: none; } }
   #breakpoint-pick-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #breakpoint-pick button {
     flex: 0 0 auto; border: none; background: transparent; cursor: pointer;
@@ -662,6 +673,7 @@ export class ChartPanel {
 </div>
 <div id="chart-area">
   <div id="chart"></div>
+  <div id="chart-busy" role="progressbar" aria-label="Recomputing the chart" hidden></div>
   <div id="breakpoint-pick" hidden>
     <span id="breakpoint-pick-label"></span>
     <button id="breakpoint-pick-cancel" title="Cancel (Escape)">×</button>
