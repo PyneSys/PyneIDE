@@ -130,7 +130,7 @@ from Pylance so your diagnostics are *correct* instead of noisy — and defers p
 if you already run pyright or basedpyright. Everything else in your Python workflow
 keeps working. Snippets and workspace-library intelligence round it out.
 
-![Pyne code typing and the dedicated Pyne workspace view](media/pyne.png)
+![Hover documentation for the Pine types, and a typo caught as you type](media/pyne.png)
 
 ## Zero-setup Python environment
 
