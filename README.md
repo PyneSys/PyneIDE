@@ -56,6 +56,7 @@ model; PyneIDE ships analysis built for it.
 
 - ✓ Live Pine Script diagnostics, completion, hover and signature help — its own language server.
 - ✓ One-click compile and run on an interactive, streaming candlestick chart.
+- ✓ A script's `input.*()` calls as an editable form — save and the chart re-runs, your source untouched.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
 - ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
@@ -100,6 +101,22 @@ Python unless you want to. Compiling Pine needs a PyneSys account and API key
 no account and runs entirely on your machine.
 
 ![Compile and run a Pine script with a live chart](media/compile.png)
+
+## Inputs without touching the code
+
+Every `input.*()` call in your script becomes a form field. Open **Edit Inputs…** from
+the editor toolbar and PyneIDE reads the declarations themselves — type, title,
+options, min/max/step, group and tooltip — then builds the matching control for each:
+a number box that respects the declared step and bounds, a dropdown wherever you gave
+`options`, a checkbox for a `bool`, a colour picker for `input.color`.
+
+Values live in a sibling `<script>.toml` file, never in your source, so the code stays
+byte-for-byte as you wrote it while the settings stay diffable and committable. Hit
+**Save** and the chart re-runs with the new values; **Reset to defaults** puts every
+field back. A `.pine` file and its compiled Python share one form, so it makes no
+difference which of the two you have open.
+
+![A Pine script's inputs as a generated form, edited beside the source](media/inputs.png)
 
 ## Interactive chart and backtests
 
