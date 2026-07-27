@@ -1,7 +1,7 @@
 {
   "name": "pyneide",
   "displayName": "PyneIDE",
-  "description": "Pine Script and Pyne language support: syntax highlighting for .pine files and Pyne script detection. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
+  "description": "Pine Script and Pyne in VS Code: highlighting, completion and inline diagnostics for .pine files, a step-through Pine debugger, one-click compile and run, and an interactive backtest chart. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
   "version": "0.1.0",
   "preview": true,
   "publisher": "pynesys",
@@ -11,8 +11,16 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers",
+    "Linters",
+    "Visualization",
+    "Snippets"
   ],
+  "galleryBanner": {
+    "color": "#1A1B1C",
+    "theme": "dark"
+  },
   "keywords": [
     "pine script",
     "pinescript",
@@ -161,6 +169,20 @@
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
+        "command": "pyneide.runPineScript",
+        "title": "Run Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(play)",
+        "enablement": "resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.debugPineScript",
+        "title": "Debug Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(debug-alt)",
+        "enablement": "resourceLangId == pine"
+      },
+      {
         "command": "pyneide.changeRunData",
         "title": "Select Data…",
         "category": "PyneIDE",
@@ -286,6 +308,18 @@
         "icon": "$(debug-alt)"
       },
       {
+        "command": "pyneide.workspace.runPineScript",
+        "title": "Run Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(play)"
+      },
+      {
+        "command": "pyneide.workspace.debugPineScript",
+        "title": "Debug Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(debug-alt)"
+      },
+      {
         "command": "pyneide.workspace.selectData",
         "title": "Select Data…",
         "category": "PyneIDE",
@@ -363,6 +397,38 @@
         {
           "command": "pyneide.convertToV6",
           "when": "resourceLangId == pine && pyneide.canConvertToV6"
+        },
+        {
+          "command": "pyneide.runScript",
+          "when": "resourceLangId != pine"
+        },
+        {
+          "command": "pyneide.debugScript",
+          "when": "resourceLangId != pine"
+        },
+        {
+          "command": "pyneide.runPineScript",
+          "when": "resourceLangId == pine"
+        },
+        {
+          "command": "pyneide.debugPineScript",
+          "when": "resourceLangId == pine"
+        },
+        {
+          "command": "pyneide.workspace.runScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.workspace.debugScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.workspace.runPineScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.workspace.debugPineScript",
+          "when": "false"
         }
       ],
       "editor/lineNumber/context": [
@@ -384,13 +450,23 @@
           "group": "pyneide@1"
         },
         {
-          "command": "pyneide.runScript",
-          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "command": "pyneide.runPineScript",
+          "when": "resourceLangId == pine",
           "group": "pyneide@0"
         },
         {
+          "command": "pyneide.runScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript",
+          "group": "pyneide@0"
+        },
+        {
+          "command": "pyneide.debugPineScript",
+          "when": "resourceLangId == pine",
+          "group": "pyneide@2"
+        },
+        {
           "command": "pyneide.debugScript",
-          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript",
           "group": "pyneide@2"
         },
         {
@@ -416,13 +492,23 @@
           "group": "navigation@0"
         },
         {
-          "command": "pyneide.runScript",
-          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere",
+          "command": "pyneide.runPineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere",
           "group": "navigation@1"
         },
         {
+          "command": "pyneide.runScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.debugPineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere",
+          "group": "navigation@2"
+        },
+        {
           "command": "pyneide.debugScript",
-          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere",
           "group": "navigation@2"
         }
       ],
@@ -499,6 +585,16 @@
           "group": "pyneide@1"
         },
         {
+          "command": "pyneide.workspace.runPineScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScriptPine",
+          "group": "inline@1"
+        },
+        {
+          "command": "pyneide.workspace.debugPineScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScriptPine",
+          "group": "inline@2"
+        },
+        {
           "command": "pyneide.workspace.runScript",
           "when": "view == pyneide.workspace && viewItem == pyneScript",
           "group": "inline@1"
@@ -507,6 +603,16 @@
           "command": "pyneide.workspace.debugScript",
           "when": "view == pyneide.workspace && viewItem == pyneScript",
           "group": "inline@2"
+        },
+        {
+          "command": "pyneide.workspace.runPineScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScriptPine",
+          "group": "pyneide@1"
+        },
+        {
+          "command": "pyneide.workspace.debugPineScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScriptPine",
+          "group": "pyneide@2"
         },
         {
           "command": "pyneide.workspace.runScript",
@@ -520,22 +626,22 @@
         },
         {
           "command": "pyneide.workspace.selectData",
-          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "when": "view == pyneide.workspace && viewItem =~ /^pyneScript/",
           "group": "pyneide@3"
         },
         {
           "command": "pyneide.editInputs",
-          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "when": "view == pyneide.workspace && viewItem =~ /^pyneScript/",
           "group": "pyneide@4"
         },
         {
           "command": "pyneide.workspace.revealInExplorer",
-          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
+          "when": "view == pyneide.workspace && (viewItem =~ /^pyneScript/ || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
           "group": "9_reveal@1"
         },
         {
           "command": "pyneide.scriptDelete",
-          "when": "view == pyneide.workspace && (viewItem == pyneScript || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
+          "when": "view == pyneide.workspace && (viewItem =~ /^pyneScript/ || viewItem == pyneLibrary || viewItem == pyneLibraryRoot || viewItem == pyneLibraryPublisher || viewItem == pyneLibraryFolder || viewItem == pyneFile)",
           "group": "9_reveal@2"
         },
         {
@@ -685,7 +791,9 @@
             },
             "completionEvents": [
               "onCommand:pyneide.runScript",
-              "onCommand:pyneide.workspace.runScript"
+              "onCommand:pyneide.runPineScript",
+              "onCommand:pyneide.workspace.runScript",
+              "onCommand:pyneide.workspace.runPineScript"
             ]
           },
           {
@@ -698,7 +806,9 @@
             },
             "completionEvents": [
               "onCommand:pyneide.debugScript",
-              "onCommand:pyneide.workspace.debugScript"
+              "onCommand:pyneide.debugPineScript",
+              "onCommand:pyneide.workspace.debugScript",
+              "onCommand:pyneide.workspace.debugPineScript"
             ]
           },
           {

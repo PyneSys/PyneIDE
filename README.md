@@ -70,7 +70,7 @@ TradingView's own editor, now in VS Code with your own files and tooling. Your
 workspace libraries resolve too — import completion, go-to-definition, hover, and
 call-argument checks across both Pine and Pyne.
 
-![Pine language completion and diagnostics in PyneIDE](media/pine-ls.png)
+![Pine signature help with parameter documentation, and diagnostics in the Problems panel](media/pine-ls.png)
 
 ## A step-through debugger for Pine
 

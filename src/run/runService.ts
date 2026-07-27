@@ -170,6 +170,15 @@ export class RunService {
       vscode.commands.registerCommand('pyneide.debugScript', (uri?: vscode.Uri) =>
         this.debugFromCommand(uri)
       ),
+      // Pine aliases: identical behaviour, only the contributed title differs
+      // ("Run Pine Script" vs "Run Pyne code"). A menu contribution cannot
+      // override a command's title, so the .pine surfaces need their own ids.
+      vscode.commands.registerCommand('pyneide.runPineScript', (uri?: vscode.Uri) =>
+        this.runFromCommand(uri)
+      ),
+      vscode.commands.registerCommand('pyneide.debugPineScript', (uri?: vscode.Uri) =>
+        this.debugFromCommand(uri)
+      ),
       vscode.commands.registerCommand('pyneide.changeRunData', (uri?: vscode.Uri) =>
         this.changeRunData(uri)
       ),

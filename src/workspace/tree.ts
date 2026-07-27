@@ -369,9 +369,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     }
     item.contextValue = this.isLibraryScript(node.uri.fsPath, node.pyneKind)
       ? 'pyneLibrary'
-      : node.pyneKind
-        ? 'pyneScript'
-        : 'pyneFile';
+      : scriptContextValue(node.uri.fsPath, node.pyneKind);
     item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
     return item;
   }
@@ -391,9 +389,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     }
     item.contextValue = this.isLibraryScript(node.uri.fsPath, node.pyneKind)
       ? 'pyneLibrary'
-      : node.pyneKind
-        ? 'pyneScript'
-        : 'pyneFile';
+      : scriptContextValue(node.uri.fsPath, node.pyneKind);
     item.command = { command: 'vscode.open', title: 'Open', arguments: [node.uri] };
     return item;
   }
@@ -640,6 +636,16 @@ function outputChartKey(plotPath: string): string {
   return script ? canonicalChartKey(script) : plotPath;
 }
 
+/**
+ * Context value of a runnable script row. Pine sources get their own value so
+ * the tree menus can offer Pine-named Run/Debug entries — a menu contribution
+ * cannot override a command's title, only pick a different command.
+ */
+function scriptContextValue(file: string, kind: PyneKind | undefined): string {
+  if (kind === undefined) return 'pyneFile';
+  return /\.pine$/i.test(file) ? 'pyneScriptPine' : 'pyneScript';
+}
+
 /** Detect the @pyne kind of a `.py` file from its head; .pine is always Pyne. */
 function detectScriptKind(file: string): PyneKind | undefined {
   if (/\.pine$/i.test(file)) return 'pyne';
@@ -721,6 +727,17 @@ export function registerWorkspaceView(
   };
   rebuildWatcher();
 
+  // The `*PineScript` ids are pure aliases — they exist only so `.pine` rows can
+  // show Pine-named menu entries; both ids drive the same script command.
+  const runNode = (node?: PyneNode): void => {
+    const uri = nodeUri(node);
+    if (uri) void vscode.commands.executeCommand('pyneide.runScript', uri);
+  };
+  const debugNode = (node?: PyneNode): void => {
+    const uri = nodeUri(node);
+    if (uri) void vscode.commands.executeCommand('pyneide.debugScript', uri);
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.workspace.refresh', () => {
       provider.refresh();
@@ -730,14 +747,10 @@ export function registerWorkspaceView(
     vscode.commands.registerCommand('pyneide.workspace.createScript', () =>
       createNewScript(context)
     ),
-    vscode.commands.registerCommand('pyneide.workspace.runScript', (node?: PyneNode) => {
-      const uri = nodeUri(node);
-      if (uri) void vscode.commands.executeCommand('pyneide.runScript', uri);
-    }),
-    vscode.commands.registerCommand('pyneide.workspace.debugScript', (node?: PyneNode) => {
-      const uri = nodeUri(node);
-      if (uri) void vscode.commands.executeCommand('pyneide.debugScript', uri);
-    }),
+    vscode.commands.registerCommand('pyneide.workspace.runScript', runNode),
+    vscode.commands.registerCommand('pyneide.workspace.runPineScript', runNode),
+    vscode.commands.registerCommand('pyneide.workspace.debugScript', debugNode),
+    vscode.commands.registerCommand('pyneide.workspace.debugPineScript', debugNode),
     vscode.commands.registerCommand('pyneide.workspace.selectData', (node?: PyneNode) => {
       const uri = nodeUri(node);
       if (uri) void vscode.commands.executeCommand('pyneide.changeRunData', uri);

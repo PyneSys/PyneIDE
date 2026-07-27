@@ -1,5 +1,6 @@
 .github/**
 .claude/**
+.vscode/**
 work/**
 src/**
 test/**
@@ -13,6 +14,9 @@ MEMORY.md
 **/*.map
 **/__pycache__/**
 *.vsix
+# README screenshots — the Marketplace renders them from the repository, not
+# from the package. media/walkthrough/*.svg is used at runtime and stays.
+media/*.png
 dist/env-smoke.js
 dist/pinels-smoke.js
 dist/pyright-smoke.js
