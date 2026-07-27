@@ -16,6 +16,7 @@ import type { EnvManager } from '../env/manager';
 import { ensurePyrightConfig } from '../env/workdir';
 import { resolvePyneIdeWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { pyneAliasAt } from './pyneAlias';
 import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
 import { isExactSpan, isSeriesAccess, seriesSpanIndex } from './seriesFilter';
 
@@ -44,7 +45,13 @@ const SUPERSEDING_EXTENSIONS = [
 const JEDI_HOST_EXTENSION = 'ms-python.python';
 
 type PyrightStatus =
-  | { kind: 'off'; reason: string }
+  /**
+   * `pylance` marks the one off-reason the user can act on from the status
+   * item: `python.languageServer` routes to Pylance. The standalone pyright and
+   * basedpyright extensions ignore that setting, so offering the switch there
+   * would promise something it cannot deliver.
+   */
+  | { kind: 'off'; reason: string; pylance?: boolean }
   | { kind: 'starting' }
   | { kind: 'running'; version: string }
   | { kind: 'error'; message: string };
@@ -70,7 +77,9 @@ type PyrightStatus =
  *   `reportUnusedFunction` only from library API defs linked by `__all__` or
  *   PyneCore's runtime `@export`; dead internal helpers remain visible.
  * - provideHover: puts the declared `Series[...]` back into hovers, which the
- *   transparent alias otherwise renders as the bare element type.
+ *   transparent alias otherwise renders as the bare element type — both for a
+ *   variable declared with one and for the alias name itself, which resolves
+ *   to the TypeVar behind the alias and would read `(type variable) T`.
  */
 export class PyrightService {
   private client?: LanguageClient;
@@ -114,6 +123,7 @@ export class PyrightService {
       }),
       vscode.commands.registerCommand('pyneide.pyrightRestart', () => this.restart()),
       vscode.commands.registerCommand('pyneide.pyrightShowLog', () => this.output.show()),
+      vscode.commands.registerCommand('pyneide.usePyneAnalysis', () => usePyneAnalysis()),
       vscode.workspace.onDidChangeConfiguration((e) => {
         if (
           e.affectsConfiguration('pyneide.pyright') ||
@@ -205,13 +215,17 @@ export class PyrightService {
     );
   }
 
-  private decide(): { start: boolean; reason: string } {
+  private decide(): { start: boolean; reason: string; pylance?: boolean } {
     if (!vscode.workspace.getConfiguration('pyneide').get<boolean>('pyright.enabled', true)) {
       return { start: false, reason: 'disabled via pyneide.pyright.enabled' };
     }
     const superseding = this.supersededBy();
     if (superseding) {
-      return { start: false, reason: `${superseding} provides Python analysis` };
+      return {
+        start: false,
+        reason: `${superseding} provides Python analysis`,
+        pylance: superseding === PYLANCE_EXTENSION,
+      };
     }
     if (!fs.existsSync(this.serverModulePath())) {
       return { start: false, reason: 'bundled pyright missing from this build' };
@@ -240,7 +254,7 @@ export class PyrightService {
         if (!decision.start) {
           if (this.client) this.output.appendLine(`Stopping pyright: ${decision.reason}`);
           await this.stopClient();
-          this.setStatus({ kind: 'off', reason: decision.reason });
+          this.setStatus({ kind: 'off', reason: decision.reason, pylance: decision.pylance });
         } else if (!this.client) {
           await this.startClient();
         }
@@ -471,6 +485,13 @@ export class PyrightService {
     hover: vscode.Hover
   ): vscode.Hover {
     if (!this.isPyneDocument(document)) return hover;
+    // The alias name itself, which needs no analysis — the subscript beside it
+    // already says which type it carries.
+    const alias = pyneAliasAt(document, position);
+    if (alias) {
+      const retitled = hover.contents.map((part) => retitleHoverPart(part, alias.label));
+      return new vscode.Hover(retitled, hover.range);
+    }
     const analysis = this.analyzer.cached(document.uri, document.getText());
     if (!analysis) {
       void this.analyzer.analyze(document.uri, document.getText());
@@ -536,6 +557,16 @@ export class PyrightService {
       case 'off':
         this.statusItem.text = 'Pyne typing off';
         this.statusItem.detail = status.reason;
+        // Superseded by Pylance is the one off-state with something to do about
+        // it, and the log has nothing to show when the server never started.
+        // The reverse switch is deliberately not offered while we run: it only
+        // ever leads to noisier diagnostics, and a button is also a suggestion.
+        if (status.pylance) {
+          this.statusItem.command = {
+            title: 'Use PyneIDE',
+            command: 'pyneide.usePyneAnalysis',
+          };
+        }
         break;
       case 'starting':
         this.statusItem.text = 'Pyne typing';
@@ -681,8 +712,31 @@ function reannotateHoverPart(
   part: vscode.MarkdownString | vscode.MarkedString,
   annotation: string
 ): vscode.MarkdownString | vscode.MarkedString {
-  const rewrite = (value: string): string =>
-    value.replace(/^(\(variable\)\s+\w+:\s*).*$/m, `$1${escapeReplacement(annotation)}`);
+  return rewriteHoverPart(part, (value) =>
+    value.replace(/^(\(variable\)\s+\w+:\s*).*$/m, `$1${escapeReplacement(annotation)}`)
+  );
+}
+
+/**
+ * Retitle the header of a hover over a Pyne alias. The transparent stub makes
+ * every one of them resolve to the same bare TypeVar, so a checker titles the
+ * hover `(type variable) T` — true, and useless to whoever hovered `Series`.
+ * The alias with its element type goes back in its place.
+ */
+function retitleHoverPart(
+  part: vscode.MarkdownString | vscode.MarkedString,
+  label: string
+): vscode.MarkdownString | vscode.MarkedString {
+  return rewriteHoverPart(part, (value) =>
+    value.replace(/^\(type variable\)[ \t]+\w+[ \t]*$/m, `(type) ${escapeReplacement(label)}`)
+  );
+}
+
+/** Apply `rewrite` to a hover part's text, whichever of the three shapes it is. */
+function rewriteHoverPart(
+  part: vscode.MarkdownString | vscode.MarkedString,
+  rewrite: (value: string) => string
+): vscode.MarkdownString | vscode.MarkedString {
   if (part instanceof vscode.MarkdownString) {
     const next = new vscode.MarkdownString(rewrite(part.value), part.supportThemeIcons);
     next.isTrusted = part.isTrusted;
@@ -690,6 +744,36 @@ function reannotateHoverPart(
   }
   if (typeof part === 'string') return rewrite(part);
   return { language: part.language, value: rewrite(part.value) };
+}
+
+/**
+ * Route Python analysis to the bundled server by silencing Pylance's for this
+ * workspace. `sync()` already watches the setting, so writing it is the whole
+ * operation — the client starts on the resulting change event.
+ */
+async function usePyneAnalysis(): Promise<void> {
+  await writeLanguageServer('None', 'PyneIDE could not take over Python analysis');
+}
+
+/**
+ * Hand Python analysis back. The workspace override is removed rather than set
+ * to "Default": the user may have chosen a different server globally, and that
+ * choice is theirs to keep.
+ */
+export async function restorePythonAnalysis(): Promise<void> {
+  await writeLanguageServer(undefined, 'PyneIDE could not restore your Python analysis setting');
+}
+
+async function writeLanguageServer(value: string | undefined, failure: string): Promise<void> {
+  try {
+    await vscode.workspace
+      .getConfiguration('python')
+      .update('languageServer', value, vscode.ConfigurationTarget.Workspace);
+  } catch (err) {
+    // No writable workspace — nothing to switch, and silence would look broken.
+    const message = err instanceof Error ? err.message : String(err);
+    void vscode.window.showErrorMessage(`${failure}: ${message}`);
+  }
 }
 
 /** `$` is special in String.replace replacement patterns — make it literal. */

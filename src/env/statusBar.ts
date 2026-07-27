@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+
 import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
@@ -5,7 +7,9 @@ import type { Usage } from '../api/client';
 import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
 import type { PluginService } from '../plugins/service';
+import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import type { EnvManager, EnvState } from './manager';
+import { resolvePyneIdeWorkdir } from './workdirConfig';
 
 type MenuItem = vscode.QuickPickItem & {
   action?: () => void;
@@ -26,6 +30,8 @@ type PluginsState =
 /** Status bar item reflecting the environment state, with a quickpick menu. */
 export class EnvStatusBar {
   private readonly item: vscode.StatusBarItem;
+  /** Emptiness per workspace folder path — see `inFreshFolder`. */
+  private readonly freshFolders = new Map<string, boolean>();
 
   constructor(
     private readonly manager: EnvManager,
@@ -40,9 +46,23 @@ export class EnvStatusBar {
   }
 
   register(context: vscode.ExtensionContext): void {
+    const refresh = (): void => this.update(this.manager.state);
     context.subscriptions.push(
       this.item,
       this.manager.onDidChangeState((state) => this.update(state)),
+      // Opening the first `.pine` or `@pyne` file is what turns a plain folder
+      // into somewhere PyneIDE belongs, so the item follows the open set.
+      vscode.workspace.onDidOpenTextDocument(refresh),
+      vscode.workspace.onDidCloseTextDocument(refresh),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        this.freshFolders.clear();
+        refresh();
+      }),
+      // A folder stops being fresh the moment it has a file in it.
+      vscode.workspace.onDidCreateFiles(() => {
+        this.freshFolders.clear();
+        refresh();
+      }),
       vscode.commands.registerCommand('pyneide.environmentMenu', () => this.showMenu())
     );
     this.item.show();
@@ -51,15 +71,21 @@ export class EnvStatusBar {
   private update(state: EnvState): void {
     this.item.backgroundColor = undefined;
     const menuHint = ' Click for compile usage and PyneIDE actions.';
+    // A missing environment is a global fact, and calling for attention about
+    // it in a window with no Pyne work in it is just noise — a JS project has
+    // nothing to set up. The state is still reported, only without the colour.
+    const wanted = this.isWantedHere();
     switch (state.kind) {
       case 'unknown':
         this.item.text = '$(question) PyneIDE';
         this.item.tooltip = `PyneIDE: environment state unknown.${menuHint}`;
         break;
       case 'needs-setup':
-        this.item.text = '$(warning) PyneIDE';
+        this.item.text = wanted ? '$(warning) PyneIDE' : '$(circle-large-outline) PyneIDE';
         this.item.tooltip = `PyneIDE: ${state.reason}.${menuHint}`;
-        this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        if (wanted) {
+          this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        }
         break;
       case 'working':
         this.item.text = '$(sync~spin) PyneIDE';
@@ -76,11 +102,51 @@ export class EnvStatusBar {
         break;
       }
       case 'error':
-        this.item.text = '$(error) PyneIDE';
+        this.item.text = wanted ? '$(error) PyneIDE' : '$(circle-large-outline) PyneIDE';
         this.item.tooltip = `PyneIDE: ${state.message}.${menuHint}`;
-        this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+        if (wanted) {
+          this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+        }
         break;
     }
+  }
+
+  /**
+   * Whether this window is somewhere PyneIDE is plausibly wanted: an
+   * initialized Pyne project, a Pine or Pyne file the user has open, or a fresh
+   * empty folder — the state someone is in when they are about to start one.
+   */
+  private isWantedHere(): boolean {
+    if (resolvePyneIdeWorkdir()) return true;
+    const open = vscode.workspace.textDocuments.some(
+      (doc) =>
+        doc.languageId === 'pine' ||
+        (doc.languageId === 'python' &&
+          detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined)
+    );
+    return open || this.inFreshFolder();
+  }
+
+  /**
+   * A single workspace folder with nothing visible in it. Dot-entries are
+   * ignored so a folder holding only `.git` still counts as a fresh start.
+   * Memoized per path: this runs on every editor switch, and the answer only
+   * changes when the folder set does.
+   */
+  private inFreshFolder(): boolean {
+    const folders = vscode.workspace.workspaceFolders;
+    if (folders?.length !== 1) return false;
+    const dir = folders[0].uri.fsPath;
+    const cached = this.freshFolders.get(dir);
+    if (cached !== undefined) return cached;
+    let fresh = false;
+    try {
+      fresh = fs.readdirSync(dir).every((entry) => entry.startsWith('.'));
+    } catch {
+      // Unreadable folder — treat as occupied rather than invite setup into it.
+    }
+    this.freshFolders.set(dir, fresh);
+    return fresh;
   }
 
   private async showMenu(): Promise<void> {

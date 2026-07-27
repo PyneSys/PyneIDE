@@ -120,6 +120,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.usePyneAnalysis",
+        "title": "Use PyneIDE for Python Analysis (instead of Pylance)",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.compilePine",
         "title": "Compile Pine Script",
         "category": "PyneIDE",

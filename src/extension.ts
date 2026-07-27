@@ -40,7 +40,7 @@ import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
 import { SecurityStatusService } from './typing/securityStatus';
 import { PyneHoverProvider } from './typing/pyneHover';
-import { PYLANCE_EXTENSION, PyrightService } from './typing/pyrightService';
+import { PYLANCE_EXTENSION, PyrightService, restorePythonAnalysis } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
@@ -555,11 +555,15 @@ async function takeOverPythonAnalysis(): Promise<void> {
     // No writable workspace (e.g. no folder open) — nothing to take over.
     return;
   }
-  void vscode.window.showInformationMessage(
+  // The moment of the takeover is the moment anyone who did not want it will
+  // say so, so the undo goes here rather than in a settings instruction. Later
+  // on, the "Pyne typing off" language status offers the way back in.
+  const choice = await vscode.window.showInformationMessage(
     'PyneIDE now provides Python analysis in this Pyne workspace instead of Pylance ' +
-      '("python.languageServer": "None" in workspace settings — set it back to ' +
-      '"Default" to undo).'
+      '("python.languageServer": "None" in workspace settings).',
+    'Keep Pylance'
   );
+  if (choice === 'Keep Pylance') await restorePythonAnalysis();
 }
 
 function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {

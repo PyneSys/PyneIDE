@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { pyneAliasAt } from './pyneAlias';
 import type { SeriesAnalyzer } from './seriesAnalyzer';
 
 /**
  * Standalone hover for the declared Pyne type of `Series`/`Persistent`
- * variables (F7/L5c hover cosmetics, Pylance edition).
+ * variables, and for those alias names themselves (F7/L5c hover cosmetics,
+ * Pylance edition).
  *
  * When the bundled pyright runs, its LSP middleware rewrites the checker's
  * hover in place — one clean hover, `Literal[1]` replaced by the declared
@@ -38,6 +40,14 @@ export class PyneHoverProvider implements vscode.HoverProvider {
     if (!this.superseded()) return undefined;
     if (detectPyne(document.getText().slice(0, DETECT_HEAD_BYTES)) === undefined) {
       return undefined;
+    }
+    // The alias name itself. Purely lexical, so unlike the variable case below
+    // it can answer on the first hover, with no analysis to wait for.
+    const alias = pyneAliasAt(document, position);
+    if (alias) {
+      const markdown = new vscode.MarkdownString();
+      markdown.appendCodeblock(alias.label, 'python');
+      return new vscode.Hover(markdown, alias.range);
     }
     const text = document.getText();
     const analysis = this.analyzer.cached(document.uri, text);
