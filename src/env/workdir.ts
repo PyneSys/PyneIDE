@@ -498,32 +498,3 @@ export function ensurePyneSnippets(projectDir: string, extensionPath: string): b
   return true;
 }
 
-/** Marketplace id of the richer TOML extension we suggest (schema + formatting). */
-export const TOML_EXTENSION_ID = 'tamasfe.even-better-toml';
-
-/**
- * Add `tamasfe.even-better-toml` to `<projectDir>/.vscode/extensions.json`
- * recommendations. Soft suggestion only: VSCode prompts the user, it is never
- * force-installed. PyneIDE ships baseline TOML highlighting itself, so this is
- * purely for those who also want schema validation/formatting. Returns false
- * when an existing extensions.json could not be parsed (left untouched then).
- */
-export function recommendTomlExtension(projectDir: string): boolean {
-  const vscodeDir = path.join(projectDir, '.vscode');
-  const extensionsPath = path.join(vscodeDir, 'extensions.json');
-  let doc: Record<string, unknown> = {};
-  if (fs.existsSync(extensionsPath)) {
-    try {
-      doc = JSON.parse(fs.readFileSync(extensionsPath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      return false;
-    }
-  }
-  const current = Array.isArray(doc.recommendations) ? (doc.recommendations as unknown[]) : [];
-  if (!current.some((id) => id === TOML_EXTENSION_ID)) {
-    doc.recommendations = [...current, TOML_EXTENSION_ID];
-    fs.mkdirSync(vscodeDir, { recursive: true });
-    fs.writeFileSync(extensionsPath, JSON.stringify(doc, null, 2) + '\n');
-  }
-  return true;
-}

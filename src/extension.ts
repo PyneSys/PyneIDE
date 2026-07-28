@@ -23,7 +23,6 @@ import {
   ensurePyrightConfig,
   hideGeneratedFiles,
   markProjectAsWorkdir,
-  recommendTomlExtension,
   scaffoldWorkdirWithCli,
 } from './env/workdir';
 import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
@@ -668,7 +667,6 @@ async function initProjectCommand(
         ensurePyrightConfig(folder.uri.fsPath);
       }
       hideGeneratedFiles(folder.uri.fsPath);
-      recommendTomlExtension(folder.uri.fsPath);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       updateTerminalWorkdirEnv(context);
       void takeOverPythonAnalysis();
@@ -707,7 +705,6 @@ async function initProjectCommand(
       );
     }
     hideGeneratedFiles(baseDir);
-    recommendTomlExtension(baseDir);
     ensurePyneSnippets(baseDir, context.extensionPath);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {

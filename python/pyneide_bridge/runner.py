@@ -529,7 +529,7 @@ def inspect_security(args: Any, emitter: Emitter) -> int:
 def run(args: Any, emitter: Emitter, control: Control) -> int:
     """Execute the script run; returns the process exit code."""
     from pynecore.core.aggregator import validate_aggregation
-    from pynecore.core.ohlcv_file import OHLCVReader
+    from pynecore.core.ohlcv import OHLCVReader
     from pynecore.core.script_runner import ScriptRunner
     from pynecore.core.syminfo import SymInfo
     from pynecore.lib.timeframe import in_seconds
@@ -584,22 +584,26 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         sys.path.insert(0, str(lib_dir))
 
     with OHLCVReader(data_path) as reader:
-        time_from_ts = int(args.time_from) if args.time_from is not None \
-            else int(reader.start_datetime.timestamp())
-        time_to_ts = int(args.time_to) if args.time_to is not None \
-            else int(reader.end_datetime.timestamp())
+        # OHLCV timestamps are Unix milliseconds; the CLI window is seconds.
+        time_from_ts = int(args.time_from) * 1000 if args.time_from is not None \
+            else int(reader.start_datetime.timestamp() * 1000)
+        time_to_ts = int(args.time_to) * 1000 if args.time_to is not None \
+            else int(reader.end_datetime.timestamp() * 1000)
 
         size = reader.get_size(time_from_ts, time_to_ts)
 
-        # Pine anchors last_bar_time to the window's final REAL bar — scan back
-        # over the writer's gap-fill tail (volume == -1 records).
+        # Pine anchors last_bar_time to the window's final REAL bar — on a legacy
+        # file, scan back over its gap-fill tail (volume == -1 records). A file
+        # that declares its own period stores real bars only.
+        skip_phantom_tail = reader.period is None
         last_bar_time = None
         start_pos, end_pos = reader.get_positions(time_from_ts, time_to_ts)
         for pos in range(end_pos - 1, start_pos - 1, -1):
             tail_bar = reader.read(pos)
-            if not (tail_bar.volume < 0):
-                last_bar_time = int(tail_bar.timestamp * 1000)
-                break
+            if skip_phantom_tail and tail_bar.volume < 0:
+                continue
+            last_bar_time = int(tail_bar.timestamp)
+            break
 
         magnifier_iter = None
         if magnifier_mode:
@@ -676,7 +680,7 @@ def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
     overlays the plots later. Emits a `start` (with ``dataOnly: True``) + `bars`
     + `end`; honours cancel so closing the chart / starting a real run stops it.
     """
-    from pynecore.core.ohlcv_file import OHLCVReader
+    from pynecore.core.ohlcv import OHLCVReader
     from pynecore.core.syminfo import SymInfo
 
     workdir = Path(args.workdir).resolve()
@@ -685,10 +689,11 @@ def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
     mintick = getattr(syminfo, "mintick", None)
 
     with OHLCVReader(data_path) as reader:
-        time_from_ts = int(args.time_from) if args.time_from is not None \
-            else int(reader.start_datetime.timestamp())
-        time_to_ts = int(args.time_to) if args.time_to is not None \
-            else int(reader.end_datetime.timestamp())
+        # OHLCV timestamps are Unix milliseconds; the CLI window is seconds.
+        time_from_ts = int(args.time_from) * 1000 if args.time_from is not None \
+            else int(reader.start_datetime.timestamp() * 1000)
+        time_to_ts = int(args.time_to) * 1000 if args.time_to is not None \
+            else int(reader.end_datetime.timestamp() * 1000)
         size = reader.get_size(time_from_ts, time_to_ts)
 
         emitter.emit({
@@ -731,7 +736,7 @@ def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
                 break
             bars_done += 1
             batch.append([
-                int(candle.timestamp) * 1000,
+                int(candle.timestamp),
                 num_or_none(rt(candle.open)), num_or_none(rt(candle.high)),
                 num_or_none(rt(candle.low)), num_or_none(rt(candle.close)),
                 num_or_none(candle.volume), None,
@@ -773,7 +778,7 @@ def _chart_breakpoint_iter(source: Any, emitter: Emitter, control: Control):
     for candle in source:
         yield candle
 
-        timestamp = int(candle.timestamp) * 1000
+        timestamp = int(candle.timestamp)
         if control.has_chart_breakpoint(timestamp):
             if not handoff("enter", timestamp):
                 return
@@ -841,7 +846,7 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
 
             # lib.* holds the mintick-rounded values of the current bar
             # (raw .ohlcv floats carry float32 storage dust).
-            time_ms = int(candle.timestamp) * 1000
+            time_ms = int(candle.timestamp)
             row: list[Any] = [
                 time_ms,
                 num_or_none(lib.open), num_or_none(lib.high),
