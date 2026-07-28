@@ -43,6 +43,7 @@ from pynecore.core.plugin import (ProviderPlugin, discover_plugins,
                                    get_plugin_metadata, get_plugin_summary,
                                    is_retryable_provider_error, load_plugin)
 from pynecore.core.syminfo import SymInfo
+from pynecore.lib.timeframe import in_seconds
 
 from .protocol import Emitter
 
@@ -83,6 +84,24 @@ def serialize_syminfo(info: SymInfo) -> dict[str, Any]:
             for f in dataclasses.fields(info)}
 
 
+def _validate_timeframe(value: str) -> str:
+    """Normalize + validate a TV-format timeframe (mirrors the CLI's
+    ``validate_timeframe``, without pulling in typer).
+
+    :param value: Timeframe as typed by the user.
+    :return: The upper-cased timeframe.
+    :raises ValueError: If it is not a valid TradingView timeframe.
+    """
+    value = value.strip().upper()
+    try:
+        in_seconds(value)
+    except (ValueError, AssertionError):
+        raise ValueError(
+            f"Invalid timeframe: {value}. Must be a valid timeframe in "
+            f"TradingView format (e.g. '1', '5', '60', '1D', '1W', '1M').")
+    return value
+
+
 def _list_providers() -> list[dict[str, Any]]:
     """All installed provider plugins with their display metadata."""
     out: list[dict[str, Any]] = []
@@ -115,6 +134,11 @@ class ProviderService:
         # requests (providers/brokers/symbols/syminfo/syminfo_file).
         self._browse_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="pyneide-browse")
+        # Instance-free metadata lookups (ohlcv_path) run beside the browse
+        # worker: they only touch the provider CLASS, and the download bar needs
+        # them to answer instantly instead of queueing behind a REST syminfo.
+        self._meta_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="pyneide-meta")
         # Browse instances, keyed (provider, broker). Touched only on the single
         # browse worker, so no lock needed here.
         self._provider_cache: dict[tuple[str, str | None], ProviderPlugin] = {}
@@ -155,6 +179,8 @@ class ProviderService:
             return
         if method == "download":
             self._start_download(rid, params)
+        elif method == "ohlcv_path":
+            self._meta_pool.submit(self._run_method, rid, method, params)
         else:
             self._browse_pool.submit(self._run_method, rid, method, params)
 
@@ -170,6 +196,7 @@ class ProviderService:
     def _shutdown(self) -> None:
         self._download_cancel.set()
         self._browse_pool.shutdown(wait=False, cancel_futures=True)
+        self._meta_pool.shutdown(wait=False, cancel_futures=True)
 
     # ---- browse methods (run on the single browse worker) -------------
 
@@ -202,6 +229,8 @@ class ProviderService:
             return self._syminfo(params)
         if method == "syminfo_file":
             return self._syminfo_file(params)
+        if method == "ohlcv_path":
+            return self._ohlcv_path(params)
         raise ValueError(f"Unknown method: {method!r}")
 
     def _resolve_provider_class(self, provider_name: str) -> type[ProviderPlugin]:
@@ -279,6 +308,29 @@ class ProviderService:
                 self._syminfo_cache.popitem(last=False)
         return data
 
+    def _ohlcv_path(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Where a download of this symbol + timeframe would land, and whether
+        that file is already there.
+
+        Drives the download bar's 'continue vs 365 days' default and the
+        Truncate toggle, exactly like the TUI wizard. The provider CLASS names
+        the file, fed the broker-qualified symbol — the same call the TUI makes,
+        so a multi-broker provider keeps its exchange in the filename."""
+        provider_class = self._resolve_provider_class(params["provider"])
+        broker = params.get("broker")
+        symbol = params["symbol"]
+        full_symbol = f"{broker}:{symbol}" if broker else symbol
+        timeframe = _validate_timeframe(params["timeframe"])
+        # noinspection PyBroadException
+        try:
+            path = provider_class.get_ohlcv_path(full_symbol, timeframe,
+                                                 self.data_dir)
+        except Exception:
+            # Plugin code is arbitrary — a misbehaving one must not break the
+            # download bar (the TUI swallows this the same way).
+            return {"path": "", "exists": False}
+        return {"path": str(path), "exists": path.exists()}
+
     def _syminfo_file(self, params: dict[str, Any]) -> dict[str, Any]:
         path = Path(params["path"])
         if not path.is_absolute():
@@ -308,7 +360,7 @@ class ProviderService:
             provider_name = params["provider"]
             broker = params.get("broker")
             symbol = params["symbol"]
-            timeframe = params["timeframe"]
+            timeframe = _validate_timeframe(params["timeframe"])
             truncate = bool(params.get("truncate", False))
             time_from = self._parse_from(params["from"])
             time_to = datetime.fromtimestamp(int(params["to"]), UTC)

@@ -23,7 +23,26 @@ import type {
 const ROW_H = 22;
 const OVERSCAN = 8;
 const SYMINFO_DEBOUNCE_MS = 150;
-const TIMEFRAMES = ['1', '5', '15', '60', '240', '1D', '1W'];
+
+/** Sentinel option value that reveals the neighbouring free-text / date input. */
+const CUSTOM = '__custom__';
+// Field model mirrored from the TUI wizard (cli/utils/symbol_browser.py): same
+// options, same order, same defaults — only the widgets are VSCode's.
+const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', '1D', '1W', '1M'];
+const FROM_OPTIONS: [string, string][] = [
+  ['continue', 'Continue / resume'],
+  ['1', '1 day back'],
+  ['7', '7 days back'],
+  ['30', '30 days back'],
+  ['90', '90 days back'],
+  ['180', '180 days back'],
+  ['365', '365 days back'],
+  [CUSTOM, 'Custom date…'],
+];
+const TO_OPTIONS: [string, string][] = [
+  ['now', 'now'],
+  [CUSTOM, 'Custom date…'],
+];
 
 interface VsCodeApi {
   postMessage(message: BrowserOutMessage): void;
@@ -43,8 +62,12 @@ const windowEl = el<HTMLDivElement>('window');
 const infoEmpty = el<HTMLDivElement>('info-empty');
 const infoBody = el<HTMLDivElement>('info-body');
 const timeframeSel = el<HTMLSelectElement>('timeframe');
+const timeframeCustom = el<HTMLInputElement>('timeframe-custom');
 const fromSel = el<HTMLSelectElement>('from');
 const fromDate = el<HTMLInputElement>('from-date');
+const toSel = el<HTMLSelectElement>('to');
+const toDate = el<HTMLInputElement>('to-date');
+const truncateLabel = el<HTMLLabelElement>('truncate-label');
 const truncateChk = el<HTMLInputElement>('truncate');
 const downloadBtn = el<HTMLButtonElement>('download');
 const cancelBtn = el<HTMLButtonElement>('cancel');
@@ -65,6 +88,18 @@ let syminfoReqId = 0;
 let lastSyminfoReqId = 0;
 let syminfoTimer: ReturnType<typeof setTimeout> | undefined;
 let downloading = false;
+
+// Download-target state: does the .ohlcv file of the current symbol + timeframe
+// already exist? Drives the Truncate toggle and the smart From default.
+let targetReqId = 0;
+let lastTargetReqId = 0;
+let targetTimer: ReturnType<typeof setTimeout> | undefined;
+let targetExists = false;
+/** True while a probe started by a symbol change is in flight: its answer
+ * re-picks the From default, the way the TUI does on entering the wizard. */
+let smartFromPending = false;
+/** Last target-probe failure (an invalid custom timeframe, or a dead service). */
+let targetError: string | undefined;
 
 // --- init / messaging --------------------------------------------------------
 
@@ -89,6 +124,9 @@ window.addEventListener('message', (ev: MessageEvent<BrowserInMessage>) => {
     case 'syminfoError':
       if (msg.reqId === lastSyminfoReqId) renderSyminfoError(msg.symbol, msg.message);
       break;
+    case 'targetInfo':
+      if (msg.reqId === lastTargetReqId) onTargetInfo(msg.exists, msg.error);
+      break;
     case 'downloadProgress':
       onProgress(msg.done, msg.total, msg.indeterminate);
       break;
@@ -111,8 +149,8 @@ window.addEventListener('message', (ev: MessageEvent<BrowserInMessage>) => {
  */
 function onPrefill(symbol: string, timeframe?: string): void {
   filterInput.value = symbol;
-  if (timeframe && TIMEFRAMES.includes(timeframe)) {
-    timeframeSel.value = timeframe;
+  if (timeframe) {
+    setTimeframe(timeframe);
     persist();
   }
   applyFilter();
@@ -131,16 +169,12 @@ function onInit(list: ProviderInfo[], defaults: BrowserDefaults): void {
     providerSel.appendChild(opt);
   }
 
-  timeframeSel.innerHTML = '';
-  for (const tf of TIMEFRAMES) {
-    const opt = document.createElement('option');
-    opt.value = tf;
-    opt.textContent = tf;
-    timeframeSel.appendChild(opt);
-  }
-  timeframeSel.value = defaults.timeframe && TIMEFRAMES.includes(defaults.timeframe) ? defaults.timeframe : '1D';
-
-  buildFromOptions();
+  fillOptions(timeframeSel, [...TIMEFRAMES.map((tf): [string, string] => [tf, tf]), [CUSTOM, 'Custom…']]);
+  setTimeframe(defaults.timeframe || '1D');
+  fillOptions(fromSel, FROM_OPTIONS);
+  setFrom('continue');
+  fillOptions(toSel, TO_OPTIONS);
+  setTo('now');
 
   const startProvider = defaults.provider && list.some((p) => p.name === defaults.provider)
     ? defaults.provider
@@ -163,6 +197,7 @@ function selectProvider(name: string): void {
   positions = [];
   selected = -1;
   renderList();
+  resetTarget();
   showInfoEmpty('Pick a symbol to see its info.');
   if (currentMultiBroker) {
     listStatus.textContent = 'Loading brokers…';
@@ -251,9 +286,10 @@ function applyFilter(): void {
   updateDownloadEnabled();
   if (selected >= 0) {
     ensureVisible(selected);
-    scheduleSyminfo();
+    onSymbolChanged();
   } else {
     showInfoEmpty(allSymbols.length ? 'No match.' : 'No symbols.');
+    setTargetExists(false);
   }
 }
 
@@ -303,7 +339,7 @@ function setSelected(row: number): void {
   selected = row;
   renderList();
   updateDownloadEnabled();
-  scheduleSyminfo();
+  onSymbolChanged();
 }
 
 function ensureVisible(row: number): void {
@@ -337,7 +373,7 @@ viewport.addEventListener('keydown', (ev) => {
     ensureVisible(selected);
     renderList();
     updateDownloadEnabled();
-    scheduleSyminfo();
+    onSymbolChanged();
   }
 });
 
@@ -352,6 +388,13 @@ window.addEventListener('keydown', (ev) => {
 filterInput.addEventListener('input', applyFilter);
 
 // --- syminfo ----------------------------------------------------------------
+
+/** The cursor moved onto another symbol: refresh its info and re-pick the
+ * download defaults for it (TUI: what entering the wizard does). */
+function onSymbolChanged(): void {
+  scheduleSyminfo();
+  scheduleTargetProbe(true);
+}
 
 function scheduleSyminfo(): void {
   if (syminfoTimer) clearTimeout(syminfoTimer);
@@ -483,26 +526,133 @@ function fmtValue(key: string, raw: unknown): string {
 
 // --- download bar -----------------------------------------------------------
 
-function buildFromOptions(): void {
-  fromSel.innerHTML = '';
-  const opts: [string, string][] = [
-    ['continue', 'Continue / resume'],
-    ['30', 'Last 30 days'],
-    ['90', 'Last 90 days'],
-    ['365', 'Last 365 days'],
-    ['custom', 'Custom start date…'],
-  ];
+function fillOptions(sel: HTMLSelectElement, opts: [string, string][]): void {
+  sel.innerHTML = '';
   for (const [value, label] of opts) {
     const opt = document.createElement('option');
     opt.value = value;
     opt.textContent = label;
-    fromSel.appendChild(opt);
+    sel.appendChild(opt);
   }
-  fromSel.value = 'continue';
 }
 
+/** Select a timeframe, dropping into the Custom text field for anything that is
+ * not one of the presets (the TUI's `Custom...` option). */
+function setTimeframe(tf: string): void {
+  const upper = tf.trim().toUpperCase();
+  if (TIMEFRAMES.includes(upper)) {
+    timeframeSel.value = upper;
+    timeframeCustom.value = '';
+  } else {
+    timeframeSel.value = CUSTOM;
+    timeframeCustom.value = tf.trim();
+  }
+  timeframeCustom.hidden = timeframeSel.value !== CUSTOM;
+}
+
+function setFrom(value: string): void {
+  fromSel.value = value;
+  fromDate.hidden = fromSel.value !== CUSTOM;
+}
+
+function setTo(value: string): void {
+  toSel.value = value;
+  toDate.hidden = toSel.value !== CUSTOM;
+}
+
+/** The effective timeframe: the preset, or whatever is typed in Custom. */
+function currentTimeframe(): string {
+  return timeframeSel.value === CUSTOM ? timeframeCustom.value.trim().toUpperCase() : timeframeSel.value;
+}
+
+// --- download target probe ---------------------------------------------------
+
+/**
+ * Ask the host whether the target `.ohlcv` of the current symbol + timeframe
+ * exists. With `smartFrom`, the answer also re-picks the From default —
+ * `continue` when there is a file to resume, `365` when starting from scratch,
+ * which is what the TUI does every time the wizard opens on a symbol.
+ */
+function scheduleTargetProbe(smartFrom: boolean): void {
+  if (smartFrom) smartFromPending = true;
+  if (targetTimer) clearTimeout(targetTimer);
+  const symbol = selectedSymbol();
+  const timeframe = currentTimeframe();
+  updateDownloadEnabled();
+  if (!symbol || !timeframe) {
+    setTargetExists(false);
+    return;
+  }
+  targetTimer = setTimeout(() => {
+    const reqId = ++targetReqId;
+    lastTargetReqId = reqId;
+    vscode.postMessage({
+      type: 'requestTarget',
+      reqId,
+      provider: providerSel.value,
+      broker: currentMultiBroker ? brokerSel.value : undefined,
+      symbol,
+      timeframe,
+    });
+  }, SYMINFO_DEBOUNCE_MS);
+}
+
+function onTargetInfo(exists: boolean, error?: string): void {
+  setTargetError(error);
+  setTargetExists(exists);
+}
+
+function setTargetError(message: string | undefined): void {
+  if (message) {
+    targetError = message;
+    setDownMsg(message, 'err');
+  } else if (targetError) {
+    // Only wipe the bar's message if it was ours — a download result stays put.
+    targetError = undefined;
+    setDownMsg('', '');
+  }
+  updateDownloadEnabled();
+}
+
+/** Forget the current target (provider / broker switch): drop a pending probe
+ * and any reply still in flight, and clear the fields it drives. */
+function resetTarget(): void {
+  if (targetTimer) clearTimeout(targetTimer);
+  lastTargetReqId = ++targetReqId;
+  smartFromPending = false;
+  setTargetError(undefined);
+  setTargetExists(false);
+}
+
+function setTargetExists(exists: boolean): void {
+  const appeared = exists && !targetExists;
+  targetExists = exists;
+  truncateLabel.hidden = !exists;
+  // A hidden toggle must not carry a stale "yes", and the TUI's re-inserted
+  // Truncate field always starts at No.
+  if (!exists || appeared) truncateChk.checked = false;
+  if (smartFromPending) {
+    smartFromPending = false;
+    setFrom(exists ? 'continue' : '365');
+  }
+}
+
+timeframeSel.addEventListener('change', () => {
+  timeframeCustom.hidden = timeframeSel.value !== CUSTOM;
+  if (timeframeSel.value === CUSTOM) timeframeCustom.focus();
+  // A timeframe change only re-checks the target file (From stays as picked) —
+  // same as the TUI, where the smart default fires on wizard entry only.
+  scheduleTargetProbe(false);
+  persist();
+});
+// Probe per keystroke (debounced anyway), but only persist once the field settles.
+timeframeCustom.addEventListener('input', () => scheduleTargetProbe(false));
+timeframeCustom.addEventListener('change', persist);
 fromSel.addEventListener('change', () => {
-  fromDate.hidden = fromSel.value !== 'custom';
+  fromDate.hidden = fromSel.value !== CUSTOM;
+});
+toSel.addEventListener('change', () => {
+  toDate.hidden = toSel.value !== CUSTOM;
 });
 
 providerSel.addEventListener('change', () => selectProvider(providerSel.value));
@@ -511,35 +661,51 @@ brokerSel.addEventListener('change', () => {
   positions = [];
   selected = -1;
   renderList();
+  resetTarget();
   listStatus.textContent = 'Loading symbols…';
   vscode.postMessage({ type: 'selectBroker', provider: providerSel.value, broker: brokerSel.value });
   persist();
 });
-timeframeSel.addEventListener('change', persist);
-
 function updateDownloadEnabled(): void {
-  downloadBtn.disabled = downloading || !selectedSymbol();
+  downloadBtn.disabled = downloading || !selectedSymbol() || !currentTimeframe() || Boolean(targetError);
 }
 
 function resolveFrom(): number | 'continue' | undefined {
   const v = fromSel.value;
   if (v === 'continue') return 'continue';
-  if (v === 'custom') {
-    if (!fromDate.value) return undefined;
-    const ms = Date.parse(`${fromDate.value}T00:00:00Z`);
-    if (Number.isNaN(ms)) return undefined;
-    return Math.floor(ms / 1000);
-  }
+  if (v === CUSTOM) return dateToEpoch(fromDate.value);
   const days = Number(v);
   return Math.floor(Date.now() / 1000) - days * 86400;
+}
+
+function resolveTo(): number | undefined {
+  if (toSel.value === CUSTOM) return dateToEpoch(toDate.value);
+  return Math.floor(Date.now() / 1000);
+}
+
+/** `YYYY-MM-DD` (as an `input[type=date]` gives it) to epoch seconds, UTC. */
+function dateToEpoch(value: string): number | undefined {
+  if (!value) return undefined;
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
 }
 
 downloadBtn.addEventListener('click', () => {
   const symbol = selectedSymbol();
   if (!symbol || downloading) return;
+  const timeframe = currentTimeframe();
+  if (!timeframe) {
+    setDownMsg('Pick a timeframe.', 'err');
+    return;
+  }
   const from = resolveFrom();
   if (from === undefined) {
     setDownMsg('Pick a valid start date.', 'err');
+    return;
+  }
+  const to = resolveTo();
+  if (to === undefined) {
+    setDownMsg('Pick a valid end date.', 'err');
     return;
   }
   downloading = true;
@@ -553,10 +719,10 @@ downloadBtn.addEventListener('click', () => {
     provider: providerSel.value,
     broker: currentMultiBroker ? brokerSel.value : undefined,
     symbol,
-    timeframe: timeframeSel.value,
+    timeframe,
     from,
-    to: Math.floor(Date.now() / 1000),
-    truncate: truncateChk.checked,
+    to,
+    truncate: targetExists && truncateChk.checked,
   });
 });
 
@@ -583,6 +749,8 @@ function setProgress(done: number, total: number, indeterminate: boolean): void 
 function onDownloadDone(symbol: string, bars: number): void {
   endDownload();
   setDownMsg(`Downloaded ${symbol}: ${bars.toLocaleString('en-US')} bars.`, 'ok');
+  // The file exists now: re-probe so Truncate shows up for a repeat download.
+  scheduleTargetProbe(false);
 }
 
 function onDownloadError(message: string): void {
@@ -612,7 +780,7 @@ function persist(): void {
     type: 'persist',
     provider: providerSel.value || undefined,
     broker: currentMultiBroker ? brokerSel.value || undefined : undefined,
-    timeframe: timeframeSel.value || undefined,
+    timeframe: currentTimeframe() || undefined,
   });
 }
 

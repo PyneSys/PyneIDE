@@ -22,6 +22,9 @@ export type BrowserInMessage =
   // reqId correlates a syminfo reply with the row the webview asked about.
   | { type: 'syminfo'; reqId: number; symbol: string; info: SymInfoDict }
   | { type: 'syminfoError'; reqId: number; symbol: string; message: string }
+  // Does a download of the current symbol + timeframe already have a file?
+  // Drives the smart From default and the Truncate toggle (TUI parity).
+  | { type: 'targetInfo'; reqId: number; exists: boolean; error?: string }
   | { type: 'downloadProgress'; done: number; total: number; indeterminate?: boolean }
   | { type: 'downloadDone'; ohlcvPath: string; barsWritten: number; symbol: string }
   | { type: 'downloadError'; kind: string; message: string; retryable: boolean }
@@ -34,6 +37,14 @@ export type BrowserOutMessage =
   | { type: 'selectProvider'; provider: string }
   | { type: 'selectBroker'; provider: string; broker?: string }
   | { type: 'requestSyminfo'; reqId: number; provider: string; broker?: string; symbol: string }
+  | {
+      type: 'requestTarget';
+      reqId: number;
+      provider: string;
+      broker?: string;
+      symbol: string;
+      timeframe: string;
+    }
   | {
       type: 'download';
       provider: string;

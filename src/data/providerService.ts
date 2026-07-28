@@ -316,6 +316,12 @@ export interface BrokersResult {
 /** A fully serialized SymInfo (flat fields + opening_hours / session arrays). */
 export type SymInfoDict = Record<string, unknown>;
 
+/** Where a download would land (`ohlcv_path`), and whether it is already there. */
+export interface OhlcvPathResult {
+  path: string;
+  exists: boolean;
+}
+
 export interface DownloadResult {
   ohlcv_path: string;
   bars_written: number;

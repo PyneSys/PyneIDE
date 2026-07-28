@@ -26,6 +26,7 @@ import {
   ProviderServiceError,
   type BrokersResult,
   type DownloadResult,
+  type OhlcvPathResult,
   type ProviderInfo,
   type SymInfoDict,
 } from './providerService';
@@ -38,6 +39,10 @@ const LAST_TIMEFRAME_KEY = 'pyneide.symbolBrowser.timeframe';
 /** Host-side syminfo LRU: avoids re-hitting the service (and provider REST) as
  * the cursor moves back over rows already seen. Keyed provider|broker|symbol|tf. */
 const SYMINFO_CACHE_MAX = 300;
+
+/** Host-side `.ohlcv` target-path cache, keyed provider|broker|symbol|tf. The
+ * path is a pure function of that key, so only the existence check is redone. */
+const OHLCV_PATH_CACHE_MAX = 500;
 
 /**
  * A security-download prefill: the browser seeds its search box with the
@@ -77,6 +82,7 @@ export class SymbolBrowserPanel {
   private readonly panel: vscode.WebviewPanel;
   private readonly service: ProviderService;
   private readonly syminfoCache = new Map<string, SymInfoDict>();
+  private readonly ohlcvPathCache = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private activeDownloadId: number | undefined;
   /** Armed security-download prefill (map write + Run offer after download). */
@@ -170,6 +176,9 @@ export class SymbolBrowserPanel {
       case 'requestSyminfo':
         await this.sendSyminfo(msg);
         break;
+      case 'requestTarget':
+        await this.sendTargetInfo(msg);
+        break;
       case 'download':
         await this.runDownload(msg);
         break;
@@ -259,6 +268,46 @@ export class SymbolBrowserPanel {
     } catch (err) {
       this.post({ type: 'syminfoError', reqId: msg.reqId, symbol: msg.symbol, message: errMessage(err) });
     }
+  }
+
+  /**
+   * Answer "would this download overwrite something?" for the download bar.
+   *
+   * The provider class names the file (only it knows the broker-qualified
+   * form), so the path itself comes from the service — but it is a pure
+   * function of provider|broker|symbol|tf, so it is cached and only the
+   * existence check is redone, keeping the answer fresh right after a download.
+   */
+  private async sendTargetInfo(msg: {
+    reqId: number;
+    provider: string;
+    broker?: string;
+    symbol: string;
+    timeframe: string;
+  }): Promise<void> {
+    const key = `${msg.provider}|${msg.broker ?? ''}|${msg.symbol}|${msg.timeframe}`;
+    let target = this.ohlcvPathCache.get(key);
+    if (target === undefined) {
+      try {
+        const res = await this.service.request<OhlcvPathResult>('ohlcv_path', {
+          provider: msg.provider,
+          broker: msg.broker,
+          symbol: msg.symbol,
+          timeframe: msg.timeframe,
+        });
+        target = res.path;
+        this.ohlcvPathCache.set(key, target);
+        while (this.ohlcvPathCache.size > OHLCV_PATH_CACHE_MAX) {
+          const oldest = this.ohlcvPathCache.keys().next().value;
+          if (oldest === undefined) break;
+          this.ohlcvPathCache.delete(oldest);
+        }
+      } catch (err) {
+        this.post({ type: 'targetInfo', reqId: msg.reqId, exists: false, error: errMessage(err) });
+        return;
+      }
+    }
+    this.post({ type: 'targetInfo', reqId: msg.reqId, exists: fs.existsSync(target) });
   }
 
   private async runDownload(msg: {
@@ -417,6 +466,7 @@ export class SymbolBrowserPanel {
     color-scheme: light dark;
   }
   #filter { flex: 1; min-width: 80px; }
+  #downbar input.custom { width: 90px; }
   #main { flex: 1; min-height: 0; display: flex; }
   #list-pane { flex: 0 0 42%; min-width: 220px; display: flex; flex-direction: column;
     border-right: 1px solid var(--vscode-panel-border, #444); }
@@ -508,10 +558,14 @@ export class SymbolBrowserPanel {
 <div id="downbar">
   <label>Timeframe</label>
   <select id="timeframe"></select>
+  <input type="text" id="timeframe-custom" class="custom" placeholder="e.g. 3, 90, 1D" hidden />
   <label>From</label>
   <select id="from"></select>
   <input type="date" id="from-date" hidden />
-  <label class="check"><input type="checkbox" id="truncate" /> truncate</label>
+  <label>To</label>
+  <select id="to"></select>
+  <input type="date" id="to-date" hidden />
+  <label class="check" id="truncate-label" hidden><input type="checkbox" id="truncate" /> truncate</label>
   <button id="download" disabled>Download</button>
   <button id="cancel" class="secondary" hidden>Cancel</button>
   <div id="progress-wrap">
