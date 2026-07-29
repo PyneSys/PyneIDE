@@ -12,6 +12,7 @@ import type {
   TradeRecord,
 } from '../run/bridgeClient';
 import type { CandleStyleId } from './candleStyle';
+import type { PriceScaleId } from './priceScale';
 
 /** One visual chart marker aggregated from every native source breakpoint on
  * this script that contains the same managed time condition. */
@@ -36,6 +37,8 @@ export type ChartInMessage =
   /** Persisted candle style pushed from the host: on webview load and on every
    * settings change, so every open chart follows the one setting. */
   | { type: 'candleStyle'; style: CandleStyleId }
+  /** Persisted price-scale mode, pushed on the same occasions as candleStyle. */
+  | { type: 'priceScale'; scale: PriceScaleId }
   | { type: 'end'; bars: number; cancelled: boolean };
 
 export type ChartOutMessage =
@@ -43,6 +46,7 @@ export type ChartOutMessage =
   | { type: 'openCsv'; which: 'plot' | 'trades' }
   /** Toolbar pick: the host owns persistence, the webview only asks. */
   | { type: 'setCandleStyle'; style: CandleStyleId }
+  | { type: 'setPriceScale'; scale: PriceScaleId }
   | { type: 'selectData' }
   | { type: 'selectBreakpointBar'; timestamp: number }
   | { type: 'removeBreakpointBar'; timestamp: number }

@@ -36,6 +36,7 @@ import {
   type CandleStyleId,
 } from '../candleStyle';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
+import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../priceScale';
 import { ColorTrack } from './colorTrack';
 import {
   calculateEquitySummary,
@@ -371,6 +372,11 @@ let legendVisible = true;
  * stored value on load, so this initial value only covers the gap before the
  * first message (and standalone test harnesses). */
 let candleStyleId: CandleStyleId = DEFAULT_CANDLE_STYLE;
+
+/** Mirrors the persisted `pyneide.chart.priceScale`, same host-owned lifecycle
+ * as `candleStyleId`. Applies to the price pane only: an indicator pane's own
+ * scale is unrelated to how price is plotted. */
+let priceScaleId: PriceScaleId = DEFAULT_PRICE_SCALE;
 
 const container = document.getElementById('chart') as HTMLDivElement;
 
@@ -799,6 +805,10 @@ function startRun(start: StartEvent): void {
     updateRealtimeButton(data as VisibleRange)
   );
   applyVolume(state, false);
+  // The y-axis template belongs to the chart instance, and a run builds a new
+  // one — re-apply the persisted scale or every re-run would drop back to
+  // linear.
+  applyPriceScale();
   syncBreakpointOverlays(state);
   syncToolbar();
   updateRealtimeButton();
@@ -1672,6 +1682,7 @@ function positionPlotsPopup(): void {
 function openPlotsPopup(): void {
   if (!plotsPopupEl || !state) return;
   closeBreakpointsPopup();
+  closeScalePopup();
   renderPlotList(state);
   plotsPopupEl.hidden = false;
   positionPlotsPopup();
@@ -1806,6 +1817,114 @@ function closeCandlePopup(): void {
   if (candlePopupEl) candlePopupEl.hidden = true;
   tbCandleEl?.classList.remove('active');
   tbCandleEl?.setAttribute('aria-pressed', 'false');
+}
+
+// --- Price scale popup: how the price axis maps values to pixels ------------
+// Same shape as the chart-style popup, down to the row markup, and the same
+// host-owned persistence. KLineChart ships all three y-axis templates, so
+// switching is a single overrideYAxis() on the price pane.
+
+const scalePopupEl = ((): HTMLDivElement | null => {
+  if (!document.body) return null;
+  const el = document.createElement('div');
+  el.id = 'scale-popup';
+  el.hidden = true;
+  document.body.appendChild(el);
+  return el;
+})();
+
+/** A 16×16 sketch of each mapping: evenly spaced ticks with a straight rise
+ * (regular), tightening ticks with a flattening curve (logarithmic), and a
+ * zero baseline the curve moves around (percent). */
+function scaleGlyph(id: PriceScaleId): string {
+  // Grid rules rather than a price curve: at 16px a bending line is
+  // indistinguishable from a straight one, while line SPACING reads instantly
+  // — and spacing is exactly what each mode changes.
+  const axis = '<path d="M2.5 2v12"/>';
+  switch (id) {
+    case 'logarithm':
+      // Same price step, less and less room as price grows: rules crowd upward.
+      return axis + '<path d="M2.5 3h11M2.5 4.9h11M2.5 7.8h11M2.5 13h11"/>';
+    case 'percentage':
+      // A zero baseline (dashed) with symmetric change above and below it.
+      return (
+        axis +
+        '<path d="M2.5 4h11M2.5 13h11"/>' +
+        '<path d="M2.5 8.5h11" stroke-dasharray="2 1.6"/>'
+      );
+    default:
+      // Equal price steps, equal spacing.
+      return axis + '<path d="M2.5 3h11M2.5 6.3h11M2.5 9.6h11M2.5 13h11"/>';
+  }
+}
+
+function renderScaleList(): void {
+  if (!scalePopupEl) return;
+  scalePopupEl.innerHTML = '';
+  for (const option of PRICE_SCALE_OPTIONS) {
+    const row = document.createElement('div');
+    row.className = 'candle-row';
+    const active = option.id === priceScaleId;
+    if (active) row.classList.add('active');
+    row.title = option.detail;
+    row.innerHTML =
+      `<svg viewBox="0 0 16 16" aria-hidden="true">${scaleGlyph(option.id)}</svg>` +
+      `<span class="candle-name"></span><span class="candle-check">${active ? '✓' : ''}</span>`;
+    const name = row.querySelector('.candle-name');
+    if (name) name.textContent = option.label;
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeScalePopup();
+      if (option.id === priceScaleId) return;
+      // Apply locally first, persist through the host — same as chart style.
+      priceScaleId = option.id;
+      applyPriceScale();
+      vscode.postMessage({ type: 'setPriceScale', scale: option.id });
+    });
+    scalePopupEl.appendChild(row);
+  }
+}
+
+/**
+ * Point the price pane's y-axis at the chosen template and refresh the button.
+ * `overrideYAxis` rebuilds the axis and relays out, but touches no data, so the
+ * viewport and every drawn series stay where they are — the plot/drawing/marker
+ * layers all go through `yAxis.convertToPixel`, which follows the new mapping.
+ */
+function applyPriceScale(): void {
+  state?.chart.overrideYAxis({ paneId: 'candle_pane', name: priceScaleId });
+  const label = PRICE_SCALE_OPTIONS.find((o) => o.id === priceScaleId)?.label ?? priceScaleId;
+  if (tbScaleEl) {
+    tbScaleEl.title = `Price scale: ${label}`;
+    tbScaleEl.setAttribute('aria-label', `Price scale: ${label}`);
+    // Unlike chart style, a non-default scale changes how the numbers read, so
+    // the button stays lit as a reminder of what is on.
+    tbScaleEl.classList.toggle('active', priceScaleId !== DEFAULT_PRICE_SCALE);
+  }
+  if (scalePopupEl && !scalePopupEl.hidden) renderScaleList();
+}
+
+function positionScalePopup(): void {
+  if (!scalePopupEl || !tbScaleEl) return;
+  const r = tbScaleEl.getBoundingClientRect();
+  scalePopupEl.style.left = `${Math.round(r.left)}px`;
+  scalePopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+}
+
+function openScalePopup(): void {
+  if (!scalePopupEl) return;
+  closePlotsPopup();
+  closeBreakpointsPopup();
+  closeCandlePopup();
+  renderScaleList();
+  scalePopupEl.hidden = false;
+  positionScalePopup();
+  tbScaleEl?.setAttribute('aria-pressed', 'true');
+}
+
+function closeScalePopup(): void {
+  if (scalePopupEl) scalePopupEl.hidden = true;
+  tbScaleEl?.setAttribute('aria-pressed', 'false');
 }
 
 /**
@@ -2133,6 +2252,7 @@ tabBodyEl?.addEventListener('click', (event) => {
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
 const tbCandleEl = document.getElementById('tb-candle') as HTMLButtonElement | null;
+const tbScaleEl = document.getElementById('tb-scale') as HTMLButtonElement | null;
 const tbLegendEl = document.getElementById('tb-legend') as HTMLButtonElement | null;
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
@@ -2213,6 +2333,8 @@ function openBreakpointsPopup(): void {
   if (!breakpointsPopupEl || !chartBreakpointTargets.length) return;
   closePlotsPopup();
   closeGotoPopup();
+  closeCandlePopup();
+  closeScalePopup();
   renderBreakpointList();
   breakpointsPopupEl.hidden = false;
   tbBreakpointsEl?.classList.add('active');
@@ -2358,14 +2480,23 @@ tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   closeCandlePopup();
+  closeScalePopup();
   togglePlotsPopup();
 });
 
 tbCandleEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeScalePopup();
   if (candlePopupEl?.hidden === false) closeCandlePopup();
   else openCandlePopup();
+});
+
+tbScaleEl?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeGotoPopup();
+  if (scalePopupEl?.hidden === false) closeScalePopup();
+  else openScalePopup();
 });
 
 /** Reflect `legendVisible` on the button and, when a chart exists, on it. The
@@ -2421,6 +2552,7 @@ function toggleMeasureDrawing(): void {
   closeGotoPopup();
   closeBreakpointsPopup();
   closeCandlePopup();
+  closeScalePopup();
   const id = st.chart.createOverlay({
     name: MEASURE_OVERLAY_NAME,
     paneId: 'candle_pane',
@@ -2457,6 +2589,11 @@ document.addEventListener('keydown', (event) => {
     closeCandlePopup();
     return;
   }
+  if (scalePopupEl && !scalePopupEl.hidden) {
+    event.preventDefault();
+    closeScalePopup();
+    return;
+  }
   if (!measureDrawing) return;
   event.preventDefault();
   removeMeasurement();
@@ -2484,9 +2621,17 @@ document.addEventListener('click', (event) => {
   closeCandlePopup();
 });
 
+document.addEventListener('click', (event) => {
+  if (!scalePopupEl || scalePopupEl.hidden) return;
+  const target = event.target as Node;
+  if (scalePopupEl.contains(target) || tbScaleEl?.contains(target)) return;
+  closeScalePopup();
+});
+
 window.addEventListener('resize', () => {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
   if (candlePopupEl && !candlePopupEl.hidden) positionCandlePopup();
+  if (scalePopupEl && !scalePopupEl.hidden) positionScalePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
 });
@@ -2508,6 +2653,7 @@ function openGotoPopup(): void {
   closePlotsPopup();
   closeBreakpointsPopup();
   closeCandlePopup();
+  closeScalePopup();
   gotoPopupEl.hidden = false;
   tbGotoEl?.classList.add('active');
   tbGotoEl?.setAttribute('aria-pressed', 'true');
@@ -2624,6 +2770,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'candleStyle':
       candleStyleId = msg.style;
       applyCandleStyle();
+      break;
+    case 'priceScale':
+      priceScaleId = msg.scale;
+      applyPriceScale();
       break;
     case 'breakpointSelection':
       breakpointSelectionLabel = msg.label;

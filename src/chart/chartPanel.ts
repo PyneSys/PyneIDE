@@ -29,29 +29,35 @@ import type {
 import type { RunListener } from '../run/runService';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
+import { toPriceScaleId, type PriceScaleId } from './priceScale';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
 
 /** Chart appearance is a persisted user preference, not per-panel state: every
  * chart in every window follows this one setting. */
 const CANDLE_STYLE_SETTING = 'pyneide.chart.candleStyle';
+const PRICE_SCALE_SETTING = 'pyneide.chart.priceScale';
 
 function readCandleStyle(): CandleStyleId {
   return toCandleStyleId(vscode.workspace.getConfiguration('pyneide').get('chart.candleStyle'));
 }
 
+function readPriceScale(): PriceScaleId {
+  return toPriceScaleId(vscode.workspace.getConfiguration('pyneide').get('chart.priceScale'));
+}
+
 /**
- * Write the toolbar's pick back into settings. Global by default, but a
- * workspace override already in place wins the effective value — writing Global
- * under one would leave the toolbar visibly stuck on the old style, so the
- * write follows wherever the value actually lives.
+ * Write a toolbar pick back into settings. Global by default, but a workspace
+ * override already in place wins the effective value — writing Global under one
+ * would leave the toolbar visibly stuck on the old value, so the write follows
+ * wherever the value actually lives.
  */
-function persistCandleStyle(style: CandleStyleId): void {
+function persistChartSetting(key: 'chart.candleStyle' | 'chart.priceScale', value: string): void {
   const config = vscode.workspace.getConfiguration('pyneide');
   const target =
-    config.inspect<string>('chart.candleStyle')?.workspaceValue !== undefined
+    config.inspect<string>(key)?.workspaceValue !== undefined
       ? vscode.ConfigurationTarget.Workspace
       : vscode.ConfigurationTarget.Global;
-  void config.update('chart.candleStyle', style, target);
+  void config.update(key, value, target);
 }
 
 /**
@@ -113,6 +119,10 @@ export class ChartPanel {
    * open: `ready` replays the current setting anyway). */
   setCandleStyle(style: CandleStyleId): void {
     this.post({ type: 'candleStyle', style });
+  }
+
+  setPriceScale(scale: PriceScaleId): void {
+    this.post({ type: 'priceScale', scale });
   }
 
   setBreakpointTargets(targets: ChartBreakpointTarget[]): void {
@@ -273,6 +283,7 @@ export class ChartPanel {
         // so nothing was delivered before this point — no duplicates).
         this.ready = true;
         this.post({ type: 'candleStyle', style: readCandleStyle() });
+        this.post({ type: 'priceScale', scale: readPriceScale() });
         this.replayFromSnapshot();
         this.post({ type: 'breakpoints', targets: this.breakpointTargets });
         if (this.breakpointSelectionLabel) {
@@ -291,7 +302,10 @@ export class ChartPanel {
       case 'setCandleStyle':
         // The config change echoes back through ChartManager, which is what
         // actually applies it here and in every other open chart.
-        persistCandleStyle(msg.style);
+        persistChartSetting('chart.candleStyle', msg.style);
+        break;
+      case 'setPriceScale':
+        persistChartSetting('chart.priceScale', msg.scale);
         break;
       case 'selectBreakpointBar':
         this.breakpointSelectionLabel = undefined;
@@ -465,30 +479,34 @@ export class ChartPanel {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
-  #candle-popup {
+  #candle-popup, #scale-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
     min-width: 165px; padding: 4px; font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   }
-  #candle-popup[hidden] { display: none; }
-  #candle-popup .candle-row {
+  #candle-popup[hidden], #scale-popup[hidden] { display: none; }
+  #candle-popup .candle-row, #scale-popup .candle-row {
     display: flex; align-items: center; gap: 7px; padding: 3px 6px;
     cursor: pointer; border-radius: 3px;
   }
-  #candle-popup .candle-row:hover { background: var(--vscode-list-hoverBackground, #333); }
-  #candle-popup .candle-row.active {
+  #candle-popup .candle-row:hover, #scale-popup .candle-row:hover {
+    background: var(--vscode-list-hoverBackground, #333);
+  }
+  #candle-popup .candle-row.active, #scale-popup .candle-row.active {
     color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
     background: var(--vscode-list-activeSelectionBackground, #04395e);
   }
-  #candle-popup .candle-row svg {
+  #candle-popup .candle-row svg, #scale-popup .candle-row svg {
     flex: 0 0 auto; width: 16px; height: 16px; display: block;
     fill: none; stroke: currentColor; stroke-width: 1.2;
     stroke-linecap: round; stroke-linejoin: round;
   }
-  #candle-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
-  #candle-popup .candle-check { flex: 0 0 auto; width: 10px; text-align: center; }
+  #candle-popup .candle-name, #scale-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
+  #candle-popup .candle-check, #scale-popup .candle-check {
+    flex: 0 0 auto; width: 10px; text-align: center;
+  }
   #breakpoints-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
     min-width: 250px; max-width: min(420px, calc(100% - 12px)); max-height: 60%;
@@ -686,6 +704,13 @@ export class ChartPanel {
               fill="currentColor" stroke="none"></rect>
       </svg>
     </button>
+    <button id="tb-scale" class="icon-button" title="Price scale"
+            aria-label="Price scale" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3.5 3v14"></path>
+        <path d="M3.5 4h13M3.5 6.4h13M3.5 10.2h13M3.5 16.5h13"></path>
+      </svg>
+    </button>
     <button id="tb-legend" class="icon-button" title="Hide the chart legend"
             aria-label="Hide the chart legend" aria-pressed="false">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -797,9 +822,14 @@ export class ChartManager implements RunListener {
   constructor(private readonly context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (!e.affectsConfiguration(CANDLE_STYLE_SETTING)) return;
-        const style = readCandleStyle();
-        for (const panel of this.panels.values()) panel.setCandleStyle(style);
+        if (e.affectsConfiguration(CANDLE_STYLE_SETTING)) {
+          const style = readCandleStyle();
+          for (const panel of this.panels.values()) panel.setCandleStyle(style);
+        }
+        if (e.affectsConfiguration(PRICE_SCALE_SETTING)) {
+          const scale = readPriceScale();
+          for (const panel of this.panels.values()) panel.setPriceScale(scale);
+        }
       })
     );
   }

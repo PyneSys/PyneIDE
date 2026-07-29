@@ -990,11 +990,28 @@
             "order": 5,
             "markdownDescription": "How price is drawn on the chart. The chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart."
           },
+          "pyneide.chart.priceScale": {
+            "type": "string",
+            "default": "normal",
+            "enum": [
+              "normal",
+              "logarithm",
+              "percentage"
+            ],
+            "enumDescriptions": [
+              "Linear price axis: equal price moves take equal space.",
+              "Equal percentage moves take equal space.",
+              "Percent change from the first visible bar's close."
+            ],
+            "scope": "window",
+            "order": 6,
+            "markdownDescription": "How the chart's price axis maps values to the screen. The chart toolbar's **Price scale** button writes this setting, so a pick made there is remembered and applies to every chart."
+          },
           "pyneide.reportProblem.includeLogs": {
             "type": "boolean",
             "default": true,
             "scope": "machine",
-            "order": 6,
+            "order": 7,
             "markdownDescription": "Attach the recent output-channel logs to a **Report a Problem** submission. Paths and credential-shaped strings are removed before sending; nothing is ever sent without an explicit confirmation."
           }
         }
