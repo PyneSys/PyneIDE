@@ -38,7 +38,11 @@ const SENSITIVE_SETTINGS = [
   'pineLs.baseUrl',
 ] as const;
 
-/** Settings that are plain booleans and go in as they are. */
+/**
+ * Settings that are plain booleans and go in as they are. Hidden development
+ * overrides (`included: false` in package.json) register no default value, so
+ * `get()` returns undefined for them unless the user set one.
+ */
 const BOOLEAN_SETTINGS = [
   'useOwnPynecore',
   'strictCompile',
@@ -88,7 +92,7 @@ function settingState(config: vscode.WorkspaceConfiguration, key: string): 'defa
 function collectSettings(scope?: vscode.Uri): Record<string, unknown> {
   const config = vscode.workspace.getConfiguration('pyneide', scope);
   const result: Record<string, unknown> = {};
-  for (const key of BOOLEAN_SETTINGS) result[key] = config.get<boolean>(key);
+  for (const key of BOOLEAN_SETTINGS) result[key] = config.get<boolean>(key) ?? false;
   for (const key of SENSITIVE_SETTINGS) result[key] = settingState(config, key);
   // Only whether a proxy is in play — the URL itself often carries credentials.
   const httpProxy = vscode.workspace.getConfiguration('http').get<string>('proxy')?.trim();

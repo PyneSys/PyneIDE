@@ -933,123 +933,164 @@
         ]
       }
     ],
-    "configuration": {
-      "title": "PyneIDE",
-      "properties": {
-        "pyneide.pythonPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "Path to a Python interpreter to use instead of the managed environment. PyneIDE does not install packages into it, only checks that `pynesys-pynecore` and `debugpy` are available."
-        },
-        "pyneide.venvPath": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "Path to a virtualenv directory to use instead of the managed environment. Takes precedence over `#pyneide.pythonPath#`. PyneIDE does not install packages into it."
-        },
-        "pyneide.useOwnPynecore": {
-          "type": "boolean",
-          "default": false,
-          "scope": "machine",
-          "markdownDescription": "Keep an already installed (e.g. editable/development) PyneCore in the managed environment instead of the pinned version; only a minimum-version check is performed."
-        },
-        "pyneide.apiBaseUrl": {
-          "type": "string",
-          "default": "https://api.pynesys.io",
-          "scope": "machine",
-          "markdownDescription": "Base URL of the PyneSys API. Machine-scoped on purpose: a workspace must not be able to redirect your API key to another host."
-        },
-        "pyneide.workdir": {
-          "type": "string",
-          "default": "",
-          "scope": "resource",
-          "markdownDescription": "Path to the Pyne workdir, relative to the workspace folder (`.` = the folder itself) or absolute. When empty, PyneIDE searches upward for a directory named `workdir` (pynecore behavior)."
-        },
-        "pyneide.strictCompile": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
-        },
-        "pyneide.debug.justMyCode": {
-          "type": "boolean",
-          "default": true,
-          "scope": "resource",
-          "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
-        },
-        "pyneide.run.revealOutputOnLog": {
-          "type": "boolean",
-          "default": true,
-          "scope": "resource",
-          "markdownDescription": "Reveal the **PyneIDE Run** output channel the first time a run writes a log line, so `log.info()` output is not buried under the other channels. The editor keeps the focus; turn off to never switch automatically."
-        },
-        "pyneide.chart.candleStyle": {
-          "type": "string",
-          "default": "candles",
-          "enum": [
-            "candles",
-            "hollow",
-            "bars",
-            "mono",
-            "line",
-            "area"
-          ],
-          "enumDescriptions": [
-            "Filled candles, up/down colored.",
-            "Rising candles hollow, falling filled.",
-            "OHLC bars: open tick left, close tick right.",
-            "Hollow candles in the editor foreground color.",
-            "Closing price as a plain line.",
-            "Closing price as a filled area."
-          ],
-          "scope": "window",
-          "markdownDescription": "How price is drawn on the chart. The chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart."
-        },
-        "pyneide.pyright.enabled": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "markdownDescription": "Run the bundled pyright language server for Python files in Pyne workspaces (typing diagnostics without Pylance). Automatically stays off when Pylance, Pyright or BasedPyright is installed."
-        },
-        "pyneide.checker.enabled": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "markdownDescription": "Enable the Pyne script checker (structure diagnostics for `@pyne` scripts: `main()` presence, `@script` decorator, Series/Persistent scope rules, request.security constraints). For `@pyne edge` scripts it also enforces the strict Pyne Edge profile (import whitelist, allowed language subset)."
-        },
-        "pyneide.pineLs.enabled": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "markdownDescription": "Enable the Pine language server (diagnostics, completion, navigation for `.pine` files). Uses a signed native binary installed into extension storage."
-        },
-        "pyneide.reportProblem.includeLogs": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "markdownDescription": "Attach the recent output-channel logs to a **Report a Problem** submission. Paths and credential-shaped strings are removed before sending; nothing is ever sent without an explicit confirmation."
-        },
-        "pyneide.pineLs.autoUpdate": {
-          "type": "boolean",
-          "default": true,
-          "scope": "machine",
-          "markdownDescription": "Check for Pine language server updates in the background (at most once a day). Updates install atomically; the previous version is kept for rollback."
-        },
-        "pyneide.pineLs.path": {
-          "type": "string",
-          "default": "",
-          "scope": "machine",
-          "markdownDescription": "Path to a Pine language server executable to use instead of the managed install (development override). Signature verification and auto-update are skipped for it."
-        },
-        "pyneide.pineLs.baseUrl": {
-          "type": "string",
-          "default": "https://pine-ls.pynesys.io",
-          "scope": "machine",
-          "markdownDescription": "Base URL of the Pine language server release site. Every download must verify against the Ed25519 release key built into PyneIDE, so this cannot be used to inject binaries."
+    "configuration": [
+      {
+        "id": "pyneide.general",
+        "title": "General",
+        "order": 1,
+        "properties": {
+          "pyneide.workdir": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "order": 1,
+            "markdownDescription": "Path to the Pyne workdir, relative to the workspace folder (`.` = the folder itself) or absolute. When empty, PyneIDE searches upward for a directory named `workdir` (pynecore behavior)."
+          },
+          "pyneide.strictCompile": {
+            "type": "boolean",
+            "default": false,
+            "scope": "resource",
+            "order": 2,
+            "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
+          },
+          "pyneide.run.revealOutputOnLog": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "order": 3,
+            "markdownDescription": "Reveal the **PyneIDE Run** output channel the first time a run writes a log line, so `log.info()` output is not buried under the other channels. The editor keeps the focus; turn off to never switch automatically."
+          },
+          "pyneide.debug.justMyCode": {
+            "type": "boolean",
+            "default": true,
+            "scope": "resource",
+            "order": 4,
+            "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
+          },
+          "pyneide.chart.candleStyle": {
+            "type": "string",
+            "default": "candles",
+            "enum": [
+              "candles",
+              "hollow",
+              "bars",
+              "mono",
+              "line",
+              "area"
+            ],
+            "enumDescriptions": [
+              "Filled candles, up/down colored.",
+              "Rising candles hollow, falling filled.",
+              "OHLC bars: open tick left, close tick right.",
+              "Hollow candles in the editor foreground color.",
+              "Closing price as a plain line.",
+              "Closing price as a filled area."
+            ],
+            "scope": "window",
+            "order": 5,
+            "markdownDescription": "How price is drawn on the chart. The chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart."
+          },
+          "pyneide.reportProblem.includeLogs": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 6,
+            "markdownDescription": "Attach the recent output-channel logs to a **Report a Problem** submission. Paths and credential-shaped strings are removed before sending; nothing is ever sent without an explicit confirmation."
+          }
+        }
+      },
+      {
+        "id": "pyneide.codeIntelligence",
+        "title": "Code Intelligence",
+        "order": 2,
+        "properties": {
+          "pyneide.checker.enabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "Enable the Pyne script checker (structure diagnostics for `@pyne` scripts: `main()` presence, `@script` decorator, Series/Persistent scope rules, request.security constraints). For `@pyne edge` scripts it also enforces the strict Pyne Edge profile (import whitelist, allowed language subset)."
+          },
+          "pyneide.pyright.enabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "Run the bundled pyright language server for Python files in Pyne workspaces (typing diagnostics without Pylance). Automatically stays off when Pylance, Pyright or BasedPyright is installed."
+          },
+          "pyneide.pineLs.enabled": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 3,
+            "markdownDescription": "Enable the Pine language server (diagnostics, completion, navigation for `.pine` files). Uses a signed native binary installed into extension storage."
+          },
+          "pyneide.pineLs.autoUpdate": {
+            "type": "boolean",
+            "default": true,
+            "scope": "machine",
+            "order": 4,
+            "markdownDescription": "Check for Pine language server updates in the background (at most once a day). Updates install atomically; the previous version is kept for rollback."
+          }
+        }
+      },
+      {
+        "id": "pyneide.environment",
+        "title": "Environment",
+        "order": 3,
+        "properties": {
+          "pyneide.pythonPath": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 1,
+            "markdownDescription": "Path to a Python interpreter to use instead of the managed environment. PyneIDE does not install packages into it, only checks that `pynesys-pynecore` and `debugpy` are available."
+          },
+          "pyneide.venvPath": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "order": 2,
+            "markdownDescription": "Path to a virtualenv directory to use instead of the managed environment. Takes precedence over `#pyneide.pythonPath#`. PyneIDE does not install packages into it."
+          }
+        }
+      },
+      {
+        "id": "pyneide.development",
+        "title": "Development",
+        "order": 99,
+        "properties": {
+          "pyneide.useOwnPynecore": {
+            "type": "boolean",
+            "default": false,
+            "scope": "machine",
+            "included": false,
+            "markdownDescription": "Development override, hidden from the Settings UI. Keep an already installed (e.g. editable/development) PyneCore in the managed environment instead of the pinned version; only a minimum-version check is performed."
+          },
+          "pyneide.apiBaseUrl": {
+            "type": "string",
+            "default": "https://api.pynesys.io",
+            "scope": "machine",
+            "included": false,
+            "markdownDescription": "Development override, hidden from the Settings UI. Base URL of the PyneSys API. Machine-scoped on purpose: a workspace must not be able to redirect your API key to another host."
+          },
+          "pyneide.pineLs.path": {
+            "type": "string",
+            "default": "",
+            "scope": "machine",
+            "included": false,
+            "markdownDescription": "Development override, hidden from the Settings UI. Path to a Pine language server executable to use instead of the managed install. Signature verification and auto-update are skipped for it."
+          },
+          "pyneide.pineLs.baseUrl": {
+            "type": "string",
+            "default": "https://pine-ls.pynesys.io",
+            "scope": "machine",
+            "included": false,
+            "markdownDescription": "Development override, hidden from the Settings UI. Base URL of the Pine language server release site. Every download must verify against the Ed25519 release key built into PyneIDE, so this cannot be used to inject binaries."
+          }
         }
       }
-    },
+    ],
     "languages": [
       {
         "id": "pine",
