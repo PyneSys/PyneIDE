@@ -7,16 +7,16 @@
 
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.6.2';
+export const PYNECORE_VERSION = '6.7.0';
 export const DEBUGPY_VERSION = '1.8.21';
 
 /**
  * Minimum pynecore accepted when the user brings their own install. Held at the
- * release that introduced the plugin system (`pyne.plugin` entry points, `pyne
- * plugin list`), which every indexed plugin also requires — the extension needs
- * that floor, not the exact pin.
+ * release that replaced the v1 record file with the self-describing v2 OHLCV
+ * format (`pynecore.core.ohlcv`, millisecond timestamps) — the runner bridge
+ * imports that module unconditionally, so anything older cannot run a script.
  */
-export const PYNECORE_MIN_VERSION = '6.6.0';
+export const PYNECORE_MIN_VERSION = '6.7.0';
 
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;
