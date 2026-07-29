@@ -18,6 +18,8 @@ import {
   registerIndicator,
   registerOverlay,
   utils,
+  type CandleAreaStyle,
+  type CandleBarColor,
   type Chart,
   type KLineData,
   type DeepPartial,
@@ -27,6 +29,12 @@ import {
 } from 'klinecharts';
 
 import type { BarRow, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
+import {
+  CANDLE_STYLE_OPTIONS,
+  DEFAULT_CANDLE_STYLE,
+  isPriceLineStyle,
+  type CandleStyleId,
+} from '../candleStyle';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
 import { ColorTrack } from './colorTrack';
 import {
@@ -57,6 +65,7 @@ import {
   paneFor,
   panePrecision,
   type ArrowItem,
+  type BarcolorShape,
   type CandleItem,
   type FillItem,
   type FillSource,
@@ -358,6 +367,11 @@ let breakpointPointerGesture:
  * the legend come back every time would defeat the toggle. */
 let legendVisible = true;
 
+/** Mirrors the persisted `pyneide.chart.candleStyle`; the host pushes the
+ * stored value on load, so this initial value only covers the gap before the
+ * first message (and standalone test harnesses). */
+let candleStyleId: CandleStyleId = DEFAULT_CANDLE_STYLE;
+
 const container = document.getElementById('chart') as HTMLDivElement;
 
 function cssVar(name: string, fallback: string): string {
@@ -387,12 +401,75 @@ function legendStyles(): DeepPartial<Styles> {
   };
 }
 
+/** KLineChart's own candle colors, captured from a pristine chart before the
+ * first setStyles. setStyles only ever MERGES, so switching away from
+ * Monochrome (or Line) has to write the defaults back explicitly — there is no
+ * "unset" — and hardcoding them here would silently drift on a lib bump. */
+let candleDefaults: { bar: CandleBarColor; area: CandleAreaStyle } | undefined;
+
+function captureCandleDefaults(chart: Chart): void {
+  if (candleDefaults) return;
+  const candle = chart.getStyles().candle;
+  // Deep copy: getStyles() hands back the live style object, which the very
+  // next setStyles would mutate under us. Colors/numbers only, so JSON is safe.
+  candleDefaults = {
+    bar: JSON.parse(JSON.stringify(candle.bar)) as CandleBarColor,
+    area: JSON.parse(JSON.stringify(candle.area)) as CandleAreaStyle,
+  };
+}
+
+/** barcolor paints over the chart's own bars, so it has to follow their shape;
+ * read at draw time, so a style switch needs no indicator rebuild. */
+function barcolorShape(): BarcolorShape {
+  if (isPriceLineStyle(candleStyleId)) return 'none';
+  if (candleStyleId === 'bars') return 'bar';
+  return candleStyleId === 'hollow' || candleStyleId === 'mono' ? 'hollow' : 'candle';
+}
+
+/** Every bar/wick/border color set to the editor foreground: up bars stay
+ * distinguishable through the hollow/filled shape instead of hue. */
+function monochromeBar(): DeepPartial<CandleBarColor> {
+  const fg = cssVar('--vscode-editor-foreground', isDark() ? '#d4d4d4' : '#333333');
+  return {
+    upColor: fg, downColor: fg, noChangeColor: fg,
+    upBorderColor: fg, downBorderColor: fg, noChangeBorderColor: fg,
+    upWickColor: fg, downWickColor: fg, noChangeWickColor: fg,
+  };
+}
+
+/** Map the persisted style id onto KLineChart's candle styles. Each branch
+ * restates the default palette (see `candleDefaults`) so switching between
+ * styles in any order lands on the same picture. */
+function candleStyles(): DeepPartial<Styles> {
+  // Spread copies, never the captured objects themselves: setStyles merges its
+  // argument into the live styles, and an empty object is simply a no-op if the
+  // defaults were somehow never captured.
+  const bar: DeepPartial<CandleBarColor> = { ...candleDefaults?.bar };
+  const area: DeepPartial<CandleAreaStyle> = { ...candleDefaults?.area };
+  switch (candleStyleId) {
+    case 'hollow':
+      return { candle: { type: 'candle_up_stroke', bar } };
+    case 'bars':
+      return { candle: { type: 'ohlc', bar } };
+    case 'mono':
+      return { candle: { type: 'candle_up_stroke', bar: { ...bar, ...monochromeBar() } } };
+    case 'line':
+      // 'area' with a fully transparent fill — v10 has no separate line type.
+      return { candle: { type: 'area', bar, area: { ...area, backgroundColor: 'rgba(0,0,0,0)' } } };
+    case 'area':
+      return { candle: { type: 'area', bar, area } };
+    default:
+      return { candle: { type: 'candle_solid', bar } };
+  }
+}
+
 function chartStyles(): DeepPartial<Styles> {
   const dark = isDark();
   const text = cssVar('--vscode-editor-foreground', dark ? '#ccc' : '#333');
   const grid = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
   const axisLine = dark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
   const legend = legendStyles();
+  const candle = candleStyles();
   return {
     grid: {
       horizontal: { color: grid },
@@ -400,6 +477,7 @@ function chartStyles(): DeepPartial<Styles> {
     },
     candle: {
       priceMark: { last: { show: false } },
+      ...candle.candle,
       ...legend.candle,
     },
     indicator: legend.indicator,
@@ -651,6 +729,7 @@ function startRun(start: StartEvent): void {
   const chart = init(container);
   if (!chart) return;
 
+  captureCandleDefaults(chart);
   chart.setStyles(chartStyles());
   // The crosshair date label also shows the bar_index — a big help while
   // developing a script, since log/debug output is indexed by it.
@@ -1138,7 +1217,7 @@ function rebuildPlotIndicators(st: RunState): void {
       figures: [],
       calc: () => [],
       draw: (params: IndicatorDrawParams) => {
-        drawBarcolors(drawEnv(st, params, true), barcolorMetas);
+        drawBarcolors(drawEnv(st, params, true), barcolorMetas, barcolorShape());
         return false;
       },
     } as never);
@@ -1611,6 +1690,124 @@ function togglePlotsPopup(): void {
   else openPlotsPopup();
 }
 
+// --- Chart style popup: how price itself is drawn --------------------------
+// The same dropdown pattern as Layers, but single-choice. The pick is a
+// persisted setting, so the webview does not own it: it asks the host, which
+// stores it and pushes the new value back here and to every other open chart.
+
+const candlePopupEl = ((): HTMLDivElement | null => {
+  if (!document.body) return null;
+  const el = document.createElement('div');
+  el.id = 'candle-popup';
+  el.hidden = true;
+  document.body.appendChild(el);
+  return el;
+})();
+
+/**
+ * A 16×16 preview of each style, so the list is picked by eye rather than by
+ * name — and drawn in the chart's ACTUAL colors (Hollow and Monochrome are the
+ * same shape, and only the color tells them apart).
+ */
+function candleGlyph(id: CandleStyleId): string {
+  const fg = cssVar('--vscode-editor-foreground', isDark() ? '#d4d4d4' : '#333333');
+  const up = candleDefaults?.bar.upColor ?? fg;
+  const down = candleDefaults?.bar.downColor ?? fg;
+  const areaLine = typeof candleDefaults?.area.lineColor === 'string'
+    ? candleDefaults.area.lineColor
+    : fg;
+  /** Body + wick of one candle; `filled` false leaves it hollow. */
+  const candle = (x: number, top: number, bottom: number, color: string, filled: boolean): string =>
+    `<path d="M${x + 2.5} ${top}V${bottom}" stroke="${color}"/>` +
+    `<rect x="${x}" y="${top + 3}" width="5" height="${bottom - top - 6}" ` +
+    `stroke="${color}" fill="${filled ? color : 'none'}"/>`;
+  /** One OHLC bar: stem with the open tick left and the close tick right. */
+  const bar = (x: number, top: number, bottom: number, color: string): string =>
+    `<path d="M${x} ${top}V${bottom}M${x - 2.5} ${top + 3}H${x}M${x} ${bottom - 3}H${x + 2.5}" ` +
+    `stroke="${color}"/>`;
+  const linePath = 'M2 11.5 5.5 7.5 9 9.5 14 3.5';
+  switch (id) {
+    case 'hollow':
+      return candle(2.5, 2, 13, up, false) + candle(8.5, 3, 14, down, true);
+    case 'bars':
+      return bar(4.5, 2, 13, up) + bar(11.5, 3, 14, down);
+    case 'mono':
+      return candle(2.5, 2, 13, fg, false) + candle(8.5, 3, 14, fg, true);
+    case 'line':
+      return `<path d="${linePath}" stroke="${areaLine}"/>`;
+    case 'area':
+      return `<path d="${linePath}V14H2Z" fill="${areaLine}" fill-opacity="0.4" stroke="none"/>` +
+        `<path d="${linePath}" stroke="${areaLine}"/>`;
+    default:
+      return candle(2.5, 2, 13, up, true) + candle(8.5, 3, 14, down, true);
+  }
+}
+
+function renderCandleList(): void {
+  if (!candlePopupEl) return;
+  candlePopupEl.innerHTML = '';
+  for (const option of CANDLE_STYLE_OPTIONS) {
+    const row = document.createElement('div');
+    row.className = 'candle-row';
+    const active = option.id === candleStyleId;
+    if (active) row.classList.add('active');
+    row.title = option.detail;
+    row.innerHTML =
+      `<svg viewBox="0 0 16 16" aria-hidden="true">${candleGlyph(option.id)}</svg>` +
+      `<span class="candle-name"></span><span class="candle-check">${active ? '✓' : ''}</span>`;
+    const name = row.querySelector('.candle-name');
+    if (name) name.textContent = option.label;
+    row.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeCandlePopup();
+      if (option.id === candleStyleId) return;
+      // Apply locally right away, then let the host persist it: waiting for the
+      // settings round trip would make the click feel laggy.
+      candleStyleId = option.id;
+      applyCandleStyle();
+      vscode.postMessage({ type: 'setCandleStyle', style: option.id });
+    });
+    candlePopupEl.appendChild(row);
+  }
+}
+
+/** Repaint the live chart in the current style and refresh the button's
+ * tooltip. Styles-only, so nothing recalculates and the viewport stays put. */
+function applyCandleStyle(): void {
+  state?.chart.setStyles(candleStyles());
+  const label =
+    CANDLE_STYLE_OPTIONS.find((o) => o.id === candleStyleId)?.label ?? candleStyleId;
+  if (tbCandleEl) {
+    tbCandleEl.title = `Chart style: ${label}`;
+    tbCandleEl.setAttribute('aria-label', `Chart style: ${label}`);
+  }
+  if (candlePopupEl && !candlePopupEl.hidden) renderCandleList();
+}
+
+function positionCandlePopup(): void {
+  if (!candlePopupEl || !tbCandleEl) return;
+  const r = tbCandleEl.getBoundingClientRect();
+  candlePopupEl.style.left = `${Math.round(r.left)}px`;
+  candlePopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+}
+
+function openCandlePopup(): void {
+  if (!candlePopupEl) return;
+  closePlotsPopup();
+  closeBreakpointsPopup();
+  renderCandleList();
+  candlePopupEl.hidden = false;
+  positionCandlePopup();
+  tbCandleEl?.classList.add('active');
+  tbCandleEl?.setAttribute('aria-pressed', 'true');
+}
+
+function closeCandlePopup(): void {
+  if (candlePopupEl) candlePopupEl.hidden = true;
+  tbCandleEl?.classList.remove('active');
+  tbCandleEl?.setAttribute('aria-pressed', 'false');
+}
+
 /**
  * Adaptive UI tick: a full resetData() costs O(bars), so the next tick is
  * scheduled relative to how long the last one took — the main thread stays
@@ -1935,6 +2132,7 @@ tabBodyEl?.addEventListener('click', (event) => {
 
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
+const tbCandleEl = document.getElementById('tb-candle') as HTMLButtonElement | null;
 const tbLegendEl = document.getElementById('tb-legend') as HTMLButtonElement | null;
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
@@ -2159,7 +2357,15 @@ tbDataEl?.addEventListener('click', () => vscode.postMessage({ type: 'selectData
 tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeCandlePopup();
   togglePlotsPopup();
+});
+
+tbCandleEl?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeGotoPopup();
+  if (candlePopupEl?.hidden === false) closeCandlePopup();
+  else openCandlePopup();
 });
 
 /** Reflect `legendVisible` on the button and, when a chart exists, on it. The
@@ -2214,6 +2420,7 @@ function toggleMeasureDrawing(): void {
   closePlotsPopup();
   closeGotoPopup();
   closeBreakpointsPopup();
+  closeCandlePopup();
   const id = st.chart.createOverlay({
     name: MEASURE_OVERLAY_NAME,
     paneId: 'candle_pane',
@@ -2245,6 +2452,11 @@ document.addEventListener('keydown', (event) => {
     closeBreakpointsPopup();
     return;
   }
+  if (candlePopupEl && !candlePopupEl.hidden) {
+    event.preventDefault();
+    closeCandlePopup();
+    return;
+  }
   if (!measureDrawing) return;
   event.preventDefault();
   removeMeasurement();
@@ -2265,8 +2477,16 @@ document.addEventListener('click', (event) => {
   closeBreakpointsPopup();
 });
 
+document.addEventListener('click', (event) => {
+  if (!candlePopupEl || candlePopupEl.hidden) return;
+  const target = event.target as Node;
+  if (candlePopupEl.contains(target) || tbCandleEl?.contains(target)) return;
+  closeCandlePopup();
+});
+
 window.addEventListener('resize', () => {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
+  if (candlePopupEl && !candlePopupEl.hidden) positionCandlePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
 });
@@ -2287,6 +2507,7 @@ function openGotoPopup(): void {
   if (!gotoPopupEl) return;
   closePlotsPopup();
   closeBreakpointsPopup();
+  closeCandlePopup();
   gotoPopupEl.hidden = false;
   tbGotoEl?.classList.add('active');
   tbGotoEl?.setAttribute('aria-pressed', 'true');
@@ -2399,6 +2620,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       chartBreakpointTargets = msg.targets;
       if (state) syncBreakpointOverlays(state);
       syncBreakpointControls();
+      break;
+    case 'candleStyle':
+      candleStyleId = msg.style;
+      applyCandleStyle();
       break;
     case 'breakpointSelection':
       breakpointSelectionLabel = msg.label;

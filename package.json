@@ -984,6 +984,28 @@
           "scope": "resource",
           "markdownDescription": "Reveal the **PyneIDE Run** output channel the first time a run writes a log line, so `log.info()` output is not buried under the other channels. The editor keeps the focus; turn off to never switch automatically."
         },
+        "pyneide.chart.candleStyle": {
+          "type": "string",
+          "default": "candles",
+          "enum": [
+            "candles",
+            "hollow",
+            "bars",
+            "mono",
+            "line",
+            "area"
+          ],
+          "enumDescriptions": [
+            "Filled candles, up/down colored.",
+            "Rising candles hollow, falling filled.",
+            "OHLC bars: open tick left, close tick right.",
+            "Hollow candles in the editor foreground color.",
+            "Closing price as a plain line.",
+            "Closing price as a filled area."
+          ],
+          "scope": "window",
+          "markdownDescription": "How price is drawn on the chart. The chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart."
+        },
         "pyneide.pyright.enabled": {
           "type": "boolean",
           "default": true,

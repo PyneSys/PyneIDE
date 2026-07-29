@@ -11,6 +11,7 @@ import type {
   StartEvent,
   TradeRecord,
 } from '../run/bridgeClient';
+import type { CandleStyleId } from './candleStyle';
 
 /** One visual chart marker aggregated from every native source breakpoint on
  * this script that contains the same managed time condition. */
@@ -32,11 +33,16 @@ export type ChartInMessage =
   | { type: 'stats'; stats: Record<string, number | null> }
   | { type: 'breakpoints'; targets: ChartBreakpointTarget[] }
   | { type: 'breakpointSelection'; label?: string }
+  /** Persisted candle style pushed from the host: on webview load and on every
+   * settings change, so every open chart follows the one setting. */
+  | { type: 'candleStyle'; style: CandleStyleId }
   | { type: 'end'; bars: number; cancelled: boolean };
 
 export type ChartOutMessage =
   | { type: 'ready' }
   | { type: 'openCsv'; which: 'plot' | 'trades' }
+  /** Toolbar pick: the host owns persistence, the webview only asks. */
+  | { type: 'setCandleStyle'; style: CandleStyleId }
   | { type: 'selectData' }
   | { type: 'selectBreakpointBar'; timestamp: number }
   | { type: 'removeBreakpointBar'; timestamp: number }

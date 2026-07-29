@@ -27,8 +27,32 @@ import type {
   TradeRecord,
 } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
+import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
+
+/** Chart appearance is a persisted user preference, not per-panel state: every
+ * chart in every window follows this one setting. */
+const CANDLE_STYLE_SETTING = 'pyneide.chart.candleStyle';
+
+function readCandleStyle(): CandleStyleId {
+  return toCandleStyleId(vscode.workspace.getConfiguration('pyneide').get('chart.candleStyle'));
+}
+
+/**
+ * Write the toolbar's pick back into settings. Global by default, but a
+ * workspace override already in place wins the effective value — writing Global
+ * under one would leave the toolbar visibly stuck on the old style, so the
+ * write follows wherever the value actually lives.
+ */
+function persistCandleStyle(style: CandleStyleId): void {
+  const config = vscode.workspace.getConfiguration('pyneide');
+  const target =
+    config.inspect<string>('chart.candleStyle')?.workspaceValue !== undefined
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+  void config.update('chart.candleStyle', style, target);
+}
 
 /**
  * Everything needed to rebuild a chart's webview from scratch. plotKeys is the
@@ -83,6 +107,12 @@ export class ChartPanel {
   /** Whether the chart currently has a live webview tab (not just a dormant snapshot). */
   isOpen(): boolean {
     return this.panel !== undefined;
+  }
+
+  /** Push the persisted candle style to the live webview (no-op while none is
+   * open: `ready` replays the current setting anyway). */
+  setCandleStyle(style: CandleStyleId): void {
+    this.post({ type: 'candleStyle', style });
   }
 
   setBreakpointTargets(targets: ChartBreakpointTarget[]): void {
@@ -242,6 +272,7 @@ export class ChartPanel {
         // far land before its live increments continue (post() gates on ready,
         // so nothing was delivered before this point — no duplicates).
         this.ready = true;
+        this.post({ type: 'candleStyle', style: readCandleStyle() });
         this.replayFromSnapshot();
         this.post({ type: 'breakpoints', targets: this.breakpointTargets });
         if (this.breakpointSelectionLabel) {
@@ -256,6 +287,11 @@ export class ChartPanel {
       }
       case 'selectData':
         this.onSelectData();
+        break;
+      case 'setCandleStyle':
+        // The config change echoes back through ChartManager, which is what
+        // actually applies it here and in every other open chart.
+        persistCandleStyle(msg.style);
         break;
       case 'selectBreakpointBar':
         this.breakpointSelectionLabel = undefined;
@@ -429,6 +465,30 @@ export class ChartPanel {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
+  #candle-popup {
+    position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    min-width: 165px; padding: 4px; font-size: 11px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #candle-popup[hidden] { display: none; }
+  #candle-popup .candle-row {
+    display: flex; align-items: center; gap: 7px; padding: 3px 6px;
+    cursor: pointer; border-radius: 3px;
+  }
+  #candle-popup .candle-row:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #candle-popup .candle-row.active {
+    color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+    background: var(--vscode-list-activeSelectionBackground, #04395e);
+  }
+  #candle-popup .candle-row svg {
+    flex: 0 0 auto; width: 16px; height: 16px; display: block;
+    fill: none; stroke: currentColor; stroke-width: 1.2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  #candle-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
+  #candle-popup .candle-check { flex: 0 0 auto; width: 10px; text-align: center; }
   #breakpoints-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
     min-width: 250px; max-width: min(420px, calc(100% - 12px)); max-height: 60%;
@@ -617,6 +677,15 @@ export class ChartPanel {
         <path d="m4.5 9.5-1.5.8 7 3.7 7-3.7-1.5-.8M4.5 13.2l-1.5.8 7 3.5 7-3.5-1.5-.8"></path>
       </svg>
     </button>
+    <button id="tb-candle" class="icon-button" title="Chart style"
+            aria-label="Chart style" aria-pressed="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M6 3v3.2M6 13.8V17M14 5v2.2M14 14.8V17"></path>
+        <rect x="3.6" y="6.2" width="4.8" height="7.6" rx="0.8"></rect>
+        <rect x="11.6" y="7.2" width="4.8" height="7.6" rx="0.8"
+              fill="currentColor" stroke="none"></rect>
+      </svg>
+    </button>
     <button id="tb-legend" class="icon-button" title="Hide the chart legend"
             aria-label="Hide the chart legend" aria-pressed="false">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -725,7 +794,15 @@ export class ChartManager implements RunListener {
    * while a run/preview/debug is streaming to it. */
   isPinned: ((chartKey: string) => boolean) | undefined;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(private readonly context: vscode.ExtensionContext) {
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration(CANDLE_STYLE_SETTING)) return;
+        const style = readCandleStyle();
+        for (const panel of this.panels.values()) panel.setCandleStyle(style);
+      })
+    );
+  }
 
   /** Script backing the currently active chart tab, if that chart can own
    * inputs. Raw data previews deliberately return no script. */
