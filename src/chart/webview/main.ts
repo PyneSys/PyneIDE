@@ -1682,7 +1682,6 @@ function positionPlotsPopup(): void {
 function openPlotsPopup(): void {
   if (!plotsPopupEl || !state) return;
   closeBreakpointsPopup();
-  closeScalePopup();
   renderPlotList(state);
   plotsPopupEl.hidden = false;
   positionPlotsPopup();
@@ -1819,113 +1818,122 @@ function closeCandlePopup(): void {
   tbCandleEl?.setAttribute('aria-pressed', 'false');
 }
 
-// --- Price scale popup: how the price axis maps values to pixels ------------
-// Same shape as the chart-style popup, down to the row markup, and the same
-// host-owned persistence. KLineChart ships all three y-axis templates, so
-// switching is a single overrideYAxis() on the price pane.
+// --- Price scale controls: the A / L / % corner between the two axes --------
+// Parked where a trading chart puts them — bottom-right, in the price axis
+// column — because they belong to that axis, not to the chart-wide toolbar.
+// L and % are the mapping (a persisted setting, host-owned like chart style);
+// A toggles auto-fit — lit while the axis follows the visible bars, off while
+// it stays locked where the user put it.
 
-const scalePopupEl = ((): HTMLDivElement | null => {
-  if (!document.body) return null;
-  const el = document.createElement('div');
-  el.id = 'scale-popup';
-  el.hidden = true;
-  document.body.appendChild(el);
-  return el;
-})();
+const scaleControlsEl = document.getElementById('scale-controls');
+const scaleAutoEl = document.getElementById('sc-auto') as HTMLButtonElement | null;
+const scaleLogEl = document.getElementById('sc-log') as HTMLButtonElement | null;
+const scalePercentEl = document.getElementById('sc-percent') as HTMLButtonElement | null;
 
-/** A 16×16 sketch of each mapping: evenly spaced ticks with a straight rise
- * (regular), tightening ticks with a flattening curve (logarithmic), and a
- * zero baseline the curve moves around (percent). */
-function scaleGlyph(id: PriceScaleId): string {
-  // Grid rules rather than a price curve: at 16px a bending line is
-  // indistinguishable from a straight one, while line SPACING reads instantly
-  // — and spacing is exactly what each mode changes.
-  const axis = '<path d="M2.5 2v12"/>';
-  switch (id) {
-    case 'logarithm':
-      // Same price step, less and less room as price grows: rules crowd upward.
-      return axis + '<path d="M2.5 3h11M2.5 4.9h11M2.5 7.8h11M2.5 13h11"/>';
-    case 'percentage':
-      // A zero baseline (dashed) with symmetric change above and below it.
-      return (
-        axis +
-        '<path d="M2.5 4h11M2.5 13h11"/>' +
-        '<path d="M2.5 8.5h11" stroke-dasharray="2 1.6"/>'
-      );
-    default:
-      // Equal price steps, equal spacing.
-      return axis + '<path d="M2.5 3h11M2.5 6.3h11M2.5 9.6h11M2.5 13h11"/>';
-  }
-}
+/** The price pane's y-axis, with the auto-fit members KLineChart implements at
+ * runtime but leaves out of its published types. */
+type PriceAxis = {
+  getAutoCalcTickFlag?: () => boolean;
+  setRange?: (range: unknown) => void;
+  getRange: () => unknown;
+};
 
-function renderScaleList(): void {
-  if (!scalePopupEl) return;
-  scalePopupEl.innerHTML = '';
-  for (const option of PRICE_SCALE_OPTIONS) {
-    const row = document.createElement('div');
-    row.className = 'candle-row';
-    const active = option.id === priceScaleId;
-    if (active) row.classList.add('active');
-    row.title = option.detail;
-    row.innerHTML =
-      `<svg viewBox="0 0 16 16" aria-hidden="true">${scaleGlyph(option.id)}</svg>` +
-      `<span class="candle-name"></span><span class="candle-check">${active ? '✓' : ''}</span>`;
-    const name = row.querySelector('.candle-name');
-    if (name) name.textContent = option.label;
-    row.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeScalePopup();
-      if (option.id === priceScaleId) return;
-      // Apply locally first, persist through the host — same as chart style.
-      priceScaleId = option.id;
-      applyPriceScale();
-      vscode.postMessage({ type: 'setPriceScale', scale: option.id });
-    });
-    scalePopupEl.appendChild(row);
-  }
+function priceAxis(): PriceAxis | undefined {
+  return state?.chart.getYAxes({ paneId: 'candle_pane' })[0] as PriceAxis | undefined;
 }
 
 /**
- * Point the price pane's y-axis at the chosen template and refresh the button.
+ * KLineChart drops the price axis out of auto-fit as soon as the user drags it
+ * (`setRange` clears the flag) and only a double-click on the axis re-arms it.
+ * The flag is readable at runtime but absent from the published types, hence
+ * the guarded call — an unknown state simply reads as "auto", which is what a
+ * fresh chart is.
+ */
+function isPriceAxisAuto(): boolean {
+  const axis = priceAxis();
+  return typeof axis?.getAutoCalcTickFlag === 'function' ? axis.getAutoCalcTickFlag() : true;
+}
+
+/**
+ * Auto-fit on or off, the way a trading chart's `A` works: on, the price axis
+ * keeps fitting the visible bars; off, the range stays exactly where it is
+ * while you scroll. Turning it off is `setRange(getRange())` — the same call
+ * a manual axis drag makes, which is what clears the flag in the first place.
+ */
+function setPriceAxisAuto(auto: boolean): void {
+  const axis = priceAxis();
+  if (!axis) return;
+  if (auto) {
+    // Re-applying the current template re-arms the flag and relays out.
+    state?.chart.overrideYAxis({ paneId: 'candle_pane', name: priceScaleId });
+  } else if (typeof axis.setRange === 'function') {
+    axis.setRange(axis.getRange());
+  }
+  // Reads the flag back rather than assuming: if the private call is ever gone,
+  // the button silently stays on instead of lying about the state.
+  syncScaleControls();
+}
+
+/**
+ * Point the price pane's y-axis at the chosen template and refresh the buttons.
  * `overrideYAxis` rebuilds the axis and relays out, but touches no data, so the
  * viewport and every drawn series stay where they are — the plot/drawing/marker
  * layers all go through `yAxis.convertToPixel`, which follows the new mapping.
+ * It also re-arms auto-fit, which is exactly what the A button needs.
  */
 function applyPriceScale(): void {
   state?.chart.overrideYAxis({ paneId: 'candle_pane', name: priceScaleId });
-  const label = PRICE_SCALE_OPTIONS.find((o) => o.id === priceScaleId)?.label ?? priceScaleId;
-  if (tbScaleEl) {
-    tbScaleEl.title = `Price scale: ${label}`;
-    tbScaleEl.setAttribute('aria-label', `Price scale: ${label}`);
-    // Unlike chart style, a non-default scale changes how the numbers read, so
-    // the button stays lit as a reminder of what is on.
-    tbScaleEl.classList.toggle('active', priceScaleId !== DEFAULT_PRICE_SCALE);
+  syncScaleControls();
+}
+
+/** Reflect the current mapping and auto-fit state on the three corner buttons. */
+function syncScaleControls(): void {
+  if (scaleControlsEl) scaleControlsEl.hidden = !state;
+  const option = (id: PriceScaleId): string => {
+    const found = PRICE_SCALE_OPTIONS.find((o) => o.id === id);
+    return found ? `${found.label} — ${found.detail}` : id;
+  };
+  const label =
+    PRICE_SCALE_OPTIONS.find((o) => o.id === priceScaleId)?.label ?? priceScaleId;
+  for (const [el, id] of [
+    [scaleLogEl, 'logarithm'],
+    [scalePercentEl, 'percentage'],
+  ] as const) {
+    if (!el) continue;
+    const on = priceScaleId === id;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-pressed', String(on));
+    el.title = on ? `${option(id)}\nClick to go back to ${option('normal')}` : option(id);
   }
-  if (scalePopupEl && !scalePopupEl.hidden) renderScaleList();
+  if (scaleAutoEl) {
+    const auto = isPriceAxisAuto();
+    scaleAutoEl.classList.toggle('active', auto);
+    scaleAutoEl.setAttribute('aria-pressed', String(auto));
+    scaleAutoEl.title = auto
+      ? `${label} scale, auto-fitted to the visible bars\nClick to lock it where it is`
+      : `${label} scale, locked\nClick to auto-fit it to the visible bars again`;
+  }
 }
 
-function positionScalePopup(): void {
-  if (!scalePopupEl || !tbScaleEl) return;
-  const r = tbScaleEl.getBoundingClientRect();
-  scalePopupEl.style.left = `${Math.round(r.left)}px`;
-  scalePopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+/** Switch mapping (or back to Regular when the active one is clicked again),
+ * apply it locally for an instant response, and let the host persist it. */
+function pickPriceScale(id: PriceScaleId): void {
+  const next = priceScaleId === id ? DEFAULT_PRICE_SCALE : id;
+  if (next === priceScaleId) return;
+  priceScaleId = next;
+  applyPriceScale();
+  vscode.postMessage({ type: 'setPriceScale', scale: next });
 }
 
-function openScalePopup(): void {
-  if (!scalePopupEl) return;
-  closePlotsPopup();
-  closeBreakpointsPopup();
-  closeCandlePopup();
-  renderScaleList();
-  scalePopupEl.hidden = false;
-  positionScalePopup();
-  tbScaleEl?.setAttribute('aria-pressed', 'true');
-}
+scaleLogEl?.addEventListener('click', () => pickPriceScale('logarithm'));
+scalePercentEl?.addEventListener('click', () => pickPriceScale('percentage'));
+scaleAutoEl?.addEventListener('click', () => setPriceAxisAuto(!isPriceAxisAuto()));
 
-function closeScalePopup(): void {
-  if (scalePopupEl) scalePopupEl.hidden = true;
-  tbScaleEl?.setAttribute('aria-pressed', 'false');
-}
+// A y-axis drag or wheel-zoom turns auto-fit off without any event to listen
+// for, so the button state is refreshed after any pointer interaction with the
+// chart. Reading the flag is a plain property read — cheap enough for this.
+window.addEventListener('pointerup', () => syncScaleControls());
+container.addEventListener('wheel', () => syncScaleControls(), { passive: true });
 
 /**
  * Adaptive UI tick: a full resetData() costs O(bars), so the next tick is
@@ -2252,7 +2260,6 @@ tabBodyEl?.addEventListener('click', (event) => {
 const tbDataEl = document.getElementById('tb-data') as HTMLButtonElement | null;
 const tbLayersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
 const tbCandleEl = document.getElementById('tb-candle') as HTMLButtonElement | null;
-const tbScaleEl = document.getElementById('tb-scale') as HTMLButtonElement | null;
 const tbLegendEl = document.getElementById('tb-legend') as HTMLButtonElement | null;
 const tbMeasureEl = document.getElementById('tb-measure') as HTMLButtonElement | null;
 const tbGotoEl = document.getElementById('tb-goto') as HTMLButtonElement | null;
@@ -2334,7 +2341,6 @@ function openBreakpointsPopup(): void {
   closePlotsPopup();
   closeGotoPopup();
   closeCandlePopup();
-  closeScalePopup();
   renderBreakpointList();
   breakpointsPopupEl.hidden = false;
   tbBreakpointsEl?.classList.add('active');
@@ -2480,23 +2486,14 @@ tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   closeCandlePopup();
-  closeScalePopup();
   togglePlotsPopup();
 });
 
 tbCandleEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
-  closeScalePopup();
   if (candlePopupEl?.hidden === false) closeCandlePopup();
   else openCandlePopup();
-});
-
-tbScaleEl?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  closeGotoPopup();
-  if (scalePopupEl?.hidden === false) closeScalePopup();
-  else openScalePopup();
 });
 
 /** Reflect `legendVisible` on the button and, when a chart exists, on it. The
@@ -2552,7 +2549,6 @@ function toggleMeasureDrawing(): void {
   closeGotoPopup();
   closeBreakpointsPopup();
   closeCandlePopup();
-  closeScalePopup();
   const id = st.chart.createOverlay({
     name: MEASURE_OVERLAY_NAME,
     paneId: 'candle_pane',
@@ -2589,11 +2585,6 @@ document.addEventListener('keydown', (event) => {
     closeCandlePopup();
     return;
   }
-  if (scalePopupEl && !scalePopupEl.hidden) {
-    event.preventDefault();
-    closeScalePopup();
-    return;
-  }
   if (!measureDrawing) return;
   event.preventDefault();
   removeMeasurement();
@@ -2621,17 +2612,9 @@ document.addEventListener('click', (event) => {
   closeCandlePopup();
 });
 
-document.addEventListener('click', (event) => {
-  if (!scalePopupEl || scalePopupEl.hidden) return;
-  const target = event.target as Node;
-  if (scalePopupEl.contains(target) || tbScaleEl?.contains(target)) return;
-  closeScalePopup();
-});
-
 window.addEventListener('resize', () => {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
   if (candlePopupEl && !candlePopupEl.hidden) positionCandlePopup();
-  if (scalePopupEl && !scalePopupEl.hidden) positionScalePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
 });
@@ -2653,7 +2636,6 @@ function openGotoPopup(): void {
   closePlotsPopup();
   closeBreakpointsPopup();
   closeCandlePopup();
-  closeScalePopup();
   gotoPopupEl.hidden = false;
   tbGotoEl?.classList.add('active');
   tbGotoEl?.setAttribute('aria-pressed', 'true');
@@ -2772,6 +2754,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       applyCandleStyle();
       break;
     case 'priceScale':
+      // Re-applying the same mapping would re-arm auto-fit, silently undoing a
+      // locked scale — and the host pushes the setting on every webview load
+      // and every settings change, not only on a real switch.
+      if (msg.scale === priceScaleId) break;
       priceScaleId = msg.scale;
       applyPriceScale();
       break;

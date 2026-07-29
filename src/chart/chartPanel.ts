@@ -479,33 +479,53 @@ export class ChartPanel {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
-  #candle-popup, #scale-popup {
+  #candle-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
     min-width: 165px; padding: 4px; font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   }
-  #candle-popup[hidden], #scale-popup[hidden] { display: none; }
-  #candle-popup .candle-row, #scale-popup .candle-row {
+  #candle-popup[hidden] { display: none; }
+  #candle-popup .candle-row {
     display: flex; align-items: center; gap: 7px; padding: 3px 6px;
     cursor: pointer; border-radius: 3px;
   }
-  #candle-popup .candle-row:hover, #scale-popup .candle-row:hover {
-    background: var(--vscode-list-hoverBackground, #333);
-  }
-  #candle-popup .candle-row.active, #scale-popup .candle-row.active {
+  #candle-popup .candle-row:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #candle-popup .candle-row.active {
     color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
     background: var(--vscode-list-activeSelectionBackground, #04395e);
   }
-  #candle-popup .candle-row svg, #scale-popup .candle-row svg {
+  #candle-popup .candle-row svg {
     flex: 0 0 auto; width: 16px; height: 16px; display: block;
     fill: none; stroke: currentColor; stroke-width: 1.2;
     stroke-linecap: round; stroke-linejoin: round;
   }
-  #candle-popup .candle-name, #scale-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
-  #candle-popup .candle-check, #scale-popup .candle-check {
-    flex: 0 0 auto; width: 10px; text-align: center;
+  #candle-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
+  #candle-popup .candle-check { flex: 0 0 auto; width: 10px; text-align: center; }
+  /* Price-scale controls, parked in the corner between the two axes the way a
+     trading chart does it: they belong to the price axis, not to the toolbar. */
+  #scale-controls {
+    position: absolute; right: 3px; bottom: 3px; z-index: 6;
+    display: flex; gap: 2px; user-select: none;
+  }
+  #scale-controls[hidden] { display: none; }
+  #scale-controls button {
+    min-width: 16px; height: 15px; padding: 0 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; line-height: 1; font-family: inherit;
+    color: var(--vscode-descriptionForeground, #999);
+    background: none; border: 1px solid transparent; border-radius: 2px;
+    cursor: pointer; opacity: 0.85;
+  }
+  #scale-controls button:hover {
+    opacity: 1; color: var(--vscode-foreground, #ccc);
+    background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.1));
+  }
+  #scale-controls button.active {
+    opacity: 1; color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+    border-color: var(--vscode-button-background, #0e639c);
   }
   #breakpoints-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
@@ -704,13 +724,6 @@ export class ChartPanel {
               fill="currentColor" stroke="none"></rect>
       </svg>
     </button>
-    <button id="tb-scale" class="icon-button" title="Price scale"
-            aria-label="Price scale" aria-pressed="false">
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M3.5 3v14"></path>
-        <path d="M3.5 4h13M3.5 6.4h13M3.5 10.2h13M3.5 16.5h13"></path>
-      </svg>
-    </button>
     <button id="tb-legend" class="icon-button" title="Hide the chart legend"
             aria-label="Hide the chart legend" aria-pressed="false">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -777,6 +790,14 @@ export class ChartPanel {
     <button id="tb-goto-do">Go</button>
   </div>
   <button id="to-realtime" title="Scroll to the latest bar" hidden>⇥</button>
+  <div id="scale-controls" hidden>
+    <button id="sc-auto" title="Auto fit the price scale to the visible bars"
+            aria-label="Auto fit the price scale">A</button>
+    <button id="sc-log" title="Logarithmic price scale"
+            aria-label="Logarithmic price scale" aria-pressed="false">L</button>
+    <button id="sc-percent" title="Percent price scale"
+            aria-label="Percent price scale" aria-pressed="false">%</button>
+  </div>
 </div>
 <div id="panel-splitter" role="separator" aria-orientation="horizontal"
      aria-label="Resize chart and bottom panel" tabindex="0" hidden></div>

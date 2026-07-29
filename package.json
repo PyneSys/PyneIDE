@@ -1005,7 +1005,7 @@
             ],
             "scope": "window",
             "order": 6,
-            "markdownDescription": "How the chart's price axis maps values to the screen. The chart toolbar's **Price scale** button writes this setting, so a pick made there is remembered and applies to every chart."
+            "markdownDescription": "How the chart's price axis maps values to the screen. The **L** and **%** buttons in the chart's bottom-right corner write this setting, so a pick made there is remembered and applies to every chart."
           },
           "pyneide.reportProblem.includeLogs": {
             "type": "boolean",
