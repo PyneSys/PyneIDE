@@ -62,7 +62,8 @@ function pinnedTargetTag(): string {
 export function activate(context: vscode.ExtensionContext): void {
   new PyneDecorationProvider().register(context);
 
-  context.subscriptions.push(new OhlcvEditorProvider(context).register());
+  const ohlcvEditors = new OhlcvEditorProvider(context);
+  context.subscriptions.push(ohlcvEditors.register());
 
   const output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Environment'));
   const manager = new EnvManager(context.globalStorageUri.fsPath, output);
@@ -238,13 +239,13 @@ export function activate(context: vscode.ExtensionContext): void {
       PluginsPanel.show(context, plugins)
     ),
     vscode.commands.registerCommand('pyneide.dataUpdate', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, node, updateData)
+      dataFileAction(manager, output, ohlcvEditors, node, updateData)
     ),
     vscode.commands.registerCommand('pyneide.dataTruncate', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, node, truncateData)
+      dataFileAction(manager, output, ohlcvEditors, node, truncateData)
     ),
     vscode.commands.registerCommand('pyneide.dataDownloadTimeframe', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, node, downloadOtherTimeframe)
+      dataFileAction(manager, output, ohlcvEditors, node, downloadOtherTimeframe)
     ),
     vscode.commands.registerCommand(
       'pyneide.dataPreviewChart',
@@ -380,6 +381,7 @@ function previewDataChart(
 async function dataFileAction(
   manager: EnvManager,
   output: vscode.OutputChannel,
+  ohlcvEditors: OhlcvEditorProvider,
   node: { uri?: vscode.Uri } | undefined,
   action: (
     workdir: string,
@@ -402,6 +404,9 @@ async function dataFileAction(
   );
   if (!pythonBin) return;
   await action(workdir.path, pythonBin, uri.fsPath, output);
+  // The action rewrote the file — push it into an open table right away instead
+  // of waiting for a file-watcher event.
+  await ohlcvEditors.reload(uri.fsPath);
 }
 
 /**

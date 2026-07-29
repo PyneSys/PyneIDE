@@ -65,7 +65,7 @@ window.addEventListener('message', (ev: MessageEvent<TableInMessage>) => {
 async function loadFromUri(uri: string, meta: OhlcvMeta): Promise<void> {
   try {
     // The browser streams the binary natively — no postMessage serialization.
-    const buffer = await (await fetch(uri)).arrayBuffer();
+    const buffer = await (await fetch(uri, { cache: 'no-store' })).arrayBuffer();
     load(buffer, meta);
   } catch (err) {
     showError(`Could not load data: ${err instanceof Error ? err.message : String(err)}`);

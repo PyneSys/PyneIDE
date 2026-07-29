@@ -21,10 +21,32 @@ class OhlcvDocument implements vscode.CustomDocument {
   dispose(): void {}
 }
 
+/** One open `.ohlcv` tab, with the mtime its table was last built from. */
+interface OhlcvView {
+  uri: vscode.Uri;
+  panel: vscode.WebviewPanel;
+  mtime?: number;
+}
+
 export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<OhlcvDocument> {
   static readonly viewType = 'pyneide.ohlcvTable';
 
+  /** Every open table, so a data command can push a rewritten file straight in. */
+  private readonly views = new Set<OhlcvView>();
+
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  /**
+   * Re-read a file into every table showing it. Called after a download /
+   * update / truncate: those rewrite the file behind the editor's back, and a
+   * file watcher alone has proven unreliable for that (a truncate+re-download
+   * left a stale v1 table on screen).
+   */
+  async reload(fsPath: string): Promise<void> {
+    for (const view of this.views) {
+      if (view.uri.fsPath === fsPath) await this.sendData(view);
+    }
+  }
 
   register(): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(OhlcvEditorProvider.viewType, this, {
@@ -37,6 +59,9 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
     return new OhlcvDocument(uri);
   }
 
+  /** Coalesces the write burst of a download into one reload per file. */
+  private static readonly RELOAD_DEBOUNCE_MS = 500;
+
   async resolveCustomEditor(
     document: OhlcvDocument,
     panel: vscode.WebviewPanel
@@ -48,22 +73,63 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
     panel.webview.options = { enableScripts: true, localResourceRoots: [distRoot, dataDir] };
     panel.webview.html = this.html(panel.webview, distRoot);
 
+    const view: OhlcvView = { uri: document.uri, panel };
+    this.views.add(view);
+
     // The webview reports 'ready' once its script is live; only then does a
     // postMessage reliably arrive. Load and push the data on that signal.
     panel.webview.onDidReceiveMessage(async (msg: TableOutMessage) => {
       if (msg.type === 'ready') {
-        await this.sendData(document.uri, panel);
+        await this.sendData(view);
       }
+    });
+
+    // A read-only CustomDocument is never reloaded by VSCode, so a rewritten
+    // file (or syminfo) would leave a stale table until the tab is closed.
+    const dir = vscode.Uri.joinPath(document.uri, '..');
+    const stem = path.basename(document.uri.fsPath).replace(/\.ohlcv$/i, '');
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(dir, `${stem}.{ohlcv,toml}`)
+    );
+    let pending: NodeJS.Timeout | undefined;
+    const reload = (): void => {
+      if (pending) clearTimeout(pending);
+      pending = setTimeout(() => {
+        pending = undefined;
+        void this.sendData(view);
+      }, OhlcvEditorProvider.RELOAD_DEBOUNCE_MS);
+    };
+    watcher.onDidCreate(reload);
+    watcher.onDidChange(reload);
+    // Last line of defence: whatever the watcher missed is caught when the tab
+    // is brought forward again, since `sendData` remembers the mtime it drew.
+    panel.onDidChangeViewState(() => {
+      if (panel.visible) void this.sendDataIfStale(view);
+    });
+    panel.onDidDispose(() => {
+      if (pending) clearTimeout(pending);
+      watcher.dispose();
+      this.views.delete(view);
     });
   }
 
-  private async sendData(uri: vscode.Uri, panel: vscode.WebviewPanel): Promise<void> {
-    const meta = await this.loadMeta(uri);
+  /** Re-send only when the file changed since the table was last drawn. */
+  private async sendDataIfStale(view: OhlcvView): Promise<void> {
+    const mtime = await statMtime(view.uri);
+    if (mtime !== undefined && mtime !== view.mtime) await this.sendData(view);
+  }
+
+  private async sendData(view: OhlcvView): Promise<void> {
     // Hand over a fetchable resource URI, not the bytes: the webview streams the
     // file natively, avoiding VSCode's O(n) postMessage serialization of a
-    // multi-MB Uint8Array (the "1 year takes a minute" bug).
-    const dataUri = panel.webview.asWebviewUri(uri);
-    void panel.webview.postMessage({ type: 'data', uri: dataUri.toString(), meta });
+    // multi-MB Uint8Array (the "1 year takes a minute" bug). The mtime in the
+    // query makes a reload a different URI, so no cache can serve the old file.
+    const mtime = await statMtime(view.uri);
+    if (mtime === undefined) return; // file vanished — keep the last good table
+    const meta = await this.loadMeta(view.uri);
+    const dataUri = view.panel.webview.asWebviewUri(view.uri).with({ query: `v=${mtime}` });
+    view.mtime = mtime;
+    void view.panel.webview.postMessage({ type: 'data', uri: dataUri.toString(), meta });
   }
 
   /** Read the sibling `.toml` and pull the `[symbol]` fields the table needs. */
@@ -209,6 +275,15 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
 <script src="${scriptUri}"></script>
 </body>
 </html>`;
+  }
+}
+
+/** Modification time in ms, or undefined when the file is gone. */
+async function statMtime(uri: vscode.Uri): Promise<number | undefined> {
+  try {
+    return (await vscode.workspace.fs.stat(uri)).mtime;
+  } catch {
+    return undefined;
   }
 }
 
