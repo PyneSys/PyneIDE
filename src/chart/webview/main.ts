@@ -1935,6 +1935,46 @@ scaleAutoEl?.addEventListener('click', () => setPriceAxisAuto(!isPriceAxisAuto()
 window.addEventListener('pointerup', () => syncScaleControls());
 container.addEventListener('wheel', () => syncScaleControls(), { passive: true });
 
+// --- Live re-theming -------------------------------------------------------
+// Switching theme rewrites the `--vscode-*` custom properties on the document
+// element, and swaps the `vscode-light|dark|high-contrast` class on the body.
+// Everything styled by CSS follows on its own; what does NOT are the colors
+// already handed to KLineChart through `setStyles` (grid, axis text, crosshair
+// label, monochrome candles) and the canvases painted here — those keep the
+// old theme until the next run rebuilds the chart.
+
+let themeFrame: number | undefined;
+
+function applyTheme(): void {
+  themeFrame = undefined;
+  // Memoized on the body class list, which does NOT change when a single color
+  // is overridden in settings — drop it so the next frame re-reads the theme.
+  tradeMarkerTheme = undefined;
+  // setStyles only merges, so this must pass every themed value, which is
+  // exactly what chartStyles() is; it repaints without touching data, so the
+  // viewport stays put.
+  state?.chart.setStyles(chartStyles());
+  drawPerformance();
+}
+
+/** Coalesce the burst of mutations one theme switch produces into one repaint. */
+function scheduleThemeRefresh(): void {
+  if (themeFrame !== undefined) return;
+  themeFrame = requestAnimationFrame(applyTheme);
+}
+
+if (document.body) {
+  const themeObserver = new MutationObserver(scheduleThemeRefresh);
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  // The custom properties live in the root element's inline style: a theme with
+  // the same kind (dark -> dark) or a single overridden color never touches the
+  // body class, so watching that alone would miss it.
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['style'],
+  });
+}
+
 /**
  * Adaptive UI tick: a full resetData() costs O(bars), so the next tick is
  * scheduled relative to how long the last one took — the main thread stays
