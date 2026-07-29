@@ -37,8 +37,10 @@ from pathlib import Path
 from typing import Any
 
 from pynecore.core.config import ensure_config
+from pynecore.core.download_info import read_download_provider
 from pynecore.core.download_runner import (DownloadProgress, DownloadPlan,
                                            download_to_file)
+from pynecore.core.provider_string import parse_provider_string
 from pynecore.core.plugin import (ProviderPlugin, discover_plugins,
                                    get_plugin_metadata, get_plugin_summary,
                                    is_retryable_provider_error, load_plugin)
@@ -354,13 +356,44 @@ class ProviderService:
             self._download_thread = t
         t.start()
 
+    def _download_target(self, params: dict[str, Any]) -> tuple[str, str | None, str, str]:
+        """Resolve what to download into (provider, broker, symbol, timeframe).
+
+        Either the browser's explicit selection, or — with ``path`` — the
+        provider string persisted in an existing file's ``[download]`` TOML
+        section, resolved exactly the way ``pyne data download <path>`` does.
+
+        :param params: RPC params of the ``download`` method.
+        :return: Provider name, broker (or None), symbol and timeframe.
+        :raises ValueError: If the file has no recorded provider string.
+        """
+        raw_path = params.get("path")
+        if not raw_path:
+            return (params["provider"], params.get("broker"), params["symbol"],
+                    _validate_timeframe(params["timeframe"]))
+
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = self.data_dir / path.name
+        saved = read_download_provider(path.with_suffix(".toml"))
+        if saved is None:
+            raise ValueError(
+                f"{path.with_suffix('.toml').name} has no [download] provider section. "
+                f"Download it once with a provider string to record it.")
+        provider_name = saved.split(":", 1)[0].lower()
+        provider_class = self._resolve_provider_class(provider_name)
+        parsed = parse_provider_string(saved, multi_broker=provider_class.multi_broker)
+        if not parsed.symbol:
+            raise ValueError(f"Provider string {saved!r} carries no symbol")
+        # An explicit timeframe wins: that is how "download another timeframe of
+        # this instrument" reuses the file's provider string.
+        timeframe = _validate_timeframe(params.get("timeframe") or parsed.timeframe or "1D")
+        return provider_name, parsed.broker, parsed.symbol, timeframe
+
     def _run_download(self, rid: int, params: dict[str, Any],
                       cancel_event: threading.Event) -> None:
         try:
-            provider_name = params["provider"]
-            broker = params.get("broker")
-            symbol = params["symbol"]
-            timeframe = _validate_timeframe(params["timeframe"])
+            provider_name, broker, symbol, timeframe = self._download_target(params)
             truncate = bool(params.get("truncate", False))
             time_from = self._parse_from(params["from"])
             time_to = datetime.fromtimestamp(int(params["to"]), UTC)

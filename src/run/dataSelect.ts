@@ -8,6 +8,11 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import {
+  ProviderService,
+  ProviderServiceError,
+  type DownloadResult,
+} from '../data/providerService';
 import { parseSymInfo } from '../data/syminfo';
 import { execChecked } from '../env/exec';
 import { pyneBinPath } from '../env/uv';
@@ -332,51 +337,119 @@ export async function downloadData(
   return newest.name;
 }
 
+/** Everything a Data-item action needs: the resolved env plus the target file. */
+export interface DataActionContext {
+  workdir: string;
+  pythonBin: string;
+  /** Directory that CONTAINS the pyneide_bridge package (`<ext>/python`). */
+  bridgeRoot: string;
+  ohlcvPath: string;
+  output: vscode.OutputChannel;
+}
+
 /**
- * Update an existing `.ohlcv` in place: `pyne data download <path> -f continue`,
- * re-using the provider string saved in its sibling `.toml`.
+ * Download into an existing `.ohlcv` through the provider service, so the
+ * notification carries the same real progress (and Cancel) the symbol browser
+ * shows — the `pyne data download` CLI only renders its bar into a terminal, so
+ * shelling out could offer nothing but a spinner.
+ *
+ * The provider/broker/symbol come from the file's saved `[download]` string,
+ * resolved bridge-side exactly like `pyne data download <path>` resolves it.
  */
-export async function updateData(
-  workdir: string,
-  pythonBin: string,
-  ohlcvPath: string,
-  output: vscode.OutputChannel
-): Promise<void> {
-  const pyneBin = pyneBinPath(pythonBin);
-  await runPyne(
-    pyneBin,
-    workdir,
-    ['data', 'download', ohlcvPath, '-f', 'continue'],
-    `Updating ${path.basename(ohlcvPath)}`,
-    output
-  );
+async function downloadIntoFile(
+  ctx: DataActionContext,
+  title: string,
+  params: { from: number | 'continue'; truncate?: boolean; timeframe?: string }
+): Promise<boolean> {
+  const service = new ProviderService({
+    pythonBin: ctx.pythonBin,
+    bridgeRoot: ctx.bridgeRoot,
+    workdir: ctx.workdir,
+    log: (line) => ctx.output.appendLine(line),
+  });
+  try {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title, cancellable: true },
+      async (progress, token) => {
+        // `withProgress` takes increments, the service reports absolute
+        // coverage of the requested time window.
+        let shown = 0;
+        const reportProgress = (p: { done: number; total: number; indeterminate?: boolean }): void => {
+          if (p.indeterminate || !p.total) {
+            progress.report({ message: 'downloading all available data…' });
+            return;
+          }
+          const percent = Math.min(100, Math.max(0, (p.done / p.total) * 100));
+          const increment = Math.max(0, percent - shown);
+          shown = percent;
+          progress.report({ message: `${percent.toFixed(0)}%`, increment });
+        };
+        const { id, result } = service.requestWithHandle<DownloadResult>(
+          'download',
+          {
+            path: ctx.ohlcvPath,
+            from: params.from,
+            to: Math.floor(Date.now() / 1000),
+            truncate: params.truncate ?? false,
+            timeframe: params.timeframe,
+          },
+          {
+            timeoutMs: 0, // a download's duration is unbounded
+            onProgress: reportProgress,
+          }
+        );
+        token.onCancellationRequested(() => service.cancel(id));
+        await result;
+      }
+    );
+    return true;
+  } catch (err) {
+    if (err instanceof ProviderServiceError && err.kind === 'Cancelled') return false;
+    const message = err instanceof Error ? err.message : String(err);
+    if (/\[download\]/.test(message)) {
+      const choice = await vscode.window.showErrorMessage(
+        'PyneIDE: this data file has no saved provider — use "Download Data…" to re-download it once.',
+        'Download Data…'
+      );
+      if (choice === 'Download Data…') {
+        void vscode.commands.executeCommand('pyneide.dataDownloadWizard');
+      }
+      return false;
+    }
+    const choice = await vscode.window.showErrorMessage(
+      `PyneIDE: ${title} failed: ${message}`,
+      'Show Log'
+    );
+    if (choice === 'Show Log') ctx.output.show();
+    return false;
+  } finally {
+    service.dispose();
+  }
+}
+
+/**
+ * Update an existing `.ohlcv` in place (resume from its last bar), re-using the
+ * provider string saved in its sibling `.toml`.
+ */
+export async function updateData(ctx: DataActionContext): Promise<void> {
+  await downloadIntoFile(ctx, `Updating ${path.basename(ctx.ohlcvPath)}`, { from: 'continue' });
 }
 
 /**
  * Truncate an `.ohlcv` and re-download it from scratch (modal confirm), using
- * the provider string saved in its sibling `.toml`.
+ * the provider string saved in its sibling `.toml`. Emptying the file first
+ * makes `continue` mean "one year back" (or everything, for a fetch-all
+ * provider) — the same range `pyne data download --truncate` picks.
  */
-export async function truncateData(
-  workdir: string,
-  pythonBin: string,
-  ohlcvPath: string,
-  output: vscode.OutputChannel
-): Promise<void> {
-  const name = path.basename(ohlcvPath);
+export async function truncateData(ctx: DataActionContext): Promise<void> {
+  const name = path.basename(ctx.ohlcvPath);
   const choice = await vscode.window.showWarningMessage(
     `Truncate and re-download ${name}? All existing data in this file will be lost.`,
     { modal: true },
     'Truncate & Download'
   );
   if (choice !== 'Truncate & Download') return;
-  const pyneBin = pyneBinPath(pythonBin);
-  await runPyne(
-    pyneBin,
-    workdir,
-    ['data', 'download', ohlcvPath, '--truncate'],
-    `Re-downloading ${name}`,
-    output
-  );
+  await downloadIntoFile(ctx, `Re-downloading ${name}`, { from: 'continue', truncate: true });
 }
 
 /**
@@ -388,12 +461,8 @@ export async function truncateData(
  * rule); a provider string without `@timeframe` is the `request.security()`
  * form, so `-tf` is honored rather than ignored.
  */
-export async function downloadOtherTimeframe(
-  workdir: string,
-  pythonBin: string,
-  ohlcvPath: string,
-  output: vscode.OutputChannel
-): Promise<void> {
+export async function downloadOtherTimeframe(ctx: DataActionContext): Promise<void> {
+  const { ohlcvPath } = ctx;
   const tomlPath = `${ohlcvPath.slice(0, -path.extname(ohlcvPath).length)}.toml`;
   let providerString: string | undefined;
   try {
@@ -419,13 +488,18 @@ export async function downloadOtherTimeframe(
   const from = await pickDownloadRange();
   if (from === null) return;
 
-  const pyneBin = pyneBinPath(pythonBin);
-  const ok = await runPyne(
-    pyneBin,
-    workdir,
-    ['data', 'download', base, '-tf', timeframe.label, '-f', from],
-    `Downloading ${base}@${timeframe.label}`,
-    output
-  );
+  const ok = await downloadIntoFile(ctx, `Downloading ${base}@${timeframe.label}`, {
+    from: parseFrom(from),
+    timeframe: timeframe.label,
+  });
   if (ok) void vscode.commands.executeCommand('pyneide.workspace.refresh');
+}
+
+/** Turn a wizard range (`continue`, a day count, or `YYYY-MM-DD`) into what the
+ * provider service takes: the `continue` sentinel or epoch seconds. */
+function parseFrom(value: string): number | 'continue' {
+  if (value === 'continue') return 'continue';
+  const days = Number(value);
+  if (Number.isFinite(days)) return Math.floor(Date.now() / 1000) - days * 86_400;
+  return Math.floor(Date.parse(`${value}T00:00:00Z`) / 1000);
 }

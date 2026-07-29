@@ -32,7 +32,13 @@ import { PluginService } from './plugins/service';
 import { registerReportCommand } from './report/command';
 import { logHub } from './report/logTee';
 import { PyneDecorationProvider } from './pyneDecorations';
-import { downloadData, downloadOtherTimeframe, truncateData, updateData } from './run/dataSelect';
+import {
+  downloadData,
+  downloadOtherTimeframe,
+  truncateData,
+  updateData,
+  type DataActionContext,
+} from './run/dataSelect';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
@@ -239,13 +245,13 @@ export function activate(context: vscode.ExtensionContext): void {
       PluginsPanel.show(context, plugins)
     ),
     vscode.commands.registerCommand('pyneide.dataUpdate', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, ohlcvEditors, node, updateData)
+      dataFileAction(context, manager, output, ohlcvEditors, node, updateData)
     ),
     vscode.commands.registerCommand('pyneide.dataTruncate', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, ohlcvEditors, node, truncateData)
+      dataFileAction(context, manager, output, ohlcvEditors, node, truncateData)
     ),
     vscode.commands.registerCommand('pyneide.dataDownloadTimeframe', (node?: { uri?: vscode.Uri }) =>
-      dataFileAction(manager, output, ohlcvEditors, node, downloadOtherTimeframe)
+      dataFileAction(context, manager, output, ohlcvEditors, node, downloadOtherTimeframe)
     ),
     vscode.commands.registerCommand(
       'pyneide.dataPreviewChart',
@@ -379,16 +385,12 @@ function previewDataChart(
  * workdir and Python env, then runs `action` against the picked `.ohlcv` path.
  */
 async function dataFileAction(
+  context: vscode.ExtensionContext,
   manager: EnvManager,
   output: vscode.OutputChannel,
   ohlcvEditors: OhlcvEditorProvider,
   node: { uri?: vscode.Uri } | undefined,
-  action: (
-    workdir: string,
-    pythonBin: string,
-    ohlcvPath: string,
-    output: vscode.OutputChannel
-  ) => Promise<void>
+  action: (ctx: DataActionContext) => Promise<void>
 ): Promise<void> {
   const uri = node?.uri;
   if (!uri) return;
@@ -400,10 +402,16 @@ async function dataFileAction(
     return;
   }
   const pythonBin = await manager.ensureReady(
-    'Downloading OHLCV data uses the pyne CLI, so the Python environment must be set up first.'
+    'Downloading OHLCV data needs the pyne provider service, so the Python environment must be set up first.'
   );
   if (!pythonBin) return;
-  await action(workdir.path, pythonBin, uri.fsPath, output);
+  await action({
+    workdir: workdir.path,
+    pythonBin,
+    bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+    ohlcvPath: uri.fsPath,
+    output,
+  });
   // The action rewrote the file — push it into an open table right away instead
   // of waiting for a file-watcher event.
   await ohlcvEditors.reload(uri.fsPath);
