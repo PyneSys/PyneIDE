@@ -174,6 +174,9 @@ export class OhlcvEditorProvider implements vscode.CustomReadonlyEditorProvider<
     color: var(--vscode-descriptionForeground);
     font-weight: 600;
   }
+  #thead .sortable { cursor: pointer; user-select: none; }
+  #thead .sortable:hover { color: var(--vscode-foreground); }
+  #thead .sort-arrow { font-size: 9px; opacity: .8; }
   #viewport { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
   #spacer { position: relative; width: 100%; }
   #window { position: absolute; left: 0; right: 0; top: 0; }

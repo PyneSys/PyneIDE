@@ -246,8 +246,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.dataDownloadTimeframe', (node?: { uri?: vscode.Uri }) =>
       dataFileAction(manager, output, node, downloadOtherTimeframe)
     ),
-    vscode.commands.registerCommand('pyneide.dataPreviewChart', (node?: { uri?: vscode.Uri }) =>
-      previewDataChart(chartManager, node)
+    vscode.commands.registerCommand(
+      'pyneide.dataPreviewChart',
+      (node?: { uri?: vscode.Uri } | vscode.Uri) => previewDataChart(chartManager, node)
     ),
     vscode.commands.registerCommand('pyneide.editSymbolMap', () => editSymbolMapCommand()),
     vscode.commands.registerCommand('pyneide.openSymbolMap', () =>
@@ -354,8 +355,13 @@ async function editInputsUri(
  * Data-item "Preview chart" action: decode the `.ohlcv` host-side and open a
  * bars-only ChartPanel preview — no bridge run.
  */
-function previewDataChart(chartManager: ChartManager, node: { uri?: vscode.Uri } | undefined): void {
-  const uri = node?.uri;
+function previewDataChart(
+  chartManager: ChartManager,
+  // The Data tree passes its node; the OHLCV table's title-bar button passes
+  // the edited resource itself.
+  node: { uri?: vscode.Uri } | vscode.Uri | undefined
+): void {
+  const uri = node instanceof vscode.Uri ? node : node?.uri;
   if (!uri) return;
   try {
     const { start, bars } = buildOhlcvPreview(uri.fsPath);

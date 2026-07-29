@@ -48,6 +48,10 @@ let mintick = 0;
 let tzFormatter: Intl.DateTimeFormat | undefined;
 let tzName = 'UTC';
 let tzMode: 'utc' | 'exchange' = 'utc';
+/** Row order: oldest bar first (file order) or newest first. */
+let ascending = true;
+/** Current label of the time column, kept across header rebuilds. */
+let timeHeaderText = 'Time (UTC)';
 
 window.addEventListener('message', (ev: MessageEvent<TableInMessage>) => {
   const msg = ev.data;
@@ -167,12 +171,28 @@ function setupTimezone(timezone: string | undefined): void {
 /**
  * Rebuild the column headers from the file's own schema: a v2 file may declare
  * columns beyond OHLCV (bid/ask/open interest/…), which the rows then show.
+ * The `#` and time cells sort the table (both index and time are the same
+ * ordering, so either one flips it).
  */
 function renderThead(): void {
   const columns = ['Open', 'High', 'Low', 'Close', 'Volume', ...extraNames.map(prettyName)];
+  const arrow = `<span class="sort-arrow">${ascending ? '▲' : '▼'}</span>`;
   theadEl.innerHTML =
-    '<div class="c-idx">#</div><div class="c-time" id="th-time">Time</div>' +
+    `<div class="c-idx sortable" id="th-index"># ${arrow}</div>` +
+    `<div class="c-time sortable" id="th-time">` +
+    `<span id="th-time-label">${escapeHtml(timeHeaderText)}</span> ${arrow}</div>` +
     columns.map((name) => `<div class="c-num">${escapeHtml(name)}</div>`).join('');
+  for (const id of ['th-index', 'th-time']) {
+    const cell = document.getElementById(id);
+    if (cell) cell.onclick = toggleSort;
+  }
+}
+
+function toggleSort(): void {
+  ascending = !ascending;
+  renderThead();
+  viewport.scrollTop = 0;
+  render();
 }
 
 /** `open_interest` -> `Open interest`, for a column header. */
@@ -334,10 +354,12 @@ function updateTimeHeader(toggle: HTMLButtonElement): void {
   toggle.textContent = showingExchange ? `Show UTC` : `Show ${tzName}`;
 }
 
-/** The header row is rebuilt per file, so its time cell is looked up on use. */
+/** The header row is rebuilt per file and per sort, so the label is kept here
+ * and only the text node is touched — the sort arrow stays in place. */
 function setTimeHeader(text: string): void {
-  const cell = document.getElementById('th-time');
-  if (cell) cell.textContent = text;
+  timeHeaderText = text;
+  const label = document.getElementById('th-time-label');
+  if (label) label.textContent = text;
 }
 
 // --- virtualization ---------------------------------------------------------
@@ -363,12 +385,16 @@ function render(): void {
   windowEl.style.top = `${start * ROW_H}px`;
   const parts: string[] = [];
   for (let row = start; row < end; row++) {
-    parts.push(rowHtml(row, positions[row]));
+    // Descending only reverses which bar a screen row shows; the bar index
+    // itself always counts from the oldest bar.
+    const barIndex = ascending ? row : total - 1 - row;
+    parts.push(rowHtml(barIndex, positions[barIndex]));
   }
   windowEl.innerHTML = parts.join('');
 }
 
-function rowHtml(row: number, pos: number): string {
+/** `barIndex` is Pine's zero-based `bar_index`, not a row number. */
+function rowHtml(barIndex: number, pos: number): string {
   const bar = (decoder as OhlcvDecoder).read(
     view as DataView,
     recordOffset(layout as OhlcvLayout, pos)
@@ -381,7 +407,7 @@ function rowHtml(row: number, pos: number): string {
     .join('');
   return (
     `<div class="grid-row">` +
-    `<div class="c-idx">${(row + 1).toLocaleString('en-US')}</div>` +
+    `<div class="c-idx">${barIndex.toLocaleString('en-US')}</div>` +
     `<div class="c-time">${formatTime(bar.timestamp)}</div>` +
     `<div class="c-num">${price(open)}</div>` +
     `<div class="c-num">${price(snap(bar.high))}</div>` +

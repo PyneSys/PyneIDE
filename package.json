@@ -532,6 +532,11 @@
           "command": "pyneide.toggleChartFullscreen",
           "when": "activeWebviewPanelId == pyneideChart && !editorPartMaximizedEditorGroup",
           "group": "navigation@-100"
+        },
+        {
+          "command": "pyneide.dataPreviewChart",
+          "when": "activeCustomEditorId == pyneide.ohlcvTable",
+          "group": "navigation@1"
         }
       ],
       "debug/toolBar": [
