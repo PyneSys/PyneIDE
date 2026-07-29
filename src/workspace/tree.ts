@@ -113,9 +113,9 @@ interface DataMeta {
   tooltip?: string;
 }
 
-/** Format a unix-seconds timestamp as `YYYY-MM-DD`. */
-function fmtDate(ts: number): string {
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+/** Format a unix-milliseconds timestamp as `YYYY-MM-DD`. */
+function fmtDate(tsMs: number): string {
+  return new Date(tsMs).toISOString().slice(0, 10);
 }
 
 /** Human-readable byte size (KB/MB), matching a data-file feel. */

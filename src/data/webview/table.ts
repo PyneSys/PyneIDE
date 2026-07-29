@@ -1,13 +1,19 @@
 /**
- * OHLCV table webview: parses the raw 24-byte records handed over by the host
- * (uint32 timestamp + 5x float32 OHLCV, little-endian) and renders them in a
- * virtualized table. Only the visible window of rows is in the DOM at once, so
- * a 100k+ bar file scrolls smoothly. Gap-fill records (volume < 0) are hidden,
- * matching what a run/chart sees.
+ * OHLCV table webview: decodes the binary handed over by the host through the
+ * shared `ohlcvFormat` reader (v2 header-declared schema, or the legacy
+ * header-less 24-byte records) and renders it in a virtualized table. Only the
+ * visible window of rows is in the DOM at once, so a 100k+ bar file scrolls
+ * smoothly. Legacy gap-fill records (volume < 0) are hidden, matching what a
+ * run/chart sees; v2 files have none.
  */
 import type { OhlcvMeta, TableInMessage, TableOutMessage } from '../messages';
+import {
+  OhlcvDecoder,
+  parseOhlcvLayout,
+  recordOffset,
+  type OhlcvLayout,
+} from '../ohlcvFormat';
 
-const RECORD_SIZE = 24;
 const ROW_H = 22;
 const OVERSCAN = 6;
 
@@ -21,13 +27,18 @@ const titleEl = document.getElementById('title') as HTMLDivElement;
 const subtitleEl = document.getElementById('subtitle') as HTMLDivElement;
 const infoToggleEl = document.getElementById('info-toggle') as HTMLButtonElement;
 const syminfoPanelEl = document.getElementById('syminfo-panel') as HTMLDivElement;
-const thTimeEl = document.getElementById('th-time') as HTMLDivElement;
+const theadEl = document.getElementById('thead') as HTMLDivElement;
 const viewport = document.getElementById('viewport') as HTMLDivElement;
 const spacer = document.getElementById('spacer') as HTMLDivElement;
 const windowEl = document.getElementById('window') as HTMLDivElement;
 const emptyEl = document.getElementById('empty') as HTMLDivElement;
 
 let view: DataView | undefined;
+/** How the loaded file's records are laid out (schema, count, version). */
+let layout: OhlcvLayout | undefined;
+let decoder: OhlcvDecoder | undefined;
+/** Non-OHLCV columns the file declares (bid/ask/…), in record order. */
+let extraNames: string[] = [];
 /** Byte length of the loaded .ohlcv, for the file-stats panel. */
 let fileByteLength = 0;
 /** Record indices of the non-gap bars, in file order (virtual row -> record). */
@@ -70,20 +81,35 @@ function showError(message: string): void {
 }
 
 function load(buffer: ArrayBuffer, meta: OhlcvMeta): void {
+  try {
+    layout = parseOhlcvLayout(new Uint8Array(buffer), buffer.byteLength);
+    decoder = new OhlcvDecoder(layout);
+  } catch (err) {
+    showError(`Unreadable .ohlcv file: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
   view = new DataView(buffer);
   fileByteLength = buffer.byteLength;
-  const recordCount = Math.floor(buffer.byteLength / RECORD_SIZE);
+  extraNames = decoder.extraNames;
+  const recordCount = layout.recordCount;
 
   mintick = meta.mintick && meta.mintick > 0 ? meta.mintick : 0;
   priceDecimals = decimalsFor(meta);
   setupTimezone(meta.timezone);
+  renderThead();
 
-  // Build the virtual-row -> record map, dropping gap-fill records (volume < 0).
-  const idx: number[] = [];
-  for (let pos = 0; pos < recordCount; pos++) {
-    if (view.getFloat32(pos * RECORD_SIZE + 20, true) >= 0) idx.push(pos);
+  // Build the virtual-row -> record map. Only the legacy format has phantom
+  // gap-fill records (volume < 0); v2 simply omits missing bars.
+  if (layout.version === 1) {
+    const idx: number[] = [];
+    for (let pos = 0; pos < recordCount; pos++) {
+      if (decoder.read(view, recordOffset(layout, pos)).volume >= 0) idx.push(pos);
+    }
+    positions = Int32Array.from(idx);
+  } else {
+    positions = new Int32Array(recordCount);
+    for (let pos = 0; pos < recordCount; pos++) positions[pos] = pos;
   }
-  positions = Int32Array.from(idx);
 
   renderHeader(meta, recordCount);
 
@@ -138,6 +164,23 @@ function setupTimezone(timezone: string | undefined): void {
   }
 }
 
+/**
+ * Rebuild the column headers from the file's own schema: a v2 file may declare
+ * columns beyond OHLCV (bid/ask/open interest/…), which the rows then show.
+ */
+function renderThead(): void {
+  const columns = ['Open', 'High', 'Low', 'Close', 'Volume', ...extraNames.map(prettyName)];
+  theadEl.innerHTML =
+    '<div class="c-idx">#</div><div class="c-time" id="th-time">Time</div>' +
+    columns.map((name) => `<div class="c-num">${escapeHtml(name)}</div>`).join('');
+}
+
+/** `open_interest` -> `Open interest`, for a column header. */
+function prettyName(name: string): string {
+  const spaced = name.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
 function renderHeader(meta: OhlcvMeta, recordCount: number): void {
   titleEl.textContent = meta.description || meta.ticker || meta.fileName;
 
@@ -151,9 +194,11 @@ function renderHeader(meta: OhlcvMeta, recordCount: number): void {
   };
   chip('Symbol', meta.ticker);
   chip('Type', meta.type);
-  chip('TF', meta.period);
+  // The v2 header states the period as a fact; the toml only mirrors it.
+  chip('TF', layout?.period ?? meta.period);
   chip('TZ', tzName);
   chip('Tick', mintick ? String(mintick) : undefined);
+  chip('Format', layout ? `v${layout.version}` : undefined);
   chips.push(
     `<span class="kv">Bars <b>${positions.length.toLocaleString('en-US')}</b>${
       gaps > 0 ? ` (+${gaps.toLocaleString('en-US')} gaps)` : ''
@@ -176,7 +221,7 @@ function renderHeader(meta: OhlcvMeta, recordCount: number): void {
     };
     updateTimeHeader(toggle);
   } else {
-    thTimeEl.textContent = 'Time (UTC)';
+    setTimeHeader('Time (UTC)');
   }
 
   renderSymInfoPanel(meta, recordCount);
@@ -219,6 +264,10 @@ function renderSymInfoPanel(meta: OhlcvMeta, recordCount: number): void {
     fileRows.push(kv('to', `${formatUtc(last)} UTC`));
   }
   fileRows.push(kv('size', formatBytes(fileByteLength)));
+  if (layout) {
+    const density = layout.dense === undefined ? '' : layout.dense ? ', dense' : ', sparse';
+    fileRows.push(kv('format', `v${layout.version} (${layout.recordSize} B/bar${density})`));
+  }
   if (meta.full?.provider) fileRows.push(kv('provider', meta.full.provider));
   groups.push(groupHtml('File', fileRows));
 
@@ -281,8 +330,14 @@ function formatBytes(n: number): string {
 
 function updateTimeHeader(toggle: HTMLButtonElement): void {
   const showingExchange = tzMode === 'exchange' && tzFormatter;
-  thTimeEl.textContent = `Time (${showingExchange ? tzName : 'UTC'})`;
+  setTimeHeader(`Time (${showingExchange ? tzName : 'UTC'})`);
   toggle.textContent = showingExchange ? `Show UTC` : `Show ${tzName}`;
+}
+
+/** The header row is rebuilt per file, so its time cell is looked up on use. */
+function setTimeHeader(text: string): void {
+  const cell = document.getElementById('th-time');
+  if (cell) cell.textContent = text;
 }
 
 // --- virtualization ---------------------------------------------------------
@@ -314,24 +369,26 @@ function render(): void {
 }
 
 function rowHtml(row: number, pos: number): string {
-  const o = pos * RECORD_SIZE;
-  const view0 = view as DataView;
-  const ts = view0.getUint32(o, true);
-  const open = snap(view0.getFloat32(o + 4, true));
-  const high = snap(view0.getFloat32(o + 8, true));
-  const low = snap(view0.getFloat32(o + 12, true));
-  const close = snap(view0.getFloat32(o + 16, true));
-  const volume = view0.getFloat32(o + 20, true);
+  const bar = (decoder as OhlcvDecoder).read(
+    view as DataView,
+    recordOffset(layout as OhlcvLayout, pos)
+  );
+  const open = snap(bar.open);
+  const close = snap(bar.close);
   const dir = close >= open ? 'up' : 'down';
+  const extras = extraNames
+    .map((name) => `<div class="c-num">${numberStr(bar.extra?.[name] ?? NaN)}</div>`)
+    .join('');
   return (
     `<div class="grid-row">` +
     `<div class="c-idx">${(row + 1).toLocaleString('en-US')}</div>` +
-    `<div class="c-time">${formatTime(ts)}</div>` +
+    `<div class="c-time">${formatTime(bar.timestamp)}</div>` +
     `<div class="c-num">${price(open)}</div>` +
-    `<div class="c-num">${price(high)}</div>` +
-    `<div class="c-num">${price(low)}</div>` +
+    `<div class="c-num">${price(snap(bar.high))}</div>` +
+    `<div class="c-num">${price(snap(bar.low))}</div>` +
     `<div class="c-num ${dir}">${price(close)}</div>` +
-    `<div class="c-num">${volumeStr(volume)}</div>` +
+    `<div class="c-num">${numberStr(bar.volume)}</div>` +
+    extras +
     `</div>`
   );
 }
@@ -341,36 +398,42 @@ function snap(value: number): number {
   return value;
 }
 
+/** Missing values are NaN in the v2 format — show them as a dash, not "NaN". */
 function price(value: number): string {
-  return value.toFixed(priceDecimals);
+  return Number.isNaN(value) ? '—' : value.toFixed(priceDecimals);
 }
 
-function volumeStr(value: number): string {
+function numberStr(value: number): string {
+  if (Number.isNaN(value)) return '—';
   if (Number.isInteger(value)) return value.toLocaleString('en-US');
   // Trim float dust to 8 decimals, then strip trailing zeros.
   return String(Number(value.toFixed(8)));
 }
 
+/** Timestamp (ms) of one record, without decoding its prices. */
 function recordTime(pos: number): number {
-  return (view as DataView).getUint32(pos * RECORD_SIZE, true);
+  return (decoder as OhlcvDecoder).timestampAt(
+    view as DataView,
+    recordOffset(layout as OhlcvLayout, pos)
+  );
 }
 
-function formatTime(tsSeconds: number): string {
-  if (tzMode === 'exchange' && tzFormatter) return formatExchange(tsSeconds);
-  return formatUtc(tsSeconds);
+function formatTime(tsMs: number): string {
+  if (tzMode === 'exchange' && tzFormatter) return formatExchange(tsMs);
+  return formatUtc(tsMs);
 }
 
-function formatUtc(tsSeconds: number): string {
-  const d = new Date(tsSeconds * 1000);
+function formatUtc(tsMs: number): string {
+  const d = new Date(tsMs);
   return (
     `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ` +
     `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`
   );
 }
 
-function formatExchange(tsSeconds: number): string {
+function formatExchange(tsMs: number): string {
   // en-CA yields YYYY-MM-DD; join parts as "date time".
-  const parts = (tzFormatter as Intl.DateTimeFormat).formatToParts(new Date(tsSeconds * 1000));
+  const parts = (tzFormatter as Intl.DateTimeFormat).formatToParts(new Date(tsMs));
   const g: Record<string, string> = {};
   for (const part of parts) g[part.type] = part.value;
   return `${g.year}-${g.month}-${g.day} ${g.hour}:${g.minute}:${g.second}`;

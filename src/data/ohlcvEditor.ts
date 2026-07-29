@@ -2,12 +2,11 @@
  * Read-only custom editor for `.ohlcv` files: opens a binary OHLCV data file as
  * a tabular view instead of raw bytes.
  *
- * The `.ohlcv` format is a flat array of 24-byte records (uint32 timestamp +
- * 5x float32 OHLCV, little-endian; gap-fills carry volume < 0) with a sibling
- * `.toml` holding the syminfo — see pynecore core/ohlcv_file.py. The host reads
- * the raw bytes and the `[symbol]` toml fields, then hands both to the webview,
- * which parses the records and renders a virtualized table (files reach 100k+
- * bars, so nothing is materialized on the host side).
+ * The binary carries its own schema (v2 header) or is a legacy header-less
+ * record array — both are decoded by `ohlcvFormat.ts`; the sibling `.toml`
+ * holds the syminfo. The host hands over the file URI and the `[symbol]` toml
+ * fields, and the webview parses the records and renders a virtualized table
+ * (files reach 100k+ bars, so nothing is materialized on the host side).
  */
 import * as path from 'node:path';
 

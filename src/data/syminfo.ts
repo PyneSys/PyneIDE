@@ -1,15 +1,20 @@
 /**
  * Shared syminfo helpers for the `.ohlcv` data format (see pynecore
- * core/ohlcv_file.py + core/syminfo.py). The `.ohlcv` is a header-less flat
- * array of 24-byte little-endian records (`'Ifffff'`: uint32 timestamp + 5x
- * float32 OHLCV; gap-fills carry volume < 0). The sibling `.toml` holds the
- * `[symbol]` syminfo. VSCode ships no TOML parser, so `parseSymbolSection` is a
- * deliberately tiny scraper — enough for the header, not a general parser.
+ * core/syminfo.py). The binary itself is decoded by `ohlcvFormat.ts`; the
+ * sibling `.toml` holds the `[symbol]` syminfo. VSCode ships no TOML parser, so
+ * `parseSymbolSection` is a deliberately tiny scraper — enough for the header,
+ * not a general parser.
  */
 import * as fs from 'node:fs';
 
-/** Bytes per OHLCV record: uint32 timestamp + 5x float32. */
-export const OHLCV_RECORD_BYTES = 24;
+import {
+  OhlcvDecoder,
+  V2_FIXED_HEADER_BYTES,
+  parseOhlcvLayout,
+  recordOffset,
+  v2HeaderSize,
+  type OhlcvLayout,
+} from './ohlcvFormat';
 
 /**
  * Pull the flat `key = value` pairs from the `[symbol]` table of a syminfo
@@ -134,48 +139,73 @@ export function parseSymInfo(text: string): FullSymInfo {
 }
 
 export interface OhlcvStats {
-  /** Timestamp (unix seconds) of the first record, or undefined when empty. */
+  /** Timestamp (unix ms) of the first record, or undefined when empty. */
   firstTs?: number;
-  /** Timestamp (unix seconds) of the last record, or undefined when empty. */
+  /** Timestamp (unix ms) of the last record, or undefined when empty. */
   lastTs?: number;
-  /** Interval between the first two records in seconds, if derivable. */
-  intervalSec?: number;
-  /** Number of 24-byte records. */
+  /** Declared bar period (`5`, `240`, `1D`), when the file states one. */
+  period?: string;
+  /** Number of committed records. */
   bars: number;
   /** File size in bytes. */
   size: number;
 }
 
 /**
- * Read the coverage of an `.ohlcv` file without loading it: bar count comes
- * from the size, and the range from the first and last 24-byte records
- * (`fs.read`, not the whole file). The interval is the difference between the
- * first two records when there are at least two.
+ * Read an `.ohlcv` file's schema from its header (v1 files have none, so the
+ * layout is synthesized from the file size) using at most two small reads.
+ */
+export function readOhlcvLayout(fd: number, fileSize: number): OhlcvLayout {
+  const head = Buffer.alloc(Math.min(V2_FIXED_HEADER_BYTES, fileSize));
+  fs.readSync(fd, head, 0, head.length, 0);
+  const fullSize = v2HeaderSize(head);
+  if (fullSize === undefined || fullSize <= head.length) return parseOhlcvLayout(head, fileSize);
+
+  const full = Buffer.alloc(Math.min(fullSize, fileSize));
+  fs.readSync(fd, full, 0, full.length, 0);
+  return parseOhlcvLayout(full, fileSize);
+}
+
+/**
+ * Read the coverage of an `.ohlcv` file without loading it: the record count
+ * and (on v2) the range come from the header, otherwise the first and last
+ * records are read individually — never the whole file.
  */
 export function readOhlcvStats(filePath: string): OhlcvStats {
   const size = fs.statSync(filePath).size;
-  const bars = Math.floor(size / OHLCV_RECORD_BYTES);
-  if (bars === 0) return { bars: 0, size };
-
   const fd = fs.openSync(filePath, 'r');
   try {
-    const first = Buffer.alloc(OHLCV_RECORD_BYTES);
-    fs.readSync(fd, first, 0, OHLCV_RECORD_BYTES, 0);
-    const firstTs = first.readUInt32LE(0);
+    const layout = readOhlcvLayout(fd, size);
+    const bars = layout.recordCount;
+    const stats: OhlcvStats = { bars, size, period: layout.period };
+    if (bars === 0) return stats;
 
-    let intervalSec: number | undefined;
-    if (bars >= 2) {
-      const second = Buffer.alloc(OHLCV_RECORD_BYTES);
-      fs.readSync(fd, second, 0, OHLCV_RECORD_BYTES, OHLCV_RECORD_BYTES);
-      intervalSec = second.readUInt32LE(0) - firstTs;
+    if (layout.firstTimestamp !== undefined && layout.lastTimestamp !== undefined) {
+      // v2 states the committed range in its header — no record read needed.
+      return { ...stats, firstTs: layout.firstTimestamp, lastTs: layout.lastTimestamp };
     }
-
-    const last = Buffer.alloc(OHLCV_RECORD_BYTES);
-    fs.readSync(fd, last, 0, OHLCV_RECORD_BYTES, (bars - 1) * OHLCV_RECORD_BYTES);
-    const lastTs = last.readUInt32LE(0);
-
-    return { firstTs, lastTs, intervalSec, bars, size };
+    const decoder = new OhlcvDecoder(layout);
+    return {
+      ...stats,
+      firstTs: readTimestamp(fd, layout, decoder, 0),
+      lastTs: readTimestamp(fd, layout, decoder, bars - 1),
+    };
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/** Timestamp (ms) of one record, read on its own. */
+function readTimestamp(
+  fd: number,
+  layout: OhlcvLayout,
+  decoder: OhlcvDecoder,
+  index: number
+): number {
+  const record = Buffer.alloc(layout.recordSize);
+  fs.readSync(fd, record, 0, layout.recordSize, recordOffset(layout, index));
+  return decoder.timestampAt(
+    new DataView(record.buffer, record.byteOffset, record.byteLength),
+    0
+  );
 }

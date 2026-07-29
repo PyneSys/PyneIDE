@@ -1,46 +1,42 @@
 /**
  * Host-side `.ohlcv` reader for the Data-tree "Preview chart" action: decodes
- * the flat 24-byte records (see syminfo.ts) into the chart's `BarRow` rows and
- * builds a bars-only `StartEvent`, so the ChartPanel can replay a raw-candle
- * snapshot without running the bridge. The binary is read in record-aligned
- * chunks (files can be 1M+ records), never as one giant buffer/string.
+ * the records (schema from `ohlcvFormat.ts`, v1 and v2 alike) into the chart's
+ * `BarRow` rows and builds a bars-only `StartEvent`, so the ChartPanel can
+ * replay a raw-candle snapshot without running the bridge. The binary is read
+ * in record-aligned chunks (files can be 1M+ records), never as one giant
+ * buffer/string.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { BarRow, StartEvent } from '../run/bridgeClient';
-import { OHLCV_RECORD_BYTES, parseSymbolSection } from './syminfo';
+import { OhlcvDecoder, isGapFill, recordOffset } from './ohlcvFormat';
+import { parseSymbolSection, readOhlcvLayout } from './syminfo';
 
-/** Records decoded per read; 64k records = ~1.5 MB per chunk. */
+/** Records decoded per read; 64k records = ~2.3 MB per chunk. */
 const CHUNK_RECORDS = 65536;
 
 /**
- * Decode every non-gap-fill record of an `.ohlcv` file into chart bar rows
- * (timestamp in ms, OHLCV, no plots). Gap-fill records (volume < 0) are
- * dropped, matching what a run/chart sees.
+ * Decode every real record of an `.ohlcv` file into chart bar rows (timestamp
+ * in ms, OHLCV, no plots). Legacy gap-fill records (volume < 0) are dropped,
+ * matching what a run/chart sees.
  */
 export function readOhlcvBars(filePath: string): BarRow[] {
   const fd = fs.openSync(filePath, 'r');
   try {
-    const total = Math.floor(fs.fstatSync(fd).size / OHLCV_RECORD_BYTES);
+    const layout = readOhlcvLayout(fd, fs.fstatSync(fd).size);
+    const decoder = new OhlcvDecoder(layout);
+    const total = layout.recordCount;
     const bars: BarRow[] = [];
-    const buf = Buffer.alloc(CHUNK_RECORDS * OHLCV_RECORD_BYTES);
+    const buf = Buffer.alloc(CHUNK_RECORDS * layout.recordSize);
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     for (let read = 0; read < total; ) {
       const n = Math.min(CHUNK_RECORDS, total - read);
-      fs.readSync(fd, buf, 0, n * OHLCV_RECORD_BYTES, read * OHLCV_RECORD_BYTES);
+      fs.readSync(fd, buf, 0, n * layout.recordSize, recordOffset(layout, read));
       for (let i = 0; i < n; i++) {
-        const o = i * OHLCV_RECORD_BYTES;
-        const volume = buf.readFloatLE(o + 20);
-        if (volume < 0) continue;
-        bars.push([
-          buf.readUInt32LE(o) * 1000,
-          buf.readFloatLE(o + 4),
-          buf.readFloatLE(o + 8),
-          buf.readFloatLE(o + 12),
-          buf.readFloatLE(o + 16),
-          volume,
-          null,
-        ]);
+        const bar = decoder.read(view, i * layout.recordSize);
+        if (isGapFill(layout, bar)) continue;
+        bars.push([bar.timestamp, bar.open, bar.high, bar.low, bar.close, bar.volume, null]);
       }
       read += n;
     }
