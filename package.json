@@ -6,6 +6,7 @@
   "preview": true,
   "publisher": "pynesys",
   "icon": "icon.png",
+  "author": "PYNESYS LLC",
   "license": "GPL-3.0-only",
   "engines": {
     "vscode": "^1.90.0"

@@ -245,6 +245,8 @@ machine**.
 
 ## License
 
+Copyright (C) 2026 PYNESYS LLC
+
 PyneIDE is licensed under the **GNU General Public License v3.0 only**
 ([GPL-3.0-only](https://www.gnu.org/licenses/gpl-3.0.html)). It runs on the PyneCore
 runtime, which is open source under Apache-2.0.
