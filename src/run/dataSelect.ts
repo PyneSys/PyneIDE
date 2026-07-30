@@ -16,6 +16,8 @@ import {
 import { parseSymInfo } from '../data/syminfo';
 import { execChecked } from '../env/exec';
 import { pyneBinPath } from '../env/uv';
+import { flattenErrorMessage, providerTarget } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import { listInstalledPlugins } from '../plugins/installed';
 
 const LAST_DATA_KEY = 'pyneide.lastRunData';
@@ -275,33 +277,43 @@ async function runPyne(
   title: string,
   output: vscode.OutputChannel
 ): Promise<boolean> {
-  try {
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title,
-        cancellable: false,
-      },
-      () =>
-        execChecked(pyneBin, ['--workdir', workdir, ...args], (line) => output.appendLine(line), {
-          timeoutMs: 15 * 60 * 1000,
-          env: { ...process.env, PYNE_WORK_DIR: workdir },
-        })
-    );
-    return true;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (/\[download\]/.test(message)) {
-      const choice = await vscode.window.showErrorMessage(
-        'PyneIDE: this data file has no saved provider — use "Download Data…" to re-download it once.',
-        'Download Data…'
+  const target = providerTarget(title);
+  for (;;) {
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title,
+          cancellable: false,
+        },
+        () =>
+          execChecked(pyneBin, ['--workdir', workdir, ...args], (line) => output.appendLine(line), {
+            timeoutMs: 15 * 60 * 1000,
+            env: { ...process.env, PYNE_WORK_DIR: workdir },
+          })
       );
-      if (choice === 'Download Data…') void vscode.commands.executeCommand('pyneide.dataDownloadWizard');
-      return false;
+      return true;
+    } catch (err) {
+      if (/\[download\]/.test(flattenErrorMessage(err))) {
+        const choice = await vscode.window.showErrorMessage(
+          'PyneIDE: this data file has no saved provider — use "Download Data…" to re-download it once.',
+          'Download Data…'
+        );
+        if (choice === 'Download Data…') void vscode.commands.executeCommand('pyneide.dataDownloadWizard');
+        return false;
+      }
+      let retry = false;
+      await showNetworkError({
+        headline: `${title} failed`,
+        error: err,
+        target,
+        retry: () => {
+          retry = true;
+        },
+        showLog: () => output.show(),
+      });
+      if (!retry) return false;
     }
-    const choice = await vscode.window.showErrorMessage(`PyneIDE: ${title} failed: ${message}`, 'Show Log');
-    if (choice === 'Show Log') output.show();
-    return false;
   }
 }
 
@@ -367,6 +379,8 @@ async function downloadIntoFile(
     workdir: ctx.workdir,
     log: (line) => ctx.output.appendLine(line),
   });
+  let downloaded = false;
+  let retryRequested = false;
   try {
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title, cancellable: true },
@@ -402,11 +416,11 @@ async function downloadIntoFile(
         await result;
       }
     );
-    return true;
+    downloaded = true;
   } catch (err) {
-    if (err instanceof ProviderServiceError && err.kind === 'Cancelled') return false;
-    const message = err instanceof Error ? err.message : String(err);
-    if (/\[download\]/.test(message)) {
+    const cancelled = err instanceof ProviderServiceError && err.kind === 'Cancelled';
+    const noProvider = !cancelled && /\[download\]/.test(flattenErrorMessage(err));
+    if (noProvider) {
       const choice = await vscode.window.showErrorMessage(
         'PyneIDE: this data file has no saved provider — use "Download Data…" to re-download it once.',
         'Download Data…'
@@ -414,17 +428,24 @@ async function downloadIntoFile(
       if (choice === 'Download Data…') {
         void vscode.commands.executeCommand('pyneide.dataDownloadWizard');
       }
-      return false;
+    } else if (!cancelled) {
+      await showNetworkError({
+        headline: `${title} failed`,
+        error: err,
+        target: providerTarget(title),
+        // Started after the finally below: the retry needs its own service
+        // process, and this one is only disposed there.
+        retry: () => {
+          retryRequested = true;
+        },
+        showLog: () => ctx.output.show(),
+      });
     }
-    const choice = await vscode.window.showErrorMessage(
-      `PyneIDE: ${title} failed: ${message}`,
-      'Show Log'
-    );
-    if (choice === 'Show Log') ctx.output.show();
-    return false;
   } finally {
     service.dispose();
   }
+  if (retryRequested) return downloadIntoFile(ctx, title, params);
+  return downloaded;
 }
 
 /**

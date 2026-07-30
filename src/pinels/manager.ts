@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 
 import * as vscode from 'vscode';
 
+import { describeNetworkError, flattenErrorMessage, pineLsTarget } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import { PINE_LS_BASE_URL } from './constants';
 import {
   installPineLs,
@@ -127,6 +129,9 @@ export class PineLsManager {
     }
     this.installRunning = true;
     const previous = this.stateValue;
+    // Started after the finally: `installRunning` is only cleared there, so a
+    // retry from inside the catch would hit the "already running" guard.
+    let retryRequested = false;
     try {
       if (options.silent) {
         const outcome = await installPineLs(this.storageDir, this.baseUrl(), this.log);
@@ -165,7 +170,8 @@ export class PineLsManager {
         }
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const target = pineLsTarget(this.baseUrl());
+      const message = flattenErrorMessage(err);
       this.log(`Pine LS install failed: ${message}`);
       if (options.silent) {
         // Auto-update: keep the working install live, stay quiet.
@@ -173,20 +179,21 @@ export class PineLsManager {
         this.check();
         return;
       }
-      this.setState({ kind: 'error', message });
-      const choice = await vscode.window.showErrorMessage(
-        `PyneIDE: Pine language server install failed: ${message}`,
-        'Retry',
-        'Show Log'
-      );
-      if (choice === 'Retry') {
-        void this.installOrUpdate();
-      } else if (choice === 'Show Log') {
-        this.output.show();
-      }
+      const friendly = describeNetworkError(err, target);
+      this.setState({ kind: 'error', message: friendly?.summary ?? message });
+      await showNetworkError({
+        headline: 'Pine language server install failed',
+        error: err,
+        target,
+        retry: () => {
+          retryRequested = true;
+        },
+        showLog: () => this.output.show(),
+      });
     } finally {
       this.installRunning = false;
     }
+    if (retryRequested) await this.installOrUpdate();
   }
 
   /** Revert to the previous version after a bad update. */

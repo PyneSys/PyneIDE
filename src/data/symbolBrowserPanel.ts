@@ -18,6 +18,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { explainError, providerTarget } from '../net/errors';
 import { writeSymbolMapEntry } from '../run/symbolMapFile';
 import { OhlcvEditorProvider } from './ohlcvEditor';
 import { parseSymInfo } from './syminfo';
@@ -223,7 +224,13 @@ export class SymbolBrowserPanel {
       const res = await this.service.request<BrokersResult>('brokers', { provider });
       this.post({ type: 'brokers', provider, supported: res.supported, brokers: res.brokers });
     } catch (err) {
-      this.post({ type: 'brokers', provider, supported: false, brokers: [], error: errMessage(err) });
+      this.post({
+        type: 'brokers',
+        provider,
+        supported: false,
+        brokers: [],
+        error: explainError(err, providerTarget('Listing brokers', provider)),
+      });
     }
   }
 
@@ -233,7 +240,13 @@ export class SymbolBrowserPanel {
       const symbols = await this.service.request<string[]>('symbols', { provider, broker });
       this.post({ type: 'symbols', provider, broker, symbols });
     } catch (err) {
-      this.post({ type: 'symbols', provider, broker, symbols: [], error: errMessage(err) });
+      this.post({
+        type: 'symbols',
+        provider,
+        broker,
+        symbols: [],
+        error: explainError(err, providerTarget('Listing symbols', provider)),
+      });
     }
   }
 
@@ -266,7 +279,12 @@ export class SymbolBrowserPanel {
       }
       this.post({ type: 'syminfo', reqId: msg.reqId, symbol: msg.symbol, info });
     } catch (err) {
-      this.post({ type: 'syminfoError', reqId: msg.reqId, symbol: msg.symbol, message: errMessage(err) });
+      this.post({
+        type: 'syminfoError',
+        reqId: msg.reqId,
+        symbol: msg.symbol,
+        message: explainError(err, providerTarget('Reading symbol info', msg.provider)),
+      });
     }
   }
 
@@ -353,7 +371,12 @@ export class SymbolBrowserPanel {
     } catch (err) {
       const kind = err instanceof ProviderServiceError ? err.kind : 'Error';
       const retryable = err instanceof ProviderServiceError ? err.retryable : false;
-      this.post({ type: 'downloadError', kind, message: errMessage(err), retryable });
+      this.post({
+        type: 'downloadError',
+        kind,
+        message: explainError(err, providerTarget('The download', msg.provider)),
+        retryable,
+      });
     } finally {
       this.activeDownloadId = undefined;
     }

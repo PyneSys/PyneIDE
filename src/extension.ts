@@ -26,6 +26,8 @@ import {
   scaffoldWorkdirWithCli,
 } from './env/workdir';
 import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
+import { pypiTarget } from './net/errors';
+import { showNetworkError } from './net/notify';
 import { PineLsService } from './pinels/service';
 import { PluginsPanel } from './plugins/panel';
 import { PluginService } from './plugins/service';
@@ -477,6 +479,7 @@ function watchForLostPlugins(
 ): void {
   let running = false;
   let declined = false;
+  let retryRequested = false;
   const check = async (state: EnvState): Promise<void> => {
     if (state.kind !== 'ready' || running || declined) return;
     running = true;
@@ -496,11 +499,21 @@ function watchForLostPlugins(
       }
       await plugins.restoreManagedPlugins(missing);
     } catch (err) {
-      void vscode.window.showErrorMessage(
-        `PyneIDE: reinstalling plugins failed — ${err instanceof Error ? err.message : String(err)}`
-      );
+      await showNetworkError({
+        headline: 'reinstalling plugins failed',
+        error: err,
+        target: pypiTarget('Reinstalling plugins'),
+        // Started after the finally: `running` is only cleared there.
+        retry: () => {
+          retryRequested = true;
+        },
+      });
     } finally {
       running = false;
+    }
+    if (retryRequested) {
+      retryRequested = false;
+      await check(state);
     }
   };
   context.subscriptions.push(manager.onDidChangeState((state) => void check(state)));

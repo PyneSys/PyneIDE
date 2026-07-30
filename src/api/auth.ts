@@ -4,7 +4,9 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
-import { DEFAULT_API_BASE_URL, PyneApiClient } from './client';
+import { apiTarget, flattenErrorMessage } from '../net/errors';
+import { showNetworkError } from '../net/notify';
+import { DEFAULT_API_BASE_URL, PyneApiClient, type TokenVerification } from './client';
 
 const SECRET_KEY = 'pynesys.apiKey';
 const KEYS_PAGE_URL = 'https://app.pynesys.io';
@@ -161,19 +163,31 @@ export class AuthService {
 
     const trimmed = key.trim();
     const client = new PyneApiClient(trimmed, this.baseUrl(), this.log);
-    let verification;
-    try {
-      verification = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'PyneIDE: validating API key…' },
-        () => client.verifyToken(trimmed)
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log(`Key validation failed: ${message}`);
-      void vscode.window.showErrorMessage(
-        `PyneIDE: could not validate the API key: ${message}`
-      );
-      return false;
+    const target = apiTarget('Sign-in', this.baseUrl());
+    // Retried in place rather than by restarting sign-in: an unreachable API
+    // says nothing about the key the user just pasted, so asking for it again
+    // would suggest it was the problem.
+    let verification: TokenVerification | undefined;
+    while (verification === undefined) {
+      try {
+        verification = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: 'PyneIDE: validating API key…' },
+          () => client.verifyToken(trimmed)
+        );
+      } catch (err) {
+        this.log(`Key validation failed: ${flattenErrorMessage(err)}`);
+        let retry = false;
+        await showNetworkError({
+          headline: 'could not validate the API key',
+          error: err,
+          target,
+          retry: () => {
+            retry = true;
+          },
+          showLog: () => this.output.show(),
+        });
+        if (!retry) return false;
+      }
     }
     if (!verification.valid) {
       void vscode.window.showErrorMessage(

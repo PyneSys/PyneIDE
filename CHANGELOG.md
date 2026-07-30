@@ -65,9 +65,11 @@ First public preview. This is everything the initial preview ships with.
   it is fetching (uv, Python, packages — with a package counter), and it can be
   **cancelled** at any point. What was already downloaded is kept, so starting
   setup again continues from there.
-- Network failures are explained in plain language — offline, refused, timed
-  out, or an intercepted HTTPS certificate — naming the host that failed and
-  the hosts setup must be able to reach, with Retry and Repair on the message.
+- Network failures are explained in plain language wherever they happen — setup,
+  Pine compilation and conversion, sign-in, plugin installs, market-data
+  downloads, and problem reports. Offline, refused, timed out, or an intercepted
+  HTTPS certificate: the message names the host that failed and what that
+  operation must be able to reach, and offers **Retry** (plus Repair for setup).
 - **PyneCore plugin manager** (`PyneIDE: Manage Plugins`): browse the plugin
   catalogue, filter to what is installed, read each plugin's own documentation,
   and install or uninstall into the managed environment. A plugin that needs a

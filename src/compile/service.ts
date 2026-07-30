@@ -5,6 +5,8 @@ import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
 import type { CompileResult, ConvertResult, PyneApiClient } from '../api/client';
+import { apiTarget, describeNetworkError, flattenErrorMessage } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import { detectPineVersion } from '../pineVersion';
 import { failures } from '../report/lastFailure';
 import { sha256, sourcemapPathFor, type StoredSourcemap } from './sourcemap';
@@ -161,10 +163,29 @@ export class CompileService {
     const client = await this.auth.requireClient();
     if (!client) return false;
 
-    const result = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: 'Converting to Pine v6…' },
-      () => client.convertToV6(doc.getText(), version)
-    );
+    const target = apiTarget('Pine conversion', this.auth.baseUrl());
+    let result: ConvertResult | undefined;
+    while (result === undefined) {
+      try {
+        result = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Window, title: 'Converting to Pine v6…' },
+          () => client.convertToV6(doc.getText(), version)
+        );
+      } catch (err) {
+        this.log(`Convert failed: ${flattenErrorMessage(err)}`);
+        let retry = false;
+        await showNetworkError({
+          headline: 'conversion failed',
+          error: err,
+          target,
+          retry: () => {
+            retry = true;
+          },
+          showLog: () => this.output.show(),
+        });
+        if (!retry) return false;
+      }
+    }
     if (!result.ok) {
       await this.handleConvertError(result);
       return false;
@@ -202,23 +223,43 @@ export class CompileService {
       try {
         await this.compileDocument(doc, trigger);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const target = apiTarget('Pine compilation', this.auth.baseUrl());
+        const friendly = describeNetworkError(err, target);
+        const message = flattenErrorMessage(err);
         this.log(`Compile failed: ${message}`);
-        failures.record({
-          kind: 'compile',
-          summary: message,
-          detail: { trigger, unexpected: true },
-          traceback: err instanceof Error ? err.stack : undefined,
-          scriptPath: doc.uri.fsPath,
-          scriptLanguage: 'pine',
-        });
-        const choice = await vscode.window.showErrorMessage(
-          `PyneIDE: compilation failed: ${message}`,
-          'Report a Problem'
-        );
-        if (choice === 'Report a Problem') {
-          await vscode.commands.executeCommand('pyneide.reportProblem');
+        // A network outage is not a defect: recording it would offer the user
+        // a bug report for their own connection, and file it as ours.
+        if (!friendly) {
+          failures.record({
+            kind: 'compile',
+            summary: message,
+            detail: { trigger, unexpected: true },
+            traceback: err instanceof Error ? err.stack : undefined,
+            scriptPath: doc.uri.fsPath,
+            scriptLanguage: 'pine',
+          });
         }
+        await showNetworkError({
+          headline: 'compilation failed',
+          error: err,
+          target,
+          // Deliberately not awaited: this runs inside the queued job itself,
+          // so awaiting the re-queued compile would deadlock the queue.
+          retry: () => {
+            void this.enqueueCompile(doc, trigger);
+          },
+          actions: friendly
+            ? []
+            : [
+                {
+                  title: 'Report a Problem',
+                  run: async () => {
+                    await vscode.commands.executeCommand('pyneide.reportProblem');
+                  },
+                },
+              ],
+          showLog: () => this.output.show(),
+        });
       }
     };
     this.queue = this.queue.then(run);
@@ -433,9 +474,15 @@ export class CompileService {
         `PyneSys compile usage — ${fmt('Daily', usage.daily)}; ${fmt('Hourly', usage.hourly)}`
       );
     } catch (err) {
-      void vscode.window.showErrorMessage(
-        `PyneIDE: ${err instanceof Error ? err.message : String(err)}`
-      );
+      await showNetworkError({
+        headline: 'could not fetch the compile usage',
+        error: err,
+        target: apiTarget('Compile usage', this.auth.baseUrl()),
+        retry: () => {
+          void this.showUsage();
+        },
+        showLog: () => this.output.show(),
+      });
     }
   }
 

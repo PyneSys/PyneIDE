@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 
 import * as vscode from 'vscode';
 
+import { describeNetworkError, flattenErrorMessage, SETUP_TARGET } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import {
   bootstrapManagedEnv,
   markerUpToDate,
@@ -10,7 +12,6 @@ import {
   type VerifyResult,
 } from './bootstrap';
 import { isCancelledError } from './cancel';
-import { describeSetupError } from './netErrors';
 import {
   installPackages as uvInstallPackages,
   uninstallPackages as uvUninstallPackages,
@@ -179,6 +180,10 @@ export class EnvManager {
     }
 
     this.setupRunning = true;
+    // Chosen in the catch, run after the finally: `setupRunning` is only
+    // cleared there, so a retry started from inside the catch would hit the
+    // "already running" guard and silently do nothing.
+    let followUp: 'retry' | 'repair' | undefined;
     try {
       await vscode.window.withProgress(
         {
@@ -228,28 +233,31 @@ export class EnvManager {
         );
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = flattenErrorMessage(err);
       this.log(`Setup failed: ${message}`);
-      const friendly = describeSetupError(err);
+      const friendly = describeNetworkError(err, SETUP_TARGET);
       this.setState({ kind: 'error', message: friendly?.summary ?? message });
-      const choice = await vscode.window.showErrorMessage(
-        friendly
-          ? `PyneIDE: environment setup failed — ${friendly.summary}. ${friendly.hint}`
-          : `PyneIDE: environment setup failed: ${message}`,
-        'Retry',
-        'Repair (clean reinstall)',
-        'Show Log'
-      );
-      if (choice === 'Retry') {
-        void this.setup();
-      } else if (choice === 'Repair (clean reinstall)') {
-        void this.setup({ recreate: true });
-      } else if (choice === 'Show Log') {
-        this.output.show();
-      }
+      await showNetworkError({
+        headline: 'environment setup failed',
+        error: err,
+        target: SETUP_TARGET,
+        retry: () => {
+          followUp = 'retry';
+        },
+        actions: [
+          {
+            title: 'Repair (clean reinstall)',
+            run: () => {
+              followUp = 'repair';
+            },
+          },
+        ],
+        showLog: () => this.output.show(),
+      });
     } finally {
       this.setupRunning = false;
     }
+    if (followUp) await this.setup({ recreate: followUp === 'repair' });
   }
 
   /** True when PyneIDE owns the environment, i.e. may install into it. */

@@ -8,7 +8,10 @@
 import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
+import type { PyneApiClient } from '../api/client';
 import { sha256 } from '../compile/sourcemap';
+import { apiTarget, flattenErrorMessage } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import { collectReport, type CollectDeps } from './collect';
 import { failures, type FailureRecord } from './lastFailure';
 import { finalizePayload, type ReportPayload, type ReportSource } from './payload';
@@ -112,45 +115,80 @@ async function runReportFlow(
     return;
   }
 
-  const result = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: 'PyneIDE: sending problem report…',
-    },
-    async () => {
-      try {
-        return await client.submitReport(payload, authenticated);
-      } catch (err) {
-        return {
-          ok: false as const,
-          status: 0,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }
-  );
-
-  if (!result.ok) {
-    const choice = await vscode.window.showErrorMessage(
-      `PyneIDE: could not send the report: ${result.error}`,
-      'Show Log'
-    );
-    if (choice === 'Show Log') output.show();
-    return;
-  }
+  const reference = await sendReport(client, payload, authenticated, auth.baseUrl(), output);
+  if (reference === undefined) return;
 
   await context.globalState.update(LAST_REPORT_KEY, {
     fingerprint: fingerprint(payload),
     at: Date.now(),
-    reference: result.reference,
+    reference,
   } satisfies LastReport);
   if (draft.contact_email) await context.globalState.update(EMAIL_KEY, draft.contact_email);
 
   const choice = await vscode.window.showInformationMessage(
-    `PyneIDE: report sent. Reference: ${result.reference}`,
+    `PyneIDE: report sent. Reference: ${reference}`,
     'Copy Reference'
   );
-  if (choice === 'Copy Reference') await vscode.env.clipboard.writeText(result.reference);
+  if (choice === 'Copy Reference') await vscode.env.clipboard.writeText(reference);
+}
+
+/**
+ * Send the report, offering Retry until it goes out or the user gives up.
+ * Returns the reference, or undefined when nothing was sent.
+ *
+ * Retry matters most here: the usual reason a report cannot be sent is the very
+ * network problem the user is trying to report, and losing the typed-up note to
+ * a dropped connection would be the worst possible moment to do so.
+ */
+async function sendReport(
+  client: PyneApiClient,
+  payload: ReportPayload,
+  authenticated: boolean,
+  baseUrl: string,
+  output: vscode.OutputChannel
+): Promise<string | undefined> {
+  const target = apiTarget('Sending a problem report', baseUrl);
+  for (;;) {
+    let thrown: unknown;
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'PyneIDE: sending problem report…',
+      },
+      async () => {
+        try {
+          return await client.submitReport(payload, authenticated);
+        } catch (err) {
+          thrown = err;
+          return { ok: false as const, status: 0, error: flattenErrorMessage(err) };
+        }
+      }
+    );
+    if (result.ok) return result.reference;
+
+    let retry = false;
+    if (thrown !== undefined) {
+      await showNetworkError({
+        headline: 'could not send the report',
+        error: thrown,
+        target,
+        retry: () => {
+          retry = true;
+        },
+        showLog: () => output.show(),
+      });
+    } else {
+      // The server answered, just not with a success — its own message stands.
+      const choice = await vscode.window.showErrorMessage(
+        `PyneIDE: could not send the report: ${result.error}`,
+        'Retry',
+        'Show Log'
+      );
+      if (choice === 'Retry') retry = true;
+      else if (choice === 'Show Log') output.show();
+    }
+    if (!retry) return undefined;
+  }
 }
 
 /**

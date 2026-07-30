@@ -12,6 +12,8 @@
  */
 import * as vscode from 'vscode';
 
+import { explainError, pypiTarget } from '../net/errors';
+import { showNetworkError } from '../net/notify';
 import type { PluginDetail } from './catalog';
 import type { PluginsInMessage, PluginsOutMessage } from './messages';
 import { PluginActionError, type PluginRow, type PluginService } from './service';
@@ -117,7 +119,7 @@ export class PluginsPanel {
       this.post({
         type: 'detail',
         id,
-        error: err instanceof Error ? err.message : String(err),
+        error: explainError(err, this.service.catalogueTarget()),
       });
     }
   }
@@ -127,6 +129,9 @@ export class PluginsPanel {
     if (!row || this.busyRow) return;
     this.busyRow = id;
     this.post({ type: 'busy', id });
+    // Run after the finally: `busyRow` is only cleared there, so a retry from
+    // inside the catch would be dropped by the busy guard.
+    let retryRequested = false;
     try {
       if (action === 'install') {
         await this.service.install(row);
@@ -134,14 +139,21 @@ export class PluginsPanel {
         await this.service.uninstall(row);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.post({ type: 'actionError', id, message });
+      // Only an install goes to the network; a removal is local, and a local
+      // failure stays unclassified anyway.
+      const target = pypiTarget(`Installing ${row.package}`);
+      this.post({ type: 'actionError', id, message: explainError(err, target) });
       if (err instanceof PluginActionError && err.kind === 'unmanaged') {
         await this.copyCommand(id);
       } else {
-        void vscode.window.showErrorMessage(
-          `PyneIDE: ${action === 'install' ? 'installing' : 'removing'} ${row.package} failed — ${message}`
-        );
+        await showNetworkError({
+          headline: `${action === 'install' ? 'installing' : 'removing'} ${row.package} failed`,
+          error: err,
+          target,
+          retry: () => {
+            retryRequested = true;
+          },
+        });
       }
     } finally {
       this.busyRow = undefined;
@@ -149,6 +161,7 @@ export class PluginsPanel {
       this.detailCache.delete(row.package);
       await this.postModel();
     }
+    if (retryRequested) await this.runAction(id, action);
   }
 
   private async copyCommand(id: string): Promise<void> {

@@ -13,7 +13,12 @@ import { PineSourceMapper } from '../../src/debug/sourceMapper';
 import { bootstrapManagedEnv, readMarker } from '../../src/env/bootstrap';
 import { CancelSource, CancelledError, isCancelledError } from '../../src/env/cancel';
 import { execChecked } from '../../src/env/exec';
-import { describeSetupError } from '../../src/env/netErrors';
+import {
+  SETUP_TARGET,
+  apiTarget,
+  describeNetworkError,
+  flattenErrorMessage,
+} from '../../src/net/errors';
 import {
   SetupProgressTracker,
   UvInstallProgress,
@@ -525,13 +530,15 @@ function setupProgressUnitTests(): void {
   }
   if (percents[percents.length - 1] !== 1) throw new Error('SetupProgressTracker: done() != 1');
 
+  const setup = (err: unknown) => describeNetworkError(err, SETUP_TARGET);
+
   const dns = Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), {
     code: 'ENOTFOUND',
     hostname: 'github.com',
   });
-  const dnsMessage = describeSetupError(dns);
+  const dnsMessage = setup(dns);
   if (!dnsMessage?.summary.includes('github.com') || !dnsMessage.summary.includes('offline')) {
-    throw new Error(`describeSetupError(dns): ${JSON.stringify(dnsMessage)}`);
+    throw new Error(`describeNetworkError(dns): ${JSON.stringify(dnsMessage)}`);
   }
   // uv's real chain, as execChecked wraps it (captured from uv 0.11 against an
   // unreachable index): the cause worth reporting is the LAST line, not the first.
@@ -544,22 +551,68 @@ function setupProgressUnitTests(): void {
       '  Caused by: dns error\n' +
       '  Caused by: failed to lookup address information: nodename nor servname provided'
   );
-  if (!describeSetupError(uvFetch)?.summary.includes('pypi.org')) {
-    throw new Error('describeSetupError: uv fetch chain not classified');
+  if (!setup(uvFetch)?.summary.includes('pypi.org')) {
+    throw new Error('describeNetworkError: uv fetch chain not classified');
   }
   const tls = new Error('unable to get local issuer certificate');
-  if (!describeSetupError(tls)?.hint.includes('NODE_EXTRA_CA_CERTS')) {
-    throw new Error('describeSetupError: TLS case not classified');
+  if (!setup(tls)?.hint.includes('NODE_EXTRA_CA_CERTS')) {
+    throw new Error('describeNetworkError: TLS case not classified');
   }
-  if (!describeSetupError(new Error('Download failed with HTTP 403: https://github.com/x'))) {
-    throw new Error('describeSetupError: HTTP status not classified');
+  if (!setup(new Error('Download failed with HTTP 403: https://github.com/x'))) {
+    throw new Error('describeNetworkError: HTTP status not classified');
   }
   // Local failures keep their own message, and a cancel is not a failure.
-  if (describeSetupError(new Error('Checksum mismatch for /tmp/uv.tar.gz: expected a, got b'))) {
-    throw new Error('describeSetupError: checksum mismatch must stay unexplained');
+  if (setup(new Error('Checksum mismatch for /tmp/uv.tar.gz: expected a, got b'))) {
+    throw new Error('describeNetworkError: checksum mismatch must stay unexplained');
   }
-  if (describeSetupError(new CancelledError())) {
-    throw new Error('describeSetupError: cancel must not be reported as a failure');
+  if (setup(new CancelledError())) {
+    throw new Error('describeNetworkError: cancel must not be reported as a failure');
+  }
+  // The hint names what the CALLER needs, not always github.com/pypi.org.
+  const api = apiTarget('Pine compilation', 'https://api.pynesys.io');
+  const apiHint = setup(dns)?.hint;
+  if (!apiHint?.includes('github.com') || describeNetworkError(dns, api)?.hint.includes('github.com')) {
+    throw new Error('describeNetworkError: the hint must follow the target');
+  }
+
+  // undici keeps the real reason in `cause`: its own message is just
+  // "fetch failed", which is what the user used to be shown.
+  const fetchFailed = Object.assign(new TypeError('fetch failed'), {
+    cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.pynesys.io'), {
+      code: 'ENOTFOUND',
+      hostname: 'api.pynesys.io',
+    }),
+  });
+  const offline = describeNetworkError(fetchFailed, api);
+  if (!offline?.summary.includes('api.pynesys.io') || !offline.summary.includes('offline')) {
+    throw new Error(`describeNetworkError(fetch failed): ${JSON.stringify(offline)}`);
+  }
+  if (!flattenErrorMessage(fetchFailed).includes('ENOTFOUND api.pynesys.io')) {
+    throw new Error(`flattenErrorMessage: cause dropped: ${flattenErrorMessage(fetchFailed)}`);
+  }
+  // An AggregateError (one error per resolved address) wraps the same way.
+  const aggregate = Object.assign(new TypeError('fetch failed'), {
+    cause: Object.assign(new AggregateError([new Error('connect ECONNREFUSED 127.0.0.1:443')]), {
+      code: 'ECONNREFUSED',
+    }),
+  });
+  if (!describeNetworkError(aggregate, api)?.summary.includes('refused')) {
+    throw new Error('describeNetworkError: AggregateError cause not classified');
+  }
+  // A host the error does not name falls back to the one we called.
+  const timeout = new Error('Request timed out after 30000 ms');
+  if (!describeNetworkError(timeout, api)?.summary.includes('api.pynesys.io')) {
+    throw new Error('describeNetworkError: target host not used as fallback');
+  }
+  // What the Python side reports through the bridge (urllib3/requests/ccxt).
+  const urllib3 = new Error(
+    "HTTPSConnectionPool(host='api.bybit.com', port=443): Max retries exceeded with url: /v5/market/kline " +
+      '(Caused by NameResolutionError("Failed to resolve \'api.bybit.com\' ' +
+      '([Errno -2] Name or service not known)"))'
+  );
+  const urllib3Message = describeNetworkError(urllib3, api)?.summary;
+  if (!urllib3Message?.includes('api.bybit.com') || !urllib3Message.includes('offline')) {
+    throw new Error(`describeNetworkError(urllib3): ${JSON.stringify(urllib3Message)}`);
   }
   log('Setup progress + error-explanation unit tests OK');
 }

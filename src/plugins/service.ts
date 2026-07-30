@@ -18,6 +18,7 @@ import type { AuthService } from '../api/auth';
 import type { EnvManager } from '../env/manager';
 import { pyneBinPath } from '../env/uv';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
+import { apiTarget, explainError, type NetworkTarget } from '../net/errors';
 import {
   fetchPluginDetail,
   fetchPluginIndex,
@@ -134,6 +135,11 @@ export class PluginService {
   }
 
   private log = (message: string): void => this.output.appendLine(message);
+
+  /** What a catalogue request needs to reach, for explaining a failure. */
+  catalogueTarget(): NetworkTarget {
+    return apiTarget('The plugin catalogue', this.auth.baseUrl());
+  }
 
   /**
    * Build the merged model. `refresh` forces a catalogue request; otherwise the
@@ -279,7 +285,7 @@ export class PluginService {
       await this.context.globalState.update(INDEX_CACHE_KEY, fresh);
       return { state: 'ok', snapshot, fetchedAt: fresh.fetchedAt };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = explainError(err, this.catalogueTarget());
       this.log(`PyneIDE: plugin index unavailable: ${message}`);
       if (cached) {
         return { state: 'cached', snapshot: cached.snapshot, fetchedAt: cached.fetchedAt, message };
