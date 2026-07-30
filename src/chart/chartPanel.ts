@@ -683,19 +683,20 @@ export class ChartPanel {
     box-sizing: border-box; padding: 8px 10px 6px;
   }
   .performance-summary {
-    flex: 0 0 auto; display: grid; grid-template-columns: repeat(4, minmax(110px, 1fr));
+    flex: 0 0 auto; display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
     gap: 8px; margin-bottom: 6px;
   }
   .performance-metric {
     min-width: 0; padding: 4px 7px; border-left: 2px solid var(--vscode-panel-border, #444);
   }
-  .performance-metric span, .performance-metric small {
+  .performance-metric span, .performance-metric small, .performance-metric strong {
     display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .performance-metric span {
     color: var(--vscode-descriptionForeground); font-size: 10px; text-transform: uppercase;
   }
-  .performance-metric strong { display: block; margin-top: 1px; font-size: 15px; font-weight: 600; }
+  .performance-metric strong { margin-top: 1px; font-size: 15px; font-weight: 600; }
   .performance-metric small { color: var(--vscode-descriptionForeground); font-size: 10px; }
   .equity-chart-wrap { flex: 1 1 auto; min-height: 80px; position: relative; }
   .equity-chart-title {
@@ -704,8 +705,12 @@ export class ChartPanel {
   }
   #equity-canvas { display: block; width: 100%; height: 100%; }
   @media (max-width: 620px) {
-    .performance-summary { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
-    .performance-metric:nth-child(n+3) { display: none; }
+    .performance-summary { gap: 5px; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
+    .performance-metric { padding: 3px 5px; }
+    .performance-metric strong { font-size: 13px; }
+  }
+  @media (max-width: 420px) {
+    .performance-metric strong { font-size: 12px; }
   }
   /* --pyne-up/--pyne-down are set on the body by the webview from the chosen
      color scheme, so the Stats numbers say up and down the same way the bars

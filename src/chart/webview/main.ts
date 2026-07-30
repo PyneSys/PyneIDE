@@ -2256,8 +2256,9 @@ function performanceMetric(
   sign: number | null,
   detail?: string
 ): string {
+  const title = esc(`${label}: ${value}${detail ? ` (${detail})` : ''}`);
   return (
-    '<div class="performance-metric">' +
+    `<div class="performance-metric" title="${title}">` +
     `<span class="performance-label">${esc(label)}</span>` +
     `<strong class="${signClass(sign)}">${esc(value)}</strong>` +
     (detail ? `<small>${esc(detail)}</small>` : '') +
