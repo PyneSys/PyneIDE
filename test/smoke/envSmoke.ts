@@ -10,8 +10,17 @@ import * as path from 'node:path';
 import { sha256 } from '../../src/compile/sourcemap';
 import { demangleName, demangleVariables } from '../../src/debug/demangle';
 import { PineSourceMapper } from '../../src/debug/sourceMapper';
-import { bootstrapManagedEnv } from '../../src/env/bootstrap';
+import { bootstrapManagedEnv, readMarker } from '../../src/env/bootstrap';
+import { CancelSource, CancelledError, isCancelledError } from '../../src/env/cancel';
 import { execChecked } from '../../src/env/exec';
+import { describeSetupError } from '../../src/env/netErrors';
+import {
+  SetupProgressTracker,
+  UvInstallProgress,
+  UvVenvProgress,
+  parseUvOutput,
+  type SetupProgress,
+} from '../../src/env/progress';
 import { venvPythonPath, managedVenvDir, pyneBinPath } from '../../src/env/uv';
 import { findWorkdir, resolveWorkdir, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { BridgeRun, type BridgeEvent } from '../../src/run/bridgeClient';
@@ -454,17 +463,189 @@ function sourcemapUnitTests(): void {
   log('Sourcemap + demangle unit tests OK');
 }
 
+/**
+ * Setup progress + failure-explanation unit tests. These run against uv's real
+ * piped output shapes: its progress bars are TTY-only, so these line markers
+ * are the only progress signal a spawned uv ever gives us.
+ */
+function setupProgressUnitTests(): void {
+  const uvCases: [string, unknown][] = [
+    ['Resolved 42 packages in 814ms', { kind: 'resolved', count: 42 }],
+    ['Prepared 42 packages in 10.24s', { kind: 'prepared', count: 42 }],
+    ['Installed 42 packages in 783ms', { kind: 'installed', count: 42 }],
+    ['Downloading pandas (10.8MiB)', { kind: 'downloading', name: 'pandas', bytes: 10.8 * 1024 ** 2 }],
+    [
+      'Downloading cpython-3.14.0-macos-aarch64-none (download) (23.8MiB)',
+      { kind: 'downloading', name: 'cpython-3.14.0-macos-aarch64-none', bytes: 23.8 * 1024 ** 2 },
+    ],
+    // The completion marker is indented by uv, and carries no size.
+    [' Downloaded pandas', { kind: 'downloaded', name: 'pandas' }],
+    [' + numpy==2.5.1', undefined],
+    ['Using CPython 3.14.0', undefined],
+  ];
+  for (const [line, want] of uvCases) {
+    const got = parseUvOutput(line);
+    if (JSON.stringify(got) !== JSON.stringify(want)) {
+      throw new Error(`parseUvOutput(${JSON.stringify(line)}): got ${JSON.stringify(got)}`);
+    }
+  }
+
+  const install = new UvInstallProgress();
+  const fractions = [
+    install.accept('Resolved 10 packages in 1s')?.fraction,
+    install.accept(' Downloaded pandas')?.fraction,
+    install.accept(' Downloaded numpy')?.fraction,
+    install.accept('Prepared 10 packages in 9s')?.fraction,
+    install.accept('Installed 10 packages in 1s')?.fraction,
+  ];
+  if (fractions.some((f) => f === undefined)) throw new Error('UvInstallProgress: missed a marker');
+  for (let i = 1; i < fractions.length; i++) {
+    if (fractions[i]! <= fractions[i - 1]!) {
+      throw new Error(`UvInstallProgress: not increasing: ${JSON.stringify(fractions)}`);
+    }
+  }
+  const venvProgress = new UvVenvProgress();
+  const venvStep = venvProgress.accept('Downloading cpython-3.14.0-macos-aarch64-none (24.9MiB)');
+  if (!venvStep?.message.includes('MB')) {
+    throw new Error(`UvVenvProgress: no size in ${JSON.stringify(venvStep)}`);
+  }
+
+  // The bar must never rewind — the recreate pass reports from further back.
+  const seen: SetupProgress[] = [];
+  const tracker = new SetupProgressTracker((p) => seen.push(p));
+  tracker.begin('packages', 'Resolving packages…');
+  tracker.within(0.5, 'Downloading packages…');
+  tracker.begin('uv', 'Retrying…');
+  tracker.done('Done');
+  const percents = seen.map((p) => p.percent);
+  for (let i = 1; i < percents.length; i++) {
+    if (percents[i] < percents[i - 1]) {
+      throw new Error(`SetupProgressTracker rewound: ${JSON.stringify(percents)}`);
+    }
+  }
+  if (percents[percents.length - 1] !== 1) throw new Error('SetupProgressTracker: done() != 1');
+
+  const dns = Object.assign(new Error('getaddrinfo ENOTFOUND github.com'), {
+    code: 'ENOTFOUND',
+    hostname: 'github.com',
+  });
+  const dnsMessage = describeSetupError(dns);
+  if (!dnsMessage?.summary.includes('github.com') || !dnsMessage.summary.includes('offline')) {
+    throw new Error(`describeSetupError(dns): ${JSON.stringify(dnsMessage)}`);
+  }
+  // uv's real chain, as execChecked wraps it (captured from uv 0.11 against an
+  // unreachable index): the cause worth reporting is the LAST line, not the first.
+  const uvFetch = new Error(
+    'Command failed (exit 2): uv pip install\n' +
+      'error: Request failed after 3 retries in 9.2s\n' +
+      '  Caused by: Failed to fetch: `https://pypi.org/simple/pandas/`\n' +
+      '  Caused by: error sending request for url (https://pypi.org/simple/pandas/)\n' +
+      '  Caused by: client error (Connect)\n' +
+      '  Caused by: dns error\n' +
+      '  Caused by: failed to lookup address information: nodename nor servname provided'
+  );
+  if (!describeSetupError(uvFetch)?.summary.includes('pypi.org')) {
+    throw new Error('describeSetupError: uv fetch chain not classified');
+  }
+  const tls = new Error('unable to get local issuer certificate');
+  if (!describeSetupError(tls)?.hint.includes('NODE_EXTRA_CA_CERTS')) {
+    throw new Error('describeSetupError: TLS case not classified');
+  }
+  if (!describeSetupError(new Error('Download failed with HTTP 403: https://github.com/x'))) {
+    throw new Error('describeSetupError: HTTP status not classified');
+  }
+  // Local failures keep their own message, and a cancel is not a failure.
+  if (describeSetupError(new Error('Checksum mismatch for /tmp/uv.tar.gz: expected a, got b'))) {
+    throw new Error('describeSetupError: checksum mismatch must stay unexplained');
+  }
+  if (describeSetupError(new CancelledError())) {
+    throw new Error('describeSetupError: cancel must not be reported as a failure');
+  }
+  log('Setup progress + error-explanation unit tests OK');
+}
+
+/**
+ * Cancel mid-download: the request must be torn down, the partial file removed
+ * and a CancelledError raised — not a half-finished environment that later
+ * looks merely "outdated".
+ */
+async function setupCancelSmoke(): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-cancel-'));
+  const source = new CancelSource();
+  let sawDownload = false;
+  let failure: unknown;
+  try {
+    await bootstrapManagedEnv({
+      storageDir: dir,
+      log: () => undefined,
+      cancel: source,
+      progress: ({ message }) => {
+        if (message.startsWith('Downloading')) {
+          sawDownload = true;
+          source.cancel();
+        }
+      },
+    });
+  } catch (err) {
+    failure = err;
+  }
+  if (!sawDownload) throw new Error('cancel: no download progress to cancel on');
+  if (!isCancelledError(failure)) {
+    throw new Error(`cancel: expected CancelledError, got ${String(failure)}`);
+  }
+  const leftovers = fs.existsSync(path.join(dir, 'uv'))
+    ? fs.readdirSync(path.join(dir, 'uv')).filter((f) => f.endsWith('.tar.gz') || f.endsWith('.zip'))
+    : [];
+  if (leftovers.length > 0) throw new Error(`cancel: partial download kept: ${leftovers.join(', ')}`);
+  if (readMarker(dir)) throw new Error('cancel: env marker written for an unfinished setup');
+
+  // An already-cancelled token must not start any work at all.
+  const preCancelled = new CancelSource();
+  preCancelled.cancel();
+  let early: unknown;
+  try {
+    await bootstrapManagedEnv({ storageDir: dir, log: () => undefined, cancel: preCancelled });
+  } catch (err) {
+    early = err;
+  }
+  if (!isCancelledError(early)) {
+    throw new Error(`cancel: pre-cancelled token not honoured (${String(early)})`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  log('Setup cancellation OK');
+}
+
 async function main(): Promise<void> {
   sourcemapUnitTests();
+  setupProgressUnitTests();
+  await setupCancelSmoke();
   const storageDir =
     process.argv[2] ?? fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-smoke-'));
   log(`Storage dir: ${storageDir}`);
 
   const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || undefined;
-  const { pythonBin, verify } = await bootstrapManagedEnv({ storageDir, log, proxyUrl });
+  const progressFeed: SetupProgress[] = [];
+  const { pythonBin, verify } = await bootstrapManagedEnv({
+    storageDir,
+    log,
+    proxyUrl,
+    progress: (p) => progressFeed.push(p),
+  });
   if (!verify.ok) {
     throw new Error(`Verification failed: ${verify.error}`);
   }
+  // The progress feed is the notification's only source: it must advance, end
+  // full, and never leak a URL into the label (the log carries those).
+  if (progressFeed.length === 0) throw new Error('setup reported no progress');
+  if (progressFeed[progressFeed.length - 1].percent !== 1) {
+    throw new Error('setup progress did not reach 100%');
+  }
+  const distinct = new Set(progressFeed.map((p) => p.percent));
+  if (distinct.size < 3) {
+    throw new Error(`setup progress barely moved: ${JSON.stringify([...distinct])}`);
+  }
+  const url = progressFeed.find((p) => p.message.includes('://'));
+  if (url) throw new Error(`setup progress label contains a URL: ${url.message}`);
   if (pythonBin !== venvPythonPath(managedVenvDir(storageDir))) {
     throw new Error('Unexpected python path for managed venv');
   }

@@ -2,7 +2,15 @@ import * as fs from 'node:fs';
 
 import * as vscode from 'vscode';
 
-import { bootstrapManagedEnv, markerUpToDate, verifyPython, type VerifyResult } from './bootstrap';
+import {
+  bootstrapManagedEnv,
+  markerUpToDate,
+  readMarker,
+  verifyPython,
+  type VerifyResult,
+} from './bootstrap';
+import { isCancelledError } from './cancel';
+import { describeSetupError } from './netErrors';
 import {
   installPackages as uvInstallPackages,
   uninstallPackages as uvUninstallPackages,
@@ -122,6 +130,17 @@ export class EnvManager {
       });
       return this.stateValue;
     }
+    // An interpreter with no marker at all means a setup that started and never
+    // finished — most likely cancelled. Reporting that as "outdated" would name
+    // a cause that never happened.
+    if (!readMarker(this.storageDir)) {
+      this.setState({
+        kind: 'needs-setup',
+        reason: 'The Python environment setup did not finish.',
+        cause: 'missing',
+      });
+      return this.stateValue;
+    }
     if (!markerUpToDate(this.storageDir)) {
       this.setState({
         kind: 'needs-setup',
@@ -165,25 +184,26 @@ export class EnvManager {
         {
           location: vscode.ProgressLocation.Notification,
           title: 'PyneIDE: setting up Python environment',
-          cancellable: false,
+          cancellable: true,
         },
-        async (progress) => {
-          const step = (message: string): void => {
-            progress.report({ message });
-            this.setState({ kind: 'working', step: message });
-          };
-          step('Preparing uv + Python…');
+        async (progress, token) => {
+          // withProgress takes increments, the bootstrap reports an absolute
+          // position: keep the running total to convert, and never emit a
+          // negative step (the recreate pass may report from further back).
+          let reported = 0;
           const { verify } = await bootstrapManagedEnv({
             storageDir: this.storageDir,
-            log: (msg) => {
-              this.log(msg);
-              if (msg.startsWith('Downloading') || msg.startsWith('Creating') || msg.startsWith('Installing')) {
-                step(msg);
-              }
-            },
+            log: this.log,
             proxyUrl: this.proxyUrl(),
             useOwnPynecore: this.config().get<boolean>('useOwnPynecore') ?? false,
             recreate: options.recreate,
+            cancel: token,
+            progress: ({ message, percent }) => {
+              const increment = Math.max(0, percent * 100 - reported);
+              reported += increment;
+              progress.report({ message, increment });
+              this.setState({ kind: 'working', step: message });
+            },
           });
           if (!verify.ok) {
             throw new Error(verify.error ?? 'unknown verification error');
@@ -199,11 +219,23 @@ export class EnvManager {
         );
       }
     } catch (err) {
+      if (isCancelledError(err)) {
+        this.log('Setup cancelled.');
+        await this.check();
+        void vscode.window.showInformationMessage(
+          'PyneIDE: environment setup cancelled. What was downloaded is kept, ' +
+            'so running setup again continues from there.'
+        );
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.log(`Setup failed: ${message}`);
-      this.setState({ kind: 'error', message });
+      const friendly = describeSetupError(err);
+      this.setState({ kind: 'error', message: friendly?.summary ?? message });
       const choice = await vscode.window.showErrorMessage(
-        `PyneIDE: environment setup failed: ${message}`,
+        friendly
+          ? `PyneIDE: environment setup failed — ${friendly.summary}. ${friendly.hint}`
+          : `PyneIDE: environment setup failed: ${message}`,
         'Retry',
         'Repair (clean reinstall)',
         'Show Log'
@@ -283,6 +315,9 @@ export class EnvManager {
       if (choice !== 'Setup Now') return undefined;
       await this.setup();
       state = this.stateValue;
+      // setup() already reported why it did not finish — cancelling it must not
+      // also produce a generic "not available" error on top.
+      if (state.kind !== 'ready') return undefined;
     }
     if (state.kind !== 'ready') {
       void vscode.window.showErrorMessage(

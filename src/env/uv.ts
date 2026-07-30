@@ -2,13 +2,25 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { throwIfCancelled, type CancelToken } from './cancel';
 import { UV_ARTIFACTS, UV_VERSION, uvDownloadUrl, type Logger } from './constants';
 import { downloadFile, verifySha256 } from './download';
 import { execChecked } from './exec';
+import { formatMb } from './progress';
 
 export interface UvPaths {
   /** Absolute path of the uv executable. */
   uvBin: string;
+}
+
+export interface EnsureUvOptions {
+  cancel?: CancelToken;
+  /**
+   * Progress within the uv step alone (0..1) with a ready-made label — the
+   * caller places it inside the overall setup bar. Keeps uv.ts free of any
+   * knowledge about the other phases.
+   */
+  onProgress?: (fraction: number, message: string) => void;
 }
 
 function platformKey(): string {
@@ -39,14 +51,17 @@ function findFile(root: string, name: string): string | undefined {
 export async function ensureUv(
   storageDir: string,
   log: Logger,
-  env?: NodeJS.ProcessEnv
+  env?: NodeJS.ProcessEnv,
+  options: EnsureUvOptions = {}
 ): Promise<UvPaths> {
+  const { cancel, onProgress } = options;
   const uvDir = path.join(storageDir, 'uv');
   const uvBin = path.join(uvDir, uvBinName());
+  throwIfCancelled(cancel);
 
   if (fs.existsSync(uvBin)) {
     try {
-      const result = await execChecked(uvBin, ['--version'], log, { env, timeoutMs: 15000 });
+      const result = await execChecked(uvBin, ['--version'], log, { env, timeoutMs: 15000, cancel });
       if (result.stdout.includes(` ${UV_VERSION}`) || result.stdout.trim().endsWith(UV_VERSION)) {
         return { uvBin };
       }
@@ -68,14 +83,25 @@ export async function ensureUv(
   fs.mkdirSync(uvDir, { recursive: true });
 
   const archivePath = path.join(uvDir, artifact.name);
-  await downloadFile(uvDownloadUrl(artifact), archivePath, log);
+  await downloadFile(uvDownloadUrl(artifact), archivePath, log, {
+    cancel,
+    onProgress: (received, total) => {
+      const size = total ? ` (${formatMb(total)} MB)` : '';
+      // The label states what is being fetched — the URL belongs in the log.
+      onProgress?.(total ? received / total : 0, `Downloading uv ${UV_VERSION}${size}…`);
+    },
+  });
   await verifySha256(archivePath, artifact.sha256);
   log(`Checksum OK: ${artifact.sha256}`);
 
   // tar.gz on macOS/Linux; on Windows 10+ the bundled bsdtar extracts zip too.
+  onProgress?.(1, `Unpacking uv ${UV_VERSION}…`);
   const extractDir = path.join(uvDir, 'extract');
   fs.mkdirSync(extractDir, { recursive: true });
-  await execChecked('tar', ['-xf', archivePath, '-C', extractDir], log, { timeoutMs: 60000 });
+  await execChecked('tar', ['-xf', archivePath, '-C', extractDir], log, {
+    timeoutMs: 60000,
+    cancel,
+  });
 
   const extractedBin = findFile(extractDir, uvBinName());
   if (!extractedBin) {
@@ -88,7 +114,7 @@ export async function ensureUv(
   fs.rmSync(extractDir, { recursive: true, force: true });
   fs.rmSync(archivePath, { force: true });
 
-  await execChecked(uvBin, ['--version'], log, { env, timeoutMs: 15000 });
+  await execChecked(uvBin, ['--version'], log, { env, timeoutMs: 15000, cancel });
   log(`uv ${UV_VERSION} installed at ${uvBin}`);
   return { uvBin };
 }

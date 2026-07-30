@@ -1,7 +1,9 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import type * as http from 'node:http';
 import * as https from 'node:https';
 
+import { CancelledError, type CancelToken } from './cancel';
 import type { Logger } from './constants';
 
 const MAX_REDIRECTS = 5;
@@ -14,21 +16,39 @@ const MAX_REDIRECTS = 5;
  */
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
+/** Minimum gap between byte-progress callbacks — a fast link fires per packet. */
+const PROGRESS_INTERVAL_MS = 150;
+
+export interface DownloadOptions {
+  /** Destroys the request and removes the partial file. */
+  cancel?: CancelToken;
+  /** Byte progress; `total` is undefined when the response has no content-length. */
+  onProgress?: (received: number, total?: number) => void;
+}
+
 /**
  * Download a URL to a file using node:https. In the VSCode extension host the
  * http/https modules are proxy-patched (http.proxy / http.proxySupport), so
  * this honours the user's proxy settings without extra work.
  */
-export function downloadFile(url: string, dest: string, log: Logger): Promise<void> {
+export function downloadFile(
+  url: string,
+  dest: string,
+  log: Logger,
+  options: DownloadOptions = {}
+): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let file: fs.WriteStream | undefined;
+    let activeRequest: http.ClientRequest | undefined;
+    let cancelSub: { dispose(): void } | undefined;
 
     const succeed = (): void => {
       if (settled) {
         return;
       }
       settled = true;
+      cancelSub?.dispose();
       resolve();
     };
     const fail = (err: Error): void => {
@@ -36,6 +56,8 @@ export function downloadFile(url: string, dest: string, log: Logger): Promise<vo
         return;
       }
       settled = true;
+      cancelSub?.dispose();
+      activeRequest?.destroy();
       file?.destroy();
       fs.rmSync(dest, { force: true });
       reject(err);
@@ -61,13 +83,33 @@ export function downloadFile(url: string, dest: string, log: Logger): Promise<vo
             fail(new Error(`Download failed with HTTP ${status}: ${target}`));
             return;
           }
+          const declared = parseInt(res.headers['content-length'] ?? '', 10);
+          const total = Number.isFinite(declared) ? declared : undefined;
+          let received = 0;
+          let lastReport = 0;
+          if (options.onProgress) {
+            res.on('data', (chunk: Buffer) => {
+              received += chunk.length;
+              const now = Date.now();
+              if (now - lastReport >= PROGRESS_INTERVAL_MS) {
+                lastReport = now;
+                options.onProgress?.(received, total);
+              }
+            });
+          }
           file = fs.createWriteStream(dest);
           res.pipe(file);
-          file.on('finish', () => file?.close(() => succeed()));
+          file.on('finish', () =>
+            file?.close(() => {
+              options.onProgress?.(received, total);
+              succeed();
+            })
+          );
           file.on('error', fail);
           res.on('error', fail);
         }
       );
+      activeRequest = req;
       req.on('timeout', () => {
         req.destroy();
         fail(
@@ -79,6 +121,14 @@ export function downloadFile(url: string, dest: string, log: Logger): Promise<vo
       });
       req.on('error', fail);
     };
+
+    if (options.cancel?.isCancellationRequested) {
+      fail(new CancelledError(`Cancelled before downloading ${url}`));
+      return;
+    }
+    cancelSub = options.cancel?.onCancellationRequested(() => {
+      fail(new CancelledError(`Cancelled while downloading ${url}`));
+    });
     log(`Downloading ${url}`);
     request(url, MAX_REDIRECTS);
   });

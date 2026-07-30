@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { throwIfCancelled, type CancelToken } from './cancel';
 import {
   DEBUGPY_VERSION,
   ENV_SCHEMA_VERSION,
@@ -10,6 +11,12 @@ import {
   type Logger,
 } from './constants';
 import { execChecked, execProcess } from './exec';
+import {
+  SetupProgressTracker,
+  UvInstallProgress,
+  UvVenvProgress,
+  type ProgressReporter,
+} from './progress';
 import { ensureUv, managedVenvDir, uvEnv, venvPythonPath } from './uv';
 
 export interface EnvMarker {
@@ -40,6 +47,10 @@ export interface BootstrapOptions {
   proxyUrl?: string;
   /** Keep an already importable pynecore instead of installing the pin. */
   useOwnPynecore?: boolean;
+  /** Aborts the current download or child process and throws a CancelledError. */
+  cancel?: CancelToken;
+  /** Overall progress for the UI; the log stream is not a progress source. */
+  progress?: ProgressReporter;
 }
 
 const VERIFY_SCRIPT = [
@@ -152,10 +163,15 @@ export function compareVersions(a: string, b: string): number {
  * Run an import/version check against a Python interpreter.
  * Never throws: problems come back in the `error` field.
  */
-export async function verifyPython(pythonBin: string, log: Logger): Promise<VerifyResult> {
+export async function verifyPython(
+  pythonBin: string,
+  log: Logger,
+  cancel?: CancelToken
+): Promise<VerifyResult> {
   try {
     const result = await execProcess(pythonBin, ['-X', 'utf8', '-c', VERIFY_SCRIPT], log, {
       timeoutMs: 30000,
+      cancel,
     });
     if (result.code !== 0) {
       return { ok: false, error: result.stderr.trim() || `exit code ${result.code}` };
@@ -203,10 +219,27 @@ export async function verifyPython(pythonBin: string, log: Logger): Promise<Veri
 export async function bootstrapManagedEnv(
   options: BootstrapOptions & { recreate?: boolean }
 ): Promise<{ pythonBin: string; verify: VerifyResult }> {
-  const { storageDir, log, proxyUrl, useOwnPynecore, recreate } = options;
+  return runBootstrap(options, new SetupProgressTracker(options.progress));
+}
+
+/**
+ * The bootstrap body. The tracker is threaded through the recreate-and-retry
+ * recursion instead of being created per call, so a second pass continues the
+ * bar the user is already watching rather than restarting it.
+ */
+async function runBootstrap(
+  options: BootstrapOptions & { recreate?: boolean },
+  tracker: SetupProgressTracker
+): Promise<{ pythonBin: string; verify: VerifyResult }> {
+  const { storageDir, log, proxyUrl, useOwnPynecore, recreate, cancel } = options;
   fs.mkdirSync(storageDir, { recursive: true });
   const env = uvEnv(storageDir, proxyUrl);
-  const { uvBin } = await ensureUv(storageDir, log, env);
+  tracker.begin('uv', 'Preparing the package manager…');
+  const { uvBin } = await ensureUv(storageDir, log, env, {
+    cancel,
+    onProgress: (fraction, message) => tracker.within(fraction, message),
+  });
+  throwIfCancelled(cancel);
 
   const venvDir = managedVenvDir(storageDir);
   const pythonBin = venvPythonPath(venvDir);
@@ -227,16 +260,24 @@ export async function bootstrapManagedEnv(
 
   if (!fs.existsSync(pythonBin)) {
     log(`Creating venv with Python ${PYTHON_VERSION}`);
+    tracker.begin('python', `Creating the Python ${PYTHON_VERSION} environment…`);
+    const venvProgress = new UvVenvProgress();
     await execChecked(uvBin, ['venv', '--python', PYTHON_VERSION, venvDir], log, {
       env,
       timeoutMs: 300000,
+      cancel,
+      onLine: (line) => {
+        const update = venvProgress.accept(line);
+        if (update) tracker.within(update.fraction, update.message);
+      },
     });
   }
+  throwIfCancelled(cancel);
 
   const packages: string[] = [`debugpy==${DEBUGPY_VERSION}`];
   let installPynecore = true;
   if (useOwnPynecore) {
-    const check = await verifyPython(pythonBin, log);
+    const check = await verifyPython(pythonBin, log, cancel);
     if (check.pynecoreVersion) {
       log(`Keeping user-provided pynecore ${check.pynecoreVersion} (pyneide.useOwnPynecore)`);
       installPynecore = false;
@@ -249,15 +290,28 @@ export async function bootstrapManagedEnv(
   }
 
   log(`Installing: ${packages.join(', ')}`);
+  tracker.begin('packages', 'Resolving packages…');
+  const installProgress = new UvInstallProgress();
   await execChecked(uvBin, ['pip', 'install', '--python', pythonBin, ...packages], log, {
     env,
     timeoutMs: 600000,
+    cancel,
+    onLine: (line) => {
+      const update = installProgress.accept(line);
+      if (update) tracker.within(update.fraction, update.message);
+    },
   });
+  throwIfCancelled(cancel);
 
-  const verify = await verifyPython(pythonBin, log);
+  tracker.begin('verify', 'Verifying the environment…');
+  const verify = await verifyPython(pythonBin, log, cancel);
+  // A cancel surfaces here as a failed verification (verifyPython never
+  // throws), and must not be mistaken for a broken install worth rebuilding.
+  throwIfCancelled(cancel);
   if (!verify.ok && !recreate) {
     log(`Verification failed (${verify.error}); recreating the environment once`);
-    return bootstrapManagedEnv({ ...options, recreate: true });
+    tracker.note('Verification failed — rebuilding the environment…');
+    return runBootstrap({ ...options, recreate: true }, tracker);
   }
   if (verify.ok) {
     fs.writeFileSync(markerPath(storageDir), JSON.stringify(currentMarker(), null, 2));
@@ -265,6 +319,7 @@ export async function bootstrapManagedEnv(
       `Environment ready: Python ${verify.pythonVersion}, ` +
         `pynecore ${verify.pynecoreVersion}, debugpy ${verify.debugpyVersion}`
     );
+    tracker.done(`Environment ready (Python ${verify.pythonVersion})`);
   }
   return { pythonBin, verify };
 }
