@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -24,6 +30,9 @@ jobs:
         with:
           name: pyneide-vsix
           path: pyneide.vsix
+          # Default is 90 days; every CI run kept a ~5 MB VSIX that long, which
+          # alone consumed a large share of the Actions storage quota.
+          retention-days: 7
 
   env-smoke:
     strategy:
