@@ -21,9 +21,6 @@
 import type { TradeRecord } from '../../run/bridgeClient';
 import { MARKER_STACK_GAP, type MarkerDrawEnv } from './plotStyles';
 
-const LONG_COLOR = '#2962ff';
-const SHORT_COLOR = '#ff5252';
-
 /** Half-width of the widest entry label, in pixels — how far off-screen a
  * marker can still be while painting visible pixels. */
 const MARKER_HALF_WIDTH_PX = 40;
@@ -48,7 +45,14 @@ export interface TradeMarkerItem {
   value: number;
   /** 'up' is a long: the label sits below the bar, pointing up. */
   direction: 'up' | 'down';
-  color: string;
+  /**
+   * Which of the two trade colors this glyph wears. Deliberately the ROLE, not
+   * a resolved color: the index outlives a scheme or theme switch (it is only
+   * rebuilt when the trade or bar count moves), so baking a color in here would
+   * leave every existing marker in the old palette. Not derivable from
+   * `direction` either — a long's exit points up but is painted 'short'.
+   */
+  tone: 'long' | 'short';
   /** 'label' only, pre-formatted. */
   title?: string;
   /** 'label' only, pre-formatted signed size. */
@@ -61,6 +65,12 @@ export type TradeMarkerIndex = Map<number, TradeMarkerItem[]>;
 export interface TradeMarkerTheme {
   textColor: string;
   fontFamily: string;
+  longColor: string;
+  shortColor: string;
+}
+
+function toneColor(item: TradeMarkerItem, theme: TradeMarkerTheme): string {
+  return item.tone === 'long' ? theme.longColor : theme.shortColor;
 }
 
 interface AnchorBar {
@@ -123,7 +133,7 @@ export function buildTradeMarkerIndex(
           kind: 'price',
           value: trade.entryPrice,
           direction: long ? 'up' : 'down',
-          color: long ? LONG_COLOR : SHORT_COLOR,
+          tone: long ? 'long' : 'short',
         });
       }
       // The side/size label, hung off the bar so it clears the candle body.
@@ -133,7 +143,7 @@ export function buildTradeMarkerIndex(
           kind: 'label',
           value: anchor,
           direction: long ? 'up' : 'down',
-          color: long ? LONG_COLOR : SHORT_COLOR,
+          tone: long ? 'long' : 'short',
           title: entryTitle(long, trade.entryId),
           detail: signedSize(trade.size),
         });
@@ -148,7 +158,7 @@ export function buildTradeMarkerIndex(
       kind: 'price',
       value: trade.exitPrice,
       direction: long ? 'up' : 'down',
-      color: long ? SHORT_COLOR : LONG_COLOR,
+      tone: long ? 'short' : 'long',
     });
   }
   return index;
@@ -187,7 +197,7 @@ function drawLabel(
   // round cap overshoot the head's apex by half the line width, which reads as
   // a blunt nub sitting past the tip.
   ctx.lineJoin = 'round';
-  ctx.fillStyle = item.color;
+  ctx.fillStyle = toneColor(item, theme);
   ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
   ctx.shadowBlur = 4;
   ctx.shadowOffsetY = 1;
@@ -224,11 +234,12 @@ function drawPriceMark(
   item: TradeMarkerItem,
   x: number,
   y: number,
+  theme: TradeMarkerTheme,
 ): void {
   const backX = x - 8;
 
   ctx.lineJoin = 'round';
-  ctx.fillStyle = item.color;
+  ctx.fillStyle = toneColor(item, theme);
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
   ctx.lineWidth = 1.5;
   ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
@@ -279,7 +290,7 @@ export function drawTradeMarkers(
     for (const item of items) {
       const y = env.yAxis.convertToPixel(item.value);
       if (item.kind === 'price') {
-        drawPriceMark(ctx, item, x, y);
+        drawPriceMark(ctx, item, x, y, theme);
         continue;
       }
       const pointsUp = item.direction === 'up';

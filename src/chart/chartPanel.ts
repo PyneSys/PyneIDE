@@ -29,6 +29,7 @@ import type {
 import type { RunListener } from '../run/runService';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
+import { toColorSchemeId, type ColorSchemeId } from './colorScheme';
 import { toPriceScaleId, type PriceScaleId } from './priceScale';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
 
@@ -36,6 +37,7 @@ import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './m
  * chart in every window follows this one setting. */
 const CANDLE_STYLE_SETTING = 'pyneide.chart.candleStyle';
 const PRICE_SCALE_SETTING = 'pyneide.chart.priceScale';
+const COLOR_SCHEME_SETTING = 'pyneide.chart.colorScheme';
 
 function readCandleStyle(): CandleStyleId {
   return toCandleStyleId(vscode.workspace.getConfiguration('pyneide').get('chart.candleStyle'));
@@ -45,13 +47,20 @@ function readPriceScale(): PriceScaleId {
   return toPriceScaleId(vscode.workspace.getConfiguration('pyneide').get('chart.priceScale'));
 }
 
+function readColorScheme(): ColorSchemeId {
+  return toColorSchemeId(vscode.workspace.getConfiguration('pyneide').get('chart.colorScheme'));
+}
+
 /**
  * Write a toolbar pick back into settings. Global by default, but a workspace
  * override already in place wins the effective value — writing Global under one
  * would leave the toolbar visibly stuck on the old value, so the write follows
  * wherever the value actually lives.
  */
-function persistChartSetting(key: 'chart.candleStyle' | 'chart.priceScale', value: string): void {
+function persistChartSetting(
+  key: 'chart.candleStyle' | 'chart.priceScale' | 'chart.colorScheme',
+  value: string
+): void {
   const config = vscode.workspace.getConfiguration('pyneide');
   const target =
     config.inspect<string>(key)?.workspaceValue !== undefined
@@ -123,6 +132,10 @@ export class ChartPanel {
 
   setPriceScale(scale: PriceScaleId): void {
     this.post({ type: 'priceScale', scale });
+  }
+
+  setColorScheme(scheme: ColorSchemeId): void {
+    this.post({ type: 'colorScheme', scheme });
   }
 
   setBreakpointTargets(targets: ChartBreakpointTarget[]): void {
@@ -284,6 +297,7 @@ export class ChartPanel {
         this.ready = true;
         this.post({ type: 'candleStyle', style: readCandleStyle() });
         this.post({ type: 'priceScale', scale: readPriceScale() });
+        this.post({ type: 'colorScheme', scheme: readColorScheme() });
         this.replayFromSnapshot();
         this.post({ type: 'breakpoints', targets: this.breakpointTargets });
         if (this.breakpointSelectionLabel) {
@@ -306,6 +320,9 @@ export class ChartPanel {
         break;
       case 'setPriceScale':
         persistChartSetting('chart.priceScale', msg.scale);
+        break;
+      case 'setColorScheme':
+        persistChartSetting('chart.colorScheme', msg.scheme);
         break;
       case 'selectBreakpointBar':
         this.breakpointSelectionLabel = undefined;
@@ -503,6 +520,11 @@ export class ChartPanel {
   }
   #candle-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
   #candle-popup .candle-check { flex: 0 0 auto; width: 10px; text-align: center; }
+  #candle-popup .candle-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
+  #candle-popup .candle-section {
+    padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
+  }
   /* Price-scale controls, parked in the corner between the two axes the way a
      trading chart does it: they belong to the price axis, not to the toolbar. */
   #scale-controls {
@@ -685,8 +707,12 @@ export class ChartPanel {
     .performance-summary { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
     .performance-metric:nth-child(n+3) { display: none; }
   }
-  .pos { color: var(--vscode-charts-green, #26a69a); }
-  .neg { color: var(--vscode-charts-red, #ef5350); }
+  /* --pyne-up/--pyne-down are set on the body by the webview from the chosen
+     color scheme, so the Stats numbers say up and down the same way the bars
+     above them do. The theme colors stay as the fallback for the first paint,
+     before the host has pushed the setting. */
+  .pos { color: var(--pyne-up, var(--vscode-charts-green, #26a69a)); }
+  .neg { color: var(--pyne-down, var(--vscode-charts-red, #ef5350)); }
   .muted { color: var(--vscode-descriptionForeground); padding: 8px; display: block; }
 </style>
 </head>
@@ -850,6 +876,10 @@ export class ChartManager implements RunListener {
         if (e.affectsConfiguration(PRICE_SCALE_SETTING)) {
           const scale = readPriceScale();
           for (const panel of this.panels.values()) panel.setPriceScale(scale);
+        }
+        if (e.affectsConfiguration(COLOR_SCHEME_SETTING)) {
+          const scheme = readColorScheme();
+          for (const panel of this.panels.values()) panel.setColorScheme(scheme);
         }
       })
     );

@@ -102,6 +102,12 @@ First public preview. This is everything the initial preview ships with.
 - **Price-axis controls** in the bottom-right corner, where TradingView puts
   them: `A` toggles auto-fit, `L` switches to a logarithmic axis and `%` to
   percent change from the first visible bar (`pyneide.chart.priceScale`).
+- **Color scheme** picker under the same Chart style button
+  (`pyneide.chart.colorScheme`): *Classic* teal/red, *Theme* to follow your
+  color theme's own chart colors, or *Colorblind-safe* blue/orange. It covers
+  the candles, the volume bars, the strategy trade markers, the equity curve,
+  the Stats numbers and the measure tool — colors a script sets itself are
+  never overridden.
 - Switching your VS Code **color theme re-colors the chart live** — grid, axis,
   crosshair, monochrome candles and the hand-painted layers included — without
   waiting for the next run.

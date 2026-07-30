@@ -12,6 +12,7 @@ import type {
   TradeRecord,
 } from '../run/bridgeClient';
 import type { CandleStyleId } from './candleStyle';
+import type { ColorSchemeId } from './colorScheme';
 import type { PriceScaleId } from './priceScale';
 
 /** One visual chart marker aggregated from every native source breakpoint on
@@ -39,6 +40,8 @@ export type ChartInMessage =
   | { type: 'candleStyle'; style: CandleStyleId }
   /** Persisted price-scale mode, pushed on the same occasions as candleStyle. */
   | { type: 'priceScale'; scale: PriceScaleId }
+  /** Persisted direction-color scheme, pushed on the same occasions. */
+  | { type: 'colorScheme'; scheme: ColorSchemeId }
   | { type: 'end'; bars: number; cancelled: boolean };
 
 export type ChartOutMessage =
@@ -47,6 +50,7 @@ export type ChartOutMessage =
   /** Toolbar pick: the host owns persistence, the webview only asks. */
   | { type: 'setCandleStyle'; style: CandleStyleId }
   | { type: 'setPriceScale'; scale: PriceScaleId }
+  | { type: 'setColorScheme'; scheme: ColorSchemeId }
   | { type: 'selectData' }
   | { type: 'selectBreakpointBar'; timestamp: number }
   | { type: 'removeBreakpointBar'; timestamp: number }

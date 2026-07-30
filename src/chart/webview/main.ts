@@ -35,6 +35,15 @@ import {
   isPriceLineStyle,
   type CandleStyleId,
 } from '../candleStyle';
+import {
+  CLASSIC_PALETTE,
+  COLORBLIND_PALETTE_DARK,
+  COLORBLIND_PALETTE_LIGHT,
+  COLOR_SCHEME_OPTIONS,
+  DEFAULT_COLOR_SCHEME,
+  type ChartPalette,
+  type ColorSchemeId,
+} from '../colorScheme';
 import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
 import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../priceScale';
 import { ColorTrack } from './colorTrack';
@@ -140,8 +149,11 @@ registerOverlay({
     if (typeof startValue !== 'number' || typeof endValue !== 'number') return [];
 
     const rising = endValue >= startValue;
-    const color = rising ? '#26a69a' : '#ef5350';
-    const fill = rising ? 'rgba(38, 166, 154, 0.14)' : 'rgba(239, 83, 80, 0.14)';
+    // Resolved per draw, so the box follows a scheme or theme switch made while
+    // a measurement is on screen.
+    const p = palette();
+    const color = rising ? p.up : p.down;
+    const fill = withAlpha(color, 0.14);
     const pricePrecision = chart.getSymbol()?.pricePrecision ?? 2;
     const delta = endValue - startValue;
     const percent = startValue === 0 ? undefined : (delta / startValue) * 100;
@@ -378,6 +390,10 @@ let candleStyleId: CandleStyleId = DEFAULT_CANDLE_STYLE;
  * scale is unrelated to how price is plotted. */
 let priceScaleId: PriceScaleId = DEFAULT_PRICE_SCALE;
 
+/** Mirrors the persisted `pyneide.chart.colorScheme`, same host-owned lifecycle
+ * as `candleStyleId`. */
+let colorSchemeId: ColorSchemeId = DEFAULT_COLOR_SCHEME;
+
 const container = document.getElementById('chart') as HTMLDivElement;
 
 function cssVar(name: string, fallback: string): string {
@@ -390,6 +406,75 @@ function isDark(): boolean {
     document.body.classList.contains('vscode-dark') ||
     document.body.classList.contains('vscode-high-contrast')
   );
+}
+
+/**
+ * The four direction colors of a scheme. Resolved on each call rather than
+ * cached: only style-building code reads it (the per-frame trade-marker path
+ * takes its copy through `markerTheme`'s memo), and a live theme switch has to
+ * be able to change the answer under `theme` and `colorblind` alike.
+ */
+function paletteFor(id: ColorSchemeId): ChartPalette {
+  switch (id) {
+    case 'theme':
+      // Mirrors Classic's role assignment in whatever colors the theme picked:
+      // green/red price, blue longs, red shorts.
+      return {
+        up: cssVar('--vscode-charts-green', CLASSIC_PALETTE.up),
+        down: cssVar('--vscode-charts-red', CLASSIC_PALETTE.down),
+        long: cssVar('--vscode-charts-blue', CLASSIC_PALETTE.long),
+        short: cssVar('--vscode-charts-red', CLASSIC_PALETTE.short),
+      };
+    case 'colorblind':
+      return isDark() ? COLORBLIND_PALETTE_DARK : COLORBLIND_PALETTE_LIGHT;
+    default:
+      return CLASSIC_PALETTE;
+  }
+}
+
+/** The colors in force right now. */
+function palette(): ChartPalette {
+  return paletteFor(colorSchemeId);
+}
+
+/**
+ * Hand the palette to the CSS side — the Stats table colors its numbers from
+ * `--pyne-up`/`--pyne-down`, so they say up and down the same way the bars do.
+ *
+ * Set on the BODY, never on the root element: the theme observer watches the
+ * root's `style` attribute (that is where the `--vscode-*` properties live), so
+ * writing ours there would retrigger it on every repaint, forever.
+ */
+function publishPaletteVars(p: ChartPalette): void {
+  const style = document.body?.style;
+  if (!style) return;
+  style.setProperty('--pyne-up', p.up);
+  style.setProperty('--pyne-down', p.down);
+  style.setProperty('--pyne-long', p.long);
+  style.setProperty('--pyne-short', p.short);
+}
+
+/**
+ * Re-express a palette color at partial opacity, for the fills that sit behind
+ * something else (volume bars, the measure box). Handles the forms a theme
+ * color can actually arrive in — `#rgb`, `#rrggbb`, `#rrggbbaa` and
+ * `rgb()`/`rgba()`; anything else is handed back opaque rather than guessed at,
+ * which merely looks heavier, never wrong.
+ */
+function withAlpha(color: string, alpha: number): string {
+  const hex = /^#([0-9a-f]{3,8})$/i.exec(color.trim());
+  if (hex) {
+    const d = hex[1];
+    const full = d.length === 3 || d.length === 4
+      ? d.slice(0, 3).split('').map((c) => c + c).join('')
+      : d.slice(0, 6);
+    if (full.length !== 6) return color;
+    const n = parseInt(full, 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  }
+  const rgb = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(color.trim());
+  if (rgb) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`;
+  return color;
 }
 
 /**
@@ -407,20 +492,21 @@ function legendStyles(): DeepPartial<Styles> {
   };
 }
 
-/** KLineChart's own candle colors, captured from a pristine chart before the
- * first setStyles. setStyles only ever MERGES, so switching away from
- * Monochrome (or Line) has to write the defaults back explicitly — there is no
- * "unset" — and hardcoding them here would silently drift on a lib bump. */
-let candleDefaults: { bar: CandleBarColor; area: CandleAreaStyle } | undefined;
+/** KLineChart's own line/area styling, captured from a pristine chart before
+ * the first setStyles. setStyles only ever MERGES, so switching away from Line
+ * has to write the defaults back explicitly — there is no "unset" — and
+ * hardcoding them here would silently drift on a lib bump. The candle BAR
+ * colors need no such capture: every branch writes all nine from the palette.
+ * Line/area is left alone on purpose — it plots one undirected close series, so
+ * a scheme about up and down has nothing to say about it. */
+let candleDefaults: { area: CandleAreaStyle } | undefined;
 
 function captureCandleDefaults(chart: Chart): void {
   if (candleDefaults) return;
-  const candle = chart.getStyles().candle;
   // Deep copy: getStyles() hands back the live style object, which the very
   // next setStyles would mutate under us. Colors/numbers only, so JSON is safe.
   candleDefaults = {
-    bar: JSON.parse(JSON.stringify(candle.bar)) as CandleBarColor,
-    area: JSON.parse(JSON.stringify(candle.area)) as CandleAreaStyle,
+    area: JSON.parse(JSON.stringify(chart.getStyles().candle.area)) as CandleAreaStyle,
   };
 }
 
@@ -443,14 +529,29 @@ function monochromeBar(): DeepPartial<CandleBarColor> {
   };
 }
 
+/** Bars whose open and close match exactly have no direction to color, so they
+ * stay on KLineChart's neutral grey in every scheme. */
+const NO_CHANGE_COLOR = '#76808f';
+
+/** The nine candle-bar colors of the current scheme. Written in full by every
+ * style branch, because setStyles merges: coming back from Monochrome has to
+ * overwrite all nine, not just the ones that happen to differ. */
+function paletteBar(p: ChartPalette): DeepPartial<CandleBarColor> {
+  return {
+    upColor: p.up, downColor: p.down, noChangeColor: NO_CHANGE_COLOR,
+    upBorderColor: p.up, downBorderColor: p.down, noChangeBorderColor: NO_CHANGE_COLOR,
+    upWickColor: p.up, downWickColor: p.down, noChangeWickColor: NO_CHANGE_COLOR,
+  };
+}
+
 /** Map the persisted style id onto KLineChart's candle styles. Each branch
- * restates the default palette (see `candleDefaults`) so switching between
- * styles in any order lands on the same picture. */
+ * restates the full palette so switching between styles in any order lands on
+ * the same picture. */
 function candleStyles(): DeepPartial<Styles> {
-  // Spread copies, never the captured objects themselves: setStyles merges its
+  const bar = paletteBar(palette());
+  // Spread copy, never the captured object itself: setStyles merges its
   // argument into the live styles, and an empty object is simply a no-op if the
   // defaults were somehow never captured.
-  const bar: DeepPartial<CandleBarColor> = { ...candleDefaults?.bar };
   const area: DeepPartial<CandleAreaStyle> = { ...candleDefaults?.area };
   switch (candleStyleId) {
     case 'hollow':
@@ -476,6 +577,13 @@ function chartStyles(): DeepPartial<Styles> {
   const axisLine = dark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
   const legend = legendStyles();
   const candle = candleStyles();
+  const p = palette();
+  // The built-in VOL indicator takes its bar colors from the SHARED indicator
+  // styles rather than from anything per-indicator, so setting them here is
+  // what makes the volume pane follow the scheme. `bars` is merged index-wise
+  // (KLineChart walks arrays as plain objects), so a partial first entry keeps
+  // the rest of its styling.
+  const volumeBar = { upColor: withAlpha(p.up, 0.7), downColor: withAlpha(p.down, 0.7) };
   return {
     grid: {
       horizontal: { color: grid },
@@ -486,7 +594,7 @@ function chartStyles(): DeepPartial<Styles> {
       ...candle.candle,
       ...legend.candle,
     },
-    indicator: legend.indicator,
+    indicator: { ...legend.indicator, ohlc: volumeBar, bars: [volumeBar] },
     xAxis: {
       axisLine: { color: axisLine },
       tickText: { color: text },
@@ -1381,19 +1489,25 @@ function ensureDrawingIndicators(st: RunState): void {
   }
 }
 
-/** Theme values for the trade-marker text, memoized on the body class list —
- * VS Code swaps vscode-light/vscode-dark/vscode-high-contrast there. Reading
- * computed style per marker per frame is a forced style recalc on the hot
- * path, which is exactly what the overlay implementation used to do. */
+/** Theme and palette values for the trade markers, memoized on the body class
+ * list plus the scheme id — VS Code swaps
+ * vscode-light/vscode-dark/vscode-high-contrast there. Reading computed style
+ * per marker per frame is a forced style recalc on the hot path, which is
+ * exactly what the overlay implementation used to do. A color-only theme edit
+ * moves neither half of the key, so `applyColorScheme` drops the memo outright
+ * rather than relying on it. */
 let tradeMarkerTheme: (TradeMarkerTheme & { key: string }) | undefined;
 
 function markerTheme(): TradeMarkerTheme {
-  const key = document.body.className;
+  const key = `${document.body.className}|${colorSchemeId}`;
   if (!tradeMarkerTheme || tradeMarkerTheme.key !== key) {
+    const p = palette();
     tradeMarkerTheme = {
       key,
       textColor: cssVar('--vscode-editor-foreground', isDark() ? '#b2b5be' : '#434651'),
       fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
+      longColor: p.long,
+      shortColor: p.short,
     };
   }
   return tradeMarkerTheme;
@@ -1721,8 +1835,7 @@ const candlePopupEl = ((): HTMLDivElement | null => {
  */
 function candleGlyph(id: CandleStyleId): string {
   const fg = cssVar('--vscode-editor-foreground', isDark() ? '#d4d4d4' : '#333333');
-  const up = candleDefaults?.bar.upColor ?? fg;
-  const down = candleDefaults?.bar.downColor ?? fg;
+  const { up, down } = palette();
   const areaLine = typeof candleDefaults?.area.lineColor === 'string'
     ? candleDefaults.area.lineColor
     : fg;
@@ -1753,31 +1866,91 @@ function candleGlyph(id: CandleStyleId): string {
   }
 }
 
+/**
+ * A scheme's preview: the price pair as two candle bodies, the trade pair as
+ * the two marker triangles that sit on them. All four, because the trade colors
+ * are half of what a colorblind user is choosing between.
+ */
+function schemeGlyph(id: ColorSchemeId): string {
+  const p = paletteFor(id);
+  const body = (x: number, color: string): string =>
+    `<rect x="${x}" y="1.5" width="4.5" height="8" rx="1" style="fill:${color};stroke:none"/>`;
+  return (
+    body(2.5, p.up) +
+    body(9, p.down) +
+    `<path d="M4.75 11.5 7 15.5H2.5Z" style="fill:${p.long};stroke:none"/>` +
+    `<path d="M11.25 15.5 9 11.5h4.5Z" style="fill:${p.short};stroke:none"/>`
+  );
+}
+
+/** One popup row: glyph, label, and a check on the active one. */
+function candlePopupRow(
+  glyph: string,
+  label: string,
+  detail: string,
+  active: boolean,
+  onPick: () => void,
+): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'candle-row';
+  if (active) row.classList.add('active');
+  row.title = detail;
+  row.innerHTML =
+    `<svg viewBox="0 0 16 16" aria-hidden="true">${glyph}</svg>` +
+    `<span class="candle-name"></span><span class="candle-check">${active ? '✓' : ''}</span>`;
+  const name = row.querySelector('.candle-name');
+  if (name) name.textContent = label;
+  row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeCandlePopup();
+    onPick();
+  });
+  return row;
+}
+
+/**
+ * Two lists in one popup: how price is drawn, then which colors say up and
+ * down. Both are persisted settings the host owns, so a pick is applied locally
+ * for the immediate feedback and posted for the host to store — waiting for the
+ * settings round trip would make the click feel laggy.
+ */
 function renderCandleList(): void {
   if (!candlePopupEl) return;
   candlePopupEl.innerHTML = '';
   for (const option of CANDLE_STYLE_OPTIONS) {
-    const row = document.createElement('div');
-    row.className = 'candle-row';
-    const active = option.id === candleStyleId;
-    if (active) row.classList.add('active');
-    row.title = option.detail;
-    row.innerHTML =
-      `<svg viewBox="0 0 16 16" aria-hidden="true">${candleGlyph(option.id)}</svg>` +
-      `<span class="candle-name"></span><span class="candle-check">${active ? '✓' : ''}</span>`;
-    const name = row.querySelector('.candle-name');
-    if (name) name.textContent = option.label;
-    row.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeCandlePopup();
-      if (option.id === candleStyleId) return;
-      // Apply locally right away, then let the host persist it: waiting for the
-      // settings round trip would make the click feel laggy.
-      candleStyleId = option.id;
-      applyCandleStyle();
-      vscode.postMessage({ type: 'setCandleStyle', style: option.id });
-    });
-    candlePopupEl.appendChild(row);
+    candlePopupEl.appendChild(
+      candlePopupRow(
+        candleGlyph(option.id), option.label, option.detail, option.id === candleStyleId,
+        () => {
+          if (option.id === candleStyleId) return;
+          candleStyleId = option.id;
+          applyCandleStyle();
+          vscode.postMessage({ type: 'setCandleStyle', style: option.id });
+        }
+      )
+    );
+  }
+
+  const sep = document.createElement('div');
+  sep.className = 'candle-sep';
+  candlePopupEl.appendChild(sep);
+  const section = document.createElement('div');
+  section.className = 'candle-section';
+  section.textContent = 'Colors';
+  candlePopupEl.appendChild(section);
+
+  for (const option of COLOR_SCHEME_OPTIONS) {
+    candlePopupEl.appendChild(
+      candlePopupRow(
+        schemeGlyph(option.id), option.label, option.detail, option.id === colorSchemeId,
+        () => {
+          if (option.id === colorSchemeId) return;
+          colorSchemeId = option.id;
+          applyColorScheme();
+          vscode.postMessage({ type: 'setColorScheme', scheme: option.id });
+        }
+      )
+    );
   }
 }
 
@@ -1791,6 +1964,24 @@ function applyCandleStyle(): void {
     tbCandleEl.title = `Chart style: ${label}`;
     tbCandleEl.setAttribute('aria-label', `Chart style: ${label}`);
   }
+  if (candlePopupEl && !candlePopupEl.hidden) renderCandleList();
+}
+
+/**
+ * Repaint everything the direction colors reach: the candles and volume bars
+ * (through setStyles), the trade markers (through their memo), the equity curve
+ * and the CSS side. Also the entry point for a live theme switch, which can
+ * move the answer for the `theme` and `colorblind` schemes alike.
+ *
+ * Styles-only again — no resetData, so the viewport stays where the user left
+ * it. The trade-marker memo is dropped outright rather than left to its key: a
+ * single overridden theme color changes neither the body class nor the scheme.
+ */
+function applyColorScheme(): void {
+  tradeMarkerTheme = undefined;
+  publishPaletteVars(palette());
+  state?.chart.setStyles(chartStyles());
+  drawPerformance();
   if (candlePopupEl && !candlePopupEl.hidden) renderCandleList();
 }
 
@@ -1947,14 +2138,9 @@ let themeFrame: number | undefined;
 
 function applyTheme(): void {
   themeFrame = undefined;
-  // Memoized on the body class list, which does NOT change when a single color
-  // is overridden in settings — drop it so the next frame re-reads the theme.
-  tradeMarkerTheme = undefined;
-  // setStyles only merges, so this must pass every themed value, which is
-  // exactly what chartStyles() is; it repaints without touching data, so the
-  // viewport stays put.
-  state?.chart.setStyles(chartStyles());
-  drawPerformance();
+  // Same work as a scheme switch: setStyles only merges, so this must pass every
+  // themed value, which is exactly what chartStyles() is.
+  applyColorScheme();
 }
 
 /** Coalesce the burst of mutations one theme switch produces into one repaint. */
@@ -2112,12 +2298,13 @@ function drawPerformance(): void {
   const canvas = document.getElementById('equity-canvas') as HTMLCanvasElement | null;
   const summary = equitySummary();
   if (!canvas || !summary) return;
+  const p = palette();
   drawEquityCurve(canvas, summary, {
     foreground: cssVar('--vscode-editor-foreground', '#ccc'),
     muted: cssVar('--vscode-descriptionForeground', '#999'),
     grid: isDark() ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-    positive: cssVar('--vscode-charts-green', '#26a69a'),
-    negative: cssVar('--vscode-charts-red', '#ef5350'),
+    positive: p.up,
+    negative: p.down,
   });
 }
 
@@ -2800,6 +2987,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       if (msg.scale === priceScaleId) break;
       priceScaleId = msg.scale;
       applyPriceScale();
+      break;
+    case 'colorScheme':
+      colorSchemeId = msg.scheme;
+      applyColorScheme();
       break;
     case 'breakpointSelection':
       breakpointSelectionLabel = msg.label;
