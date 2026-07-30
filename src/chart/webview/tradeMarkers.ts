@@ -64,6 +64,10 @@ export type TradeMarkerIndex = Map<number, TradeMarkerItem[]>;
 
 export interface TradeMarkerTheme {
   textColor: string;
+  /** Halo behind the label text, so it stays readable over any candle. Must be
+   * the counterpart of `textColor`, never a fixed dark: on a light theme a black
+   * halo around dark text collapses the glyphs into a blob. */
+  haloColor: string;
   fontFamily: string;
   longColor: string;
   shortColor: string;
@@ -216,8 +220,12 @@ function drawLabel(
   ctx.textAlign = 'center';
   ctx.textBaseline = pointsUp ? 'top' : 'bottom';
   ctx.lineWidth = 3;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+  ctx.strokeStyle = theme.haloColor;
   ctx.fillStyle = theme.textColor;
+  // The arrow's drop shadow stays dark (it reads as depth on both themes), but
+  // the text keeps the halo colour — a black glow under a light halo would put
+  // back exactly the smear the halo is there to avoid.
+  ctx.shadowColor = theme.haloColor;
   ctx.shadowBlur = 3;
   if (item.title) {
     ctx.strokeText(item.title, cx, titleY);

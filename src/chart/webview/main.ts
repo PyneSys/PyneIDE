@@ -1505,6 +1505,13 @@ function markerTheme(): TradeMarkerTheme {
     tradeMarkerTheme = {
       key,
       textColor: cssVar('--vscode-editor-foreground', isDark() ? '#b2b5be' : '#434651'),
+      // Derived from the editor BACKGROUND, not from `isDark()`: the fg/bg pair
+      // is the one contrast a theme guarantees, and it lands correctly on the
+      // high-contrast themes too, which the body-class check cannot tell apart.
+      haloColor: withAlpha(
+        cssVar('--vscode-editor-background', isDark() ? '#000000' : '#ffffff'),
+        0.9,
+      ),
       fontFamily: getComputedStyle(document.body).fontFamily || 'sans-serif',
       longColor: p.long,
       shortColor: p.short,
