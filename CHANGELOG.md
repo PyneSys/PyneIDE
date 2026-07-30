@@ -150,6 +150,10 @@ First public preview. This is everything the initial preview ships with.
 
 #### Help
 
+- **Documentation** — the `PyneIDE: Documentation` command (also in the status
+  bar menu, the Pyne view title menu and the empty-workspace view) collects the
+  PyneIDE and PyneCore documentation, the walkthrough, the issue tracker and
+  problem reporting behind one entry point, titled with the running version.
 - **Report a Problem** — from a failed compile or run, or from the status bar
   menu. It gathers versions, environment state and the recent logs, replaces
   every path with a placeholder and strips credential-shaped strings. The

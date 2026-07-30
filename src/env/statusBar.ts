@@ -16,6 +16,27 @@ type MenuItem = vscode.QuickPickItem & {
   keepOpen?: boolean;
 };
 
+/**
+ * The environment state as the menu shows it, next to the one-sentence tooltip
+ * body the status bar hover shows. The menu gets the parts separately because a
+ * quickpick row has room the status bar does not: `detail` is a full-width line,
+ * while the tooltip has to fit everything into one sentence.
+ */
+interface EnvSummary {
+  icon: string;
+  /** Short state word for the menu title and the row label. */
+  state: string;
+  /** Right-aligned qualifier — which environment the state is about. */
+  source?: string;
+  /** Versions when ready, the reason or error message otherwise. */
+  detail?: string;
+  /** Tooltip sentence without the trailing period and the click hint. */
+  tooltip: string;
+}
+
+/** Only true on the status bar item — inside the open menu it is nonsense. */
+const MENU_HINT = ' Click for compile usage and PyneIDE actions.';
+
 type UsageState =
   | { kind: 'loading' }
   | { kind: 'signed-out' }
@@ -32,6 +53,12 @@ export class EnvStatusBar {
   private readonly item: vscode.StatusBarItem;
   /** Emptiness per workspace folder path — see `inFreshFolder`. */
   private readonly freshFolders = new Map<string, boolean>();
+  /** Written by `update`, read by the menu. */
+  private summary: EnvSummary = {
+    icon: '$(question)',
+    state: 'unknown',
+    tooltip: 'PyneIDE: environment state unknown',
+  };
 
   constructor(
     private readonly manager: EnvManager,
@@ -70,7 +97,6 @@ export class EnvStatusBar {
 
   private update(state: EnvState): void {
     this.item.backgroundColor = undefined;
-    const menuHint = ' Click for compile usage and PyneIDE actions.';
     // A missing environment is a global fact, and calling for attention about
     // it in a window with no Pyne work in it is just noise — a JS project has
     // nothing to set up. The state is still reported, only without the colour.
@@ -78,37 +104,63 @@ export class EnvStatusBar {
     switch (state.kind) {
       case 'unknown':
         this.item.text = '$(question) PyneIDE';
-        this.item.tooltip = `PyneIDE: environment state unknown.${menuHint}`;
+        this.summary = {
+          icon: '$(question)',
+          state: 'unknown',
+          tooltip: 'PyneIDE: environment state unknown',
+        };
         break;
       case 'needs-setup':
         this.item.text = wanted ? '$(warning) PyneIDE' : '$(circle-large-outline) PyneIDE';
-        this.item.tooltip = `PyneIDE: ${state.reason}.${menuHint}`;
+        this.summary = {
+          icon: '$(warning)',
+          state: 'needs setup',
+          detail: state.reason,
+          tooltip: `PyneIDE: ${state.reason}`,
+        };
         if (wanted) {
           this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         }
         break;
       case 'working':
         this.item.text = '$(sync~spin) PyneIDE';
-        this.item.tooltip = `PyneIDE: ${state.step}.${menuHint}`;
+        this.summary = {
+          icon: '$(sync~spin)',
+          state: 'working',
+          detail: state.step,
+          tooltip: `PyneIDE: ${state.step}`,
+        };
         break;
       case 'ready': {
         this.item.text = '$(check) PyneIDE';
         const source =
           state.source === 'managed' ? 'managed environment' : `custom (${state.source})`;
-        this.item.tooltip =
-          `PyneIDE: ready — Python ${state.verify.pythonVersion}, ` +
-          `pynecore ${state.verify.pynecoreVersion}, debugpy ${state.verify.debugpyVersion} ` +
-          `(${source}).${menuHint}`;
+        const versions =
+          `Python ${state.verify.pythonVersion}, ` +
+          `pynecore ${state.verify.pynecoreVersion}, debugpy ${state.verify.debugpyVersion}`;
+        this.summary = {
+          icon: '$(check)',
+          state: 'ready',
+          source,
+          detail: versions,
+          tooltip: `PyneIDE: ready — ${versions} (${source})`,
+        };
         break;
       }
       case 'error':
         this.item.text = wanted ? '$(error) PyneIDE' : '$(circle-large-outline) PyneIDE';
-        this.item.tooltip = `PyneIDE: ${state.message}.${menuHint}`;
+        this.summary = {
+          icon: '$(error)',
+          state: 'error',
+          detail: state.message,
+          tooltip: `PyneIDE: ${state.message}`,
+        };
         if (wanted) {
           this.item.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         }
         break;
     }
+    this.item.tooltip = `${this.summary.tooltip}.${MENU_HINT}`;
   }
 
   /**
@@ -151,8 +203,10 @@ export class EnvStatusBar {
 
   private async showMenu(): Promise<void> {
     const picker = vscode.window.createQuickPick<MenuItem>();
-    picker.title = 'PyneIDE';
-    picker.placeholder = this.item.tooltip?.toString();
+    // The state goes in the title (short enough not to be elided) and, in full,
+    // into the Environment row — never into the placeholder, which is a filter
+    // hint the input box truncates to one line.
+    picker.placeholder = 'Type to filter PyneIDE actions';
     picker.matchOnDescription = true;
     picker.matchOnDetail = true;
 
@@ -163,8 +217,18 @@ export class EnvStatusBar {
     const render = (): void => {
       if (closed) return;
       const state = this.manager.state;
+      picker.title = `PyneIDE — ${this.summary.state}`;
       const items: MenuItem[] = [];
-      const environmentItems: MenuItem[] = [];
+      // Inert row: the versions and the failure reason are the only place in the
+      // UI where they are readable in full, and `matchOnDetail` makes them
+      // searchable ("pynecore" finds the installed version).
+      const environmentItems: MenuItem[] = [
+        {
+          label: `${this.summary.icon} Environment: ${this.summary.state}`,
+          description: this.summary.source,
+          detail: this.summary.detail,
+        },
+      ];
       if (state.kind === 'needs-setup' || state.kind === 'error' || state.kind === 'unknown') {
         environmentItems.push({
           label: '$(cloud-download) Setup Environment',
@@ -335,6 +399,11 @@ export class EnvStatusBar {
           label: '$(rocket) Get Started',
           description: 'Setup, first run, debugging and Pine compilation in seven steps',
           action: () => void vscode.commands.executeCommand('pyneide.openWalkthrough'),
+        },
+        {
+          label: '$(book) Documentation',
+          description: 'PyneIDE and PyneCore documentation',
+          action: () => void vscode.commands.executeCommand('pyneide.openDocs'),
         },
         {
           label: '$(report) Report a Problem…',

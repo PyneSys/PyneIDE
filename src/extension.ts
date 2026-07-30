@@ -26,6 +26,7 @@ import {
   scaffoldWorkdirWithCli,
 } from './env/workdir';
 import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from './env/workdirConfig';
+import { registerHelpCommands } from './help';
 import { pypiTarget } from './net/errors';
 import { showNetworkError } from './net/notify';
 import { PineLsService } from './pinels/service';
@@ -113,7 +114,8 @@ export function activate(context: vscode.ExtensionContext): void {
         'workbench.action.openWalkthrough',
         `${context.extension.id}#${WALKTHROUGH_ID}`
       )
-    )
+    ),
+    registerHelpCommands(context)
   );
 
   // Let the bare `pyne` CLI in the integrated terminal find the workdir even

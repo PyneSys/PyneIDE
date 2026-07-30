@@ -40,6 +40,7 @@
     "url": "https://github.com/PyneSys/PyneIDE/issues"
   },
   "homepage": "https://pynesys.io",
+  "qna": "https://github.com/PyneSys/PyneIDE/issues",
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
@@ -82,6 +83,12 @@
         "command": "pyneide.showEnvironmentLog",
         "title": "Show Environment Log",
         "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.openDocs",
+        "title": "Documentation",
+        "category": "PyneIDE",
+        "icon": "$(book)"
       },
       {
         "command": "pyneide.reportProblem",
@@ -557,6 +564,16 @@
           "command": "pyneide.workspace.refresh",
           "when": "view == pyneide.workspace",
           "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.openWalkthrough",
+          "when": "view == pyneide.workspace",
+          "group": "pyneide.help@1"
+        },
+        {
+          "command": "pyneide.openDocs",
+          "when": "view == pyneide.workspace",
+          "group": "pyneide.help@2"
         }
       ],
       "view/item/context": [
@@ -748,7 +765,7 @@
       {
         "view": "pyneide.workspace",
         "when": "!pyneide.hasWorkdir",
-        "contents": "No Pyne workspace found in this folder.\n[Initialize Pyne Project](command:pyneide.createWorkspace)\n[Get Started](command:pyneide.openWalkthrough)"
+        "contents": "No Pyne workspace found in this folder.\n[Initialize Pyne Project](command:pyneide.createWorkspace)\n[Get Started](command:pyneide.openWalkthrough)\n[Documentation](command:pyneide.openDocs)"
       }
     ],
     "walkthroughs": [
