@@ -156,6 +156,22 @@ the PyneCore runtime — with **no dependency on the Microsoft Python extension*
 nothing to configure. It sets itself up on first run so you can go straight to
 writing scripts.
 
+In a project you initialized with PyneIDE, the **integrated terminal** opens with
+that environment already activated: `pyne`, `python` and `pip` are the managed
+ones, and the CLI is pointed at the same workdir the extension uses, so
+`pyne run …` or `pyne data download …` work without activating anything by hand.
+Other windows are untouched — your own Python projects keep their own interpreter.
+
+**PyneCore plugins** — extra data providers, brokers and CLI tools — install into
+that same environment from the **plugin manager** (the PyneIDE status bar item, or
+**PyneIDE: Manage Plugins**). Browse the catalogue, read each plugin's own
+documentation, and install or uninstall in one click. Because they live in the
+shared environment and not in a project, every Pyne project you open can use what
+you installed. A plugin that needs a newer PyneCore than the one you have cannot be
+installed by accident. If you pointed PyneIDE at your own Python environment
+instead, it does not install into it — it hands you the `pip install` command to
+run there yourself.
+
 ![PyneIDE managed environment setup](media/env.png)
 
 ## Data and symbols
