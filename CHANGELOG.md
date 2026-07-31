@@ -70,6 +70,12 @@ First public preview. This is everything the initial preview ships with.
   downloads, and problem reports. Offline, refused, timed out, or an intercepted
   HTTPS certificate: the message names the host that failed and what that
   operation must be able to reach, and offers **Retry** (plus Repair for setup).
+- The **integrated terminal** opens with that environment activated in a project
+  you initialized with PyneIDE: `pyne`, `python` and `pip` are the managed ones,
+  and the CLI already points at the same workdir the extension uses — so
+  `pyne run …`, `pyne data download …` and the rest work without activating
+  anything by hand. Other windows are left alone; your own Python projects keep
+  their own interpreter.
 - **PyneCore plugin manager** (`PyneIDE: Manage Plugins`): browse the plugin
   catalogue, filter to what is installed, read each plugin's own documentation,
   and install or uninstall into the managed environment. A plugin that needs a

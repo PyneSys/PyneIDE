@@ -17,6 +17,7 @@ import { currentMarker } from './env/bootstrap';
 import { PYNECORE_VERSION, SETUP_DOWNLOAD_MB } from './env/constants';
 import { EnvManager, type EnvState } from './env/manager';
 import { EnvStatusBar } from './env/statusBar';
+import { registerTerminalEnv, updateTerminalEnv } from './env/terminalEnv';
 import { pyneBinPath } from './env/uv';
 import {
   ensurePyneSnippets,
@@ -118,18 +119,9 @@ export function activate(context: vscode.ExtensionContext): void {
     registerHelpCommands(context)
   );
 
-  // Let the bare `pyne` CLI in the integrated terminal find the workdir even
-  // when the project folder itself is the workdir (name-based upward search
-  // would miss it).
-  context.environmentVariableCollection.description =
-    'Points the pyne CLI at the workdir resolved by PyneIDE';
-  updateTerminalWorkdirEnv(context);
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('pyneide.workdir')) updateTerminalWorkdirEnv(context);
-    }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => updateTerminalWorkdirEnv(context))
-  );
+  // Make the integrated terminal an activated Pyne environment: the `pyne` CLI
+  // on PATH, pointed at the workdir PyneIDE resolved.
+  registerTerminalEnv(context, manager);
 
   context.subscriptions.push(
     compileOutput,
@@ -599,15 +591,6 @@ async function takeOverPythonAnalysis(): Promise<void> {
   if (choice === 'Keep Pylance') await restorePythonAnalysis();
 }
 
-function updateTerminalWorkdirEnv(context: vscode.ExtensionContext): void {
-  const workdir = resolveWorkspaceWorkdir();
-  if (workdir?.exists) {
-    context.environmentVariableCollection.replace('PYNE_WORK_DIR', workdir.path);
-  } else {
-    context.environmentVariableCollection.delete('PYNE_WORK_DIR');
-  }
-}
-
 /**
  * On env-ready, teach the generated pyrightconfig about the interpreter
  * PyneIDE actually runs scripts with:
@@ -702,7 +685,7 @@ async function initProjectCommand(
       }
       hideGeneratedFiles(folder.uri.fsPath);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
-      updateTerminalWorkdirEnv(context);
+      updateTerminalEnv(context, manager);
       void takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
       await vscode.window.showTextDocument(doc);
