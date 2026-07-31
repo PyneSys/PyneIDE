@@ -220,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
   registerLibraryDefinition(context);
   registerLibraryHelp(context);
 
-  registerWorkspaceView(context, chartManager, plugins);
+  registerWorkspaceView(context, chartManager);
   const inputsView = new InputsViewManager(
     context,
     manager,

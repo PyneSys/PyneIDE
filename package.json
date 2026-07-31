@@ -794,10 +794,10 @@
           {
             "id": "project",
             "title": "Initialize a Pyne project",
-            "description": "Scaffold a workdir with a runnable demo script and sample data. Scripts, data, outputs and plugins all appear in the Pyne view in the Activity Bar.\n[Initialize Pyne Project](command:pyneide.createWorkspace)",
+            "description": "Scaffold a workdir with a runnable demo script and sample data. Scripts, data and outputs all appear in the Pyne view in the Activity Bar.\n[Initialize Pyne Project](command:pyneide.createWorkspace)",
             "media": {
               "svg": "media/walkthrough/project.svg",
-              "altText": "The Pyne view in the Activity Bar with Scripts, Data, Outputs and Plugins sections and a scaffolded demo script."
+              "altText": "The Pyne view in the Activity Bar with Scripts, Data and Outputs sections and a scaffolded demo script."
             },
             "completionEvents": [
               "onContext:pyneide.hasWorkdir",
