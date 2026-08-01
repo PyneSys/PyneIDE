@@ -327,7 +327,8 @@ interface RunState {
   plotPane: Map<number, PaneTarget>;
   /** Plot ids toggled off from the legend (webview-local, per-plot show/hide);
    * a hidden plot is routed to the 'hidden' pane and dropped from every layer,
-   * without re-running the script. */
+   * without re-running the script. Points at the chart-wide `hiddenPlots` set,
+   * so the choice survives a re-run. */
   hidden: Set<string>;
   overlayIndicatorId?: string;
   paneIndicatorId?: string;
@@ -379,6 +380,17 @@ let breakpointPointerGesture:
 /** Chart-wide, not per-run: a run rebuilds the chart from scratch, and having
  * the legend come back every time would defeat the toggle. */
 let legendVisible = true;
+
+/** The Layers toggles are chart-wide for the same reason: a plot switched off
+ * must stay off across re-runs of the same script. Held as the live set the
+ * run state points at, so a toggle needs no write-back. Not persisted beyond
+ * the webview's lifetime by design — a reload starts from the script's own
+ * defaults again. A plot id that disappears from the script just stops
+ * matching; a stale entry cannot hide a different plot. */
+const hiddenPlots = new Set<string>();
+
+/** Mirrors `RunState.showVolume` across runs (see `hiddenPlots`). */
+let volumeVisible = false;
 
 /** Mirrors the persisted `pyneide.chart.candleStyle`; the host pushes the
  * stored value on load, so this initial value only covers the gap before the
@@ -880,7 +892,7 @@ function startRun(start: StartEvent): void {
     metaDirty: false,
     ended: false,
     plotPane: new Map(),
-    hidden: new Set(),
+    hidden: hiddenPlots,
     showVolume: false,
     breakpointOverlays: new Map(),
     viewAnchor,
@@ -912,7 +924,7 @@ function startRun(start: StartEvent): void {
   chart.subscribeAction('onVisibleRangeChange', (data) =>
     updateRealtimeButton(data as VisibleRange)
   );
-  applyVolume(state, false);
+  applyVolume(state, volumeVisible);
   // The y-axis template belongs to the chart instance, and a run builds a new
   // one — re-apply the persisted scale or every re-run would drop back to
   // linear.
@@ -998,6 +1010,7 @@ toRealtimeEl?.addEventListener('click', () => {
  */
 function applyVolume(st: RunState, on: boolean): void {
   st.showVolume = on;
+  volumeVisible = on;
   if (on && st.volumeIndicatorId === undefined) {
     st.volumeIndicatorId = st.chart.createIndicator({ name: 'VOL', calcParams: [] }) ?? undefined;
   } else if (!on && st.volumeIndicatorId !== undefined) {
