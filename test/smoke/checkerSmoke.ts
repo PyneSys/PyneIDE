@@ -281,6 +281,8 @@ async function main(): Promise<void> {
         '            break\n' +
         '    for k in range(3):\n' +
         '        total = total + k\n' +
+        '    assert total >= 0, "total is a sum of non-negatives"\n' +
+        '    assert i > 0\n' +
         '    plot(bump(total, prev))\n\n\n' +
         'if __name__ == "__main__":\n' +
         '    run(main)\n'
@@ -348,6 +350,18 @@ async function main(): Promise<void> {
       }
     }
     log('edge-syntax OK');
+
+    // --- assert: allowed, but its message must be a string literal ----------
+    const edgeAssert = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    n = 3\n' +
+        '    assert n > 0, "n" + "!"\n'
+    );
+    expectCodes(edgeAssert, ['pyne-edge-assert'], 'edge-assert (non-literal message)');
+    log('edge-assert OK');
 
     // --- async + special parameters ------------------------------------------
     const edgeAsync = await worker.request(

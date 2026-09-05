@@ -713,7 +713,7 @@ _EDGE_NODE_LABELS = {
     'AsyncFunctionDef': "'async def'", 'AsyncFor': "'async for'",
     'AsyncWith': "'async with'", 'Await': "'await'",
     'Try': "'try'", 'TryStar': "'try'", 'Raise': "'raise'",
-    'Assert': "'assert'", 'With': "'with'", 'Delete': "'del'",
+    'With': "'with'", 'Delete': "'del'",
     'Global': "'global'", 'Nonlocal': "'nonlocal'", 'Match': "'match'",
     'Yield': "'yield'", 'YieldFrom': "'yield from'",
     'List': 'a list literal', 'Dict': 'a dict literal',
@@ -839,6 +839,14 @@ class _EdgeChecker:
                 self._problem(node, 'pyne-edge-lambda',
                               f"'lambda' outside a field(default_factory=...) "
                               f'UDT field default is {_EDGE_SUFFIX}')
+                return
+        elif isinstance(node, ast.Assert):
+            msg = node.msg
+            if msg is not None and not (isinstance(msg, ast.Constant)
+                                        and isinstance(msg.value, str)):
+                self._problem(msg, 'pyne-edge-assert',
+                              f'an assert message other than a string '
+                              f'literal is {_EDGE_SUFFIX}')
                 return
         elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
             self._problem(node, 'pyne-edge-subscript',

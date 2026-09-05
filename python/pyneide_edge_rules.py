@@ -11,8 +11,9 @@ Ground truth for the allowed set is what the pynecomp emitter can produce.
 An AST census over the 140 compiled corpus scripts (2026-07) showed the
 emitter uses: imports of ``pynecore.*`` + ``from dataclasses import field`` +
 ``import lib.*`` only; zero Python builtin calls; no list/dict/set literals,
-comprehensions, f-strings, try/with/raise/assert, slices, walrus, yield,
-async, global/nonlocal or starred expressions; decorators only
+comprehensions, f-strings, try/with/raise, slices, walrus, yield, async,
+global/nonlocal or starred expressions (``assert`` is admitted on top, see
+``ALLOWED_NODES``); decorators only
 ``@script.indicator/strategy/library(...)``, ``@method`` and ``@udt``;
 classes only as bases-less ``@udt`` field lists; ``lambda`` only as a
 ``field(default_factory=lambda: ...)`` UDT field default; plain positional
@@ -34,7 +35,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.07.1'
+EDGE_RULES_VERSION = '2026.09.1'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -49,6 +50,12 @@ ALLOWED_NODES = frozenset({
     'If', 'IfExp', 'For', 'While', 'Break', 'Continue',
     'BinOp', 'BoolOp', 'UnaryOp', 'Compare',
     'Call', 'Attribute', 'Subscript', 'Name', 'Constant', 'Tuple', 'Lambda',
+    # 2026.09.1: `assert` on top of the emitter set. A failed assertion ends
+    # the run on every runtime (CPython raises, a compiled script traps), so
+    # it is one compare and a never-taken branch — there is nothing to
+    # port. The message, when given, must be a string literal (checked in
+    # the worker) so that the trap can carry it verbatim.
+    'Assert',
 })
 
 # The emitter uses Add/Sub/Mult/Div/Mod only; FloorDiv (Pine integer

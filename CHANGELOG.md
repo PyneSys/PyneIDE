@@ -5,6 +5,15 @@ All notable changes to the **PyneIDE** extension are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Pyne Edge profile 2026.09.1**: `assert` is now allowed in Edge scripts. A
+  failed assertion ends the run on every runtime, so it costs one comparison
+  and nothing to port; the message, when given, must be a string literal
+  (`pyne-edge-assert` otherwise).
+
 ## [0.1.0] - 2026-07-24
 
 First public preview. This is everything the initial preview ships with.
