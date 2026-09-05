@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **PyneCore pin 6.7.0 → 6.8.14.** The managed environment installs the newer
+  release, and an own install older than it is no longer accepted: 6.7.x wrote
+  the v2 OHLCV format through POSIX-only `os.pread`/`os.pwrite`, so every data
+  download and the demo data generator failed on Windows. The debugger's Locals
+  and Watch scopes follow the release's state-vector change, which now carries
+  its own slot layout.
+- **Pyne Edge profile 2026.09.2**: `in` / `not in` are now allowed. Membership
+  in a tuple or list of same-typed constants is a chain of exact equalities;
+  the compiler enforces the element-type homogeneity.
 - **Pyne Edge profile 2026.09.1**: `assert` is now allowed in Edge scripts. A
   failed assertion ends the run on every runtime, so it costs one comparison
   and nothing to port; the message, when given, must be a string literal

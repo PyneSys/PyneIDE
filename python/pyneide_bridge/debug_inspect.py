@@ -426,18 +426,6 @@ def bind_sources(frame_globals: dict[str, Any]) -> int:
     return bound
 
 
-def _scope_base(scope: str) -> str:
-    """Owner function name of a layout scope key.
-
-    Scope keys join the def-name path with the middle dot (``main·helper``)
-    and disambiguate repeated names with an ordinal (``highest·2``).
-    """
-    segments = scope.split("·")
-    if len(segments) >= 2 and segments[-1].isdigit():
-        return segments[-2]
-    return segments[-1]
-
-
 def _owner_of(param: str, frame_name: str) -> str:
     """Which function's state a hidden parameter carries.
 
@@ -450,14 +438,22 @@ def _owner_of(param: str, frame_name: str) -> str:
     return param[len(_STATE_PREFIX):-2]
 
 
-def _match_layout(layouts: dict[str, Any], owner: str, state: list) -> dict[str, Any] | None:
-    for scope, layout in layouts.items():
-        try:
-            if _scope_base(scope) == owner and len(layout["init"]) == len(state):
-                return layout
-        except (KeyError, TypeError):
-            continue
-    return None
+def _layout_of(state: list) -> dict[str, Any] | None:
+    """The slot layout a state vector carries after its last slot, or None.
+
+    ``instance_state._make_state`` appends the scope's layout dict to every
+    vector it builds: emitted code addresses literal non-negative indexes only,
+    so the extra element is invisible to the script and makes the vector
+    self-describing. Reading it is what identifies a hidden ``__state__`` local,
+    and the length check doubles as the "is this really a state vector" test.
+    """
+    if not state or not isinstance(state[-1], dict):
+        return None
+    layout = state[-1]
+    init = layout.get("init")
+    if not isinstance(init, (tuple, list)) or len(init) != len(state) - 1:
+        return None
+    return layout
 
 
 def _series_slots(layout: dict[str, Any]) -> set[int]:
@@ -476,24 +472,19 @@ def _is_internal_slot_name(name: str) -> bool:
     ``__lib·close`` is the hidden history buffer a builtin source grows when the
     script reads ``close[1]`` (see ``lib_series.py``) — its live value already
     shows in the Pyne scope, so listing the buffer as a Locals entry is noise.
-    ``p·flag`` / ``p·kahan`` are the lazy-init flag and Kahan-sum companions of a
-    persistent variable (see ``slot_layout.py``): the base slot holds the value.
+    ``p·flag`` is the lazy-init companion of a persistent variable (see
+    ``slot_layout.py``): the base slot holds the value.
     """
-    return (name.startswith("__lib·")
-            or name.endswith("·flag")
-            or name.endswith("·kahan"))
+    return name.startswith("__lib·") or name.endswith("·flag")
 
 
-def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
-               frame_name: str) -> str:
+def pine_slots(frame_locals: dict[str, Any], frame_name: str) -> str:
     """List the named Pine state slots reachable from a stopped frame.
 
     :param frame_locals: The frame's ``locals()`` (pydevd evaluate context).
-    :param frame_globals: The frame's ``globals()``.
     :param frame_name: The frame's function name (from the DAP stack trace).
     :return: base64 of ``[{name, param, slot, kind, type, owner, own}]``.
     """
-    layouts = frame_globals.get("__pyne_slot_layout__") or {}
     slots: list[dict[str, Any]] = []
     for param, state in frame_locals.items():
         is_qualified = param.startswith(_STATE_PREFIX) and param.endswith("__")
@@ -501,15 +492,15 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
             continue
         if not isinstance(state, list):
             continue
-        owner = _owner_of(param, frame_name)
-        layout = _match_layout(layouts, owner, state)
+        layout = _layout_of(state)
         if layout is None:
             continue
+        owner = _owner_of(param, frame_name)
         names = layout.get("names") or ()
         series_slots = _series_slots(layout)
-        child_slots = {slot for slot, _cid, _loop in layout.get("children", ())}
+        child_slots = {entry[0] for entry in layout.get("children", ())}
         seen: set[str] = set()
-        for i in range(len(state)):
+        for i in range(len(layout["init"])):
             name = names[i] if i < len(names) else None
             # A name repeating after its first slot is a companion slot
             # (lazy-init flag, kahan sum); the first slot holds the value.
@@ -529,13 +520,12 @@ def pine_slots(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
     return base64.b64encode(json.dumps(slots).encode("utf-8")).decode("ascii")
 
 
-def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
-                   frame_name: str, ns: dict[str, Any], series: dict[str, Any]) -> None:
+def _collect_state(frame_locals: dict[str, Any], ns: dict[str, Any],
+                   series: dict[str, Any]) -> None:
     """Bind a frame's named Pine state into a watch-evaluation namespace.
 
-    Walks the same hidden ``__state__`` vectors + ``__pyne_slot_layout__`` as
-    :func:`pine_slots`, but keeps the live runtime objects instead of a rendered
-    listing:
+    Walks the same hidden ``__state__`` vectors as :func:`pine_slots`, but keeps
+    the live runtime objects instead of a rendered listing:
 
     * a series slot's ``SeriesImpl`` is put in ``series`` under its source name,
       so a subscript like ``basis[5]`` can be redirected onto the buffer (the
@@ -548,20 +538,18 @@ def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
 
     Own-scope state wins over closure state of the same name (``setdefault``).
     """
-    layouts = frame_globals.get("__pyne_slot_layout__") or {}
     for param, state in frame_locals.items():
         is_qualified = param.startswith(_STATE_PREFIX) and param.endswith("__")
         if param != "__state__" and not is_qualified:
             continue
         if not isinstance(state, list):
             continue
-        owner = _owner_of(param, frame_name)
-        layout = _match_layout(layouts, owner, state)
+        layout = _layout_of(state)
         if layout is None:
             continue
         names = layout.get("names") or ()
         series_slots = _series_slots(layout)
-        for i in range(len(state)):
+        for i in range(len(layout["init"])):
             name = names[i] if i < len(names) else None
             if not name:
                 continue
@@ -577,8 +565,8 @@ def _collect_state(frame_locals: dict[str, Any], frame_globals: dict[str, Any],
                         series.setdefault(base, state[i])
             elif "·" not in name and not name.startswith("__"):
                 # A persistent variable's current scalar (var slot); companion
-                # flag/kahan slots and children carry the middle dot, so they
-                # never bind a bare name.
+                # flag slots and children carry the middle dot, so they never
+                # bind a bare name.
                 ns.setdefault(name, state[i])
                 base = _demangle(name)
                 if base:
@@ -611,8 +599,8 @@ class _SeriesSubscript(ast.NodeTransformer):
         return node
 
 
-def watch(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any],
-          frame_name: str) -> Any:
+def watch(expr: str, frame_globals: dict[str, Any],
+          frame_locals: dict[str, Any]) -> Any:
     """Evaluate a watch/hover expression with Pine series and state resolved.
 
     The proxy wraps every watch/hover expression in a call to this so the
@@ -635,7 +623,6 @@ def watch(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any]
     :param expr: The user's original watch expression.
     :param frame_globals: The stopped frame's ``globals()``.
     :param frame_locals: The stopped frame's ``locals()``.
-    :param frame_name: The frame's function name (for state-scope matching).
     :return: The evaluated value.
     """
     ns: dict[str, Any] = dict(frame_globals)
@@ -649,7 +636,7 @@ def watch(expr: str, frame_globals: dict[str, Any], frame_locals: dict[str, Any]
             pass
     series: dict[str, Any] = {}
     try:
-        _collect_state(frame_locals, frame_globals, frame_name, ns, series)
+        _collect_state(frame_locals, ns, series)
     except Exception:
         series = {}
     # Real locals resolve last so a genuine local shadows a bound builtin/state,

@@ -181,7 +181,7 @@ async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string
     const slotsEval = (await dap.request('evaluate', {
       expression:
         '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_slots"])' +
-        '.pine_slots(locals(), globals(), "main")',
+        '.pine_slots(locals(), "main")',
       frameId: frame.id,
       context: 'watch',
     })) as { result: string };

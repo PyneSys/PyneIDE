@@ -35,7 +35,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.09.1'
+EDGE_RULES_VERSION = '2026.09.2'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -60,11 +60,15 @@ ALLOWED_NODES = frozenset({
 
 # The emitter uses Add/Sub/Mult/Div/Mod only; FloorDiv (Pine integer
 # division), Pow and UAdd are trivially portable arithmetic and allowed on
-# top. Bitwise/shift/matmul operators and is/in comparisons are out.
+# top. Bitwise/shift/matmul operators and is/is-not comparisons are out.
+# 2026.09.2: `in` / `not in` admitted — membership in a tuple/list of
+# same-typed constants is a chain of exact equalities, so a compiled
+# runtime supports it without any container machinery. The element-type
+# homogeneity is the compiler's check, not this linter's.
 ALLOWED_BIN_OPS = frozenset({'Add', 'Sub', 'Mult', 'Div', 'FloorDiv', 'Mod', 'Pow'})
 ALLOWED_UNARY_OPS = frozenset({'USub', 'UAdd', 'Not'})
 ALLOWED_BOOL_OPS = frozenset({'And', 'Or'})
-ALLOWED_CMP_OPS = frozenset({'Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE'})
+ALLOWED_CMP_OPS = frozenset({'Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE', 'In', 'NotIn'})
 
 # --- imports ---------------------------------------------------------------
 

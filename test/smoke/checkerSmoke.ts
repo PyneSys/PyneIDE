@@ -283,6 +283,8 @@ async function main(): Promise<void> {
         '        total = total + k\n' +
         '    assert total >= 0, "total is a sum of non-negatives"\n' +
         '    assert i > 0\n' +
+        '    if i in (1, 2) and k not in (7, 8):\n' +
+        '        total = total + 1\n' +
         '    plot(bump(total, prev))\n\n\n' +
         'if __name__ == "__main__":\n' +
         '    run(main)\n'

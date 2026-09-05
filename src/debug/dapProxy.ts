@@ -84,13 +84,13 @@ const WATCH_CONTEXTS = new Set(['watch', 'hover', 'clipboard']);
  * is only the current scalar and not subscriptable) and a persistent `p` — kept
  * in a hidden state slot, not a local — binds by name. The result object is
  * returned unchanged, so pydevd still renders it with full type/expansion.
- * `frameName` scopes the state lookup; the empty string is a safe fallback
- * (bare builtins still resolve, only the series/state rewrite is skipped).
+ * The state vectors are self-describing (each carries its slot layout), so the
+ * frame's own locals are all the lookup needs.
  */
-const wrapWatch = (expr: string, frameName: string): string =>
+const wrapWatch = (expr: string): string =>
   `__import__("pyneide_bridge.debug_inspect",fromlist=["watch"]).watch(${JSON.stringify(
     expr
-  )},globals(),locals(),${JSON.stringify(frameName)})`;
+  )},globals(),locals())`;
 
 interface DapMessage {
   seq: number;
@@ -394,7 +394,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
           typeof context === 'string' &&
           WATCH_CONTEXTS.has(context)
         ) {
-          args.expression = wrapWatch(args.expression, this.frameNames.get(args.frameId) ?? '');
+          args.expression = wrapWatch(args.expression);
         }
       }
       this.trackClientRequest(msg);
@@ -1206,7 +1206,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     if (!frameName || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(frameName)) return [];
     const expr =
       '__import__("pyneide_bridge.debug_inspect", fromlist=["pine_slots"])' +
-      `.pine_slots(locals(), globals(), "${frameName}")`;
+      `.pine_slots(locals(), "${frameName}")`;
     const slots = (await this.evalEntries(expr, frameId)) as unknown as PineSlot[];
     return slots.slice(0, MAX_PINE_SLOTS);
   }
