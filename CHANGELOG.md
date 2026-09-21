@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **PyneCore pin 6.7.0 → 6.8.14.** The managed environment installs the newer
+- **PyneCore pin 6.7.0 → 6.10.2.** The managed environment installs the newer
   release, and an own install older than it is no longer accepted: 6.7.x wrote
   the v2 OHLCV format through POSIX-only `os.pread`/`os.pwrite`, so every data
-  download and the demo data generator failed on Windows. The debugger's Locals
-  and Watch scopes follow the release's state-vector change, which now carries
-  its own slot layout.
+  download and the demo data generator failed on Windows. The debugger follows
+  two runtime changes of the releases in between: a state vector now carries its
+  own slot layout (Locals and Watch read it from there), and a Pine `int` is a
+  double at runtime, so the Pyne scope converts `bar_index` and `time` back to
+  integers instead of showing `0.0` and losing the derived `datetime` row.
 - **Pyne Edge profile 2026.09.2**: `in` / `not in` are now allowed. Membership
   in a tuple or list of same-typed constants is a chain of exact equalities;
   the compiler enforces the element-type homogeneity.

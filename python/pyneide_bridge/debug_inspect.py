@@ -79,6 +79,11 @@ _BAR_NAMES = (
     "time",
 )
 
+# Bar builtins a Pine developer knows as `int`. pynecore publishes them as
+# floats (a Pine int IS a double at runtime), so an unconverted display reads
+# `bar_index = 0.0` and a raw `time` of `1577836800000.0`.
+_BAR_INT_NAMES = frozenset({"bar_index", "time"})
+
 # The built-in price sources a script can import from ``pynecore.lib``; used to
 # recover which of a script's imports are value sources for the Globals scope.
 _SOURCE_NAMES = frozenset({
@@ -88,6 +93,25 @@ _SOURCE_NAMES = frozenset({
 
 # path -> (mtime, mapping display-name -> lib source-name) for imported sources.
 _import_cache: dict[str, tuple[float, dict[str, str]]] = {}
+
+
+def _as_int(value: Any) -> int | None:
+    """Whole-number value of a Pine `int` builtin, or None if it has none.
+
+    pynecore publishes `bar_index` / `time` as floats (a Pine int is a double at
+    runtime), and `na` arrives as a nan — hence the finite check.
+
+    :param value: The live builtin value.
+    :return: The integer it stands for, or None when it is not a finite number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
 def _fmt(value: Any) -> str:
@@ -205,7 +229,8 @@ def pine_bar() -> str:
 
     ``time`` is kept as its raw Unix-ms value (what the Pine code sees); a
     derived ``datetime`` entry renders the same instant in the exchange
-    timezone for readability.
+    timezone for readability. The Pine-`int` builtins are displayed as integers
+    (see :data:`_BAR_INT_NAMES`).
 
     :return: base64 of ``[{name, value, type}]``.
     """
@@ -220,8 +245,13 @@ def pine_bar() -> str:
                 continue
             if _is_source_sentinel(value):
                 continue
-            if name == "time" and isinstance(value, int) and not isinstance(value, bool):
-                time_ms = value
+            if name in _BAR_INT_NAMES:
+                as_int = _as_int(value)
+                if as_int is not None:
+                    if name == "time":
+                        time_ms = as_int
+                    out.append({"name": name, "value": str(as_int), "type": "int"})
+                    continue
             out.append({"name": name, "value": _fmt(value), "type": type(value).__name__})
         if time_ms is not None:
             dt = _bar_datetime(lib, time_ms)

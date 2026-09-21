@@ -7,17 +7,19 @@
 
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.8.14';
+export const PYNECORE_VERSION = '6.10.2';
 export const DEBUGPY_VERSION = '1.8.21';
 
 /**
- * Minimum pynecore accepted when the user brings their own install. Held at the
- * release that made `pynecore.core.ohlcv` — the self-describing v2 OHLCV format
- * with millisecond timestamps, imported unconditionally by the runner bridge —
- * usable on every platform: 6.7.x wrote it through POSIX-only `os.pread`/
- * `os.pwrite`, so any OHLCV write died on Windows.
+ * Minimum pynecore accepted when the user brings their own install. Kept equal
+ * to PYNECORE_VERSION: the bridge contract is unversioned and only the pinned
+ * release is ever tested against it, so an own install older than the pin would
+ * be an untested pairing. Everything below 6.8.14 is additionally unusable —
+ * `pynecore.core.ohlcv` (the self-describing v2 format the runner bridge imports
+ * unconditionally) wrote through POSIX-only `os.pread`/`os.pwrite` before it, so
+ * any OHLCV write died on Windows.
  */
-export const PYNECORE_MIN_VERSION = '6.8.14';
+export const PYNECORE_MIN_VERSION = '6.10.2';
 
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;
@@ -26,7 +28,7 @@ export const ENV_SCHEMA_VERSION = 2;
  * Rough total download of a first-time managed setup, shown in the setup
  * prompt. Measured for the pins above (uv release assets + the CPython
  * standalone build uv fetches for 3.14 + the resolved wheel set): macOS arm64
- * ~74 MB, Windows x64 ~73 MB, Linux x64 ~92 MB. Rounded to one number instead
+ * ~75 MB, Windows x64 ~72 MB, Linux x64 ~93 MB. Rounded to one number instead
  * of per-platform figures — no API exposes the Python/wheel bytes at prompt
  * time, so this is an estimate that needs re-measuring on pin bumps.
  */

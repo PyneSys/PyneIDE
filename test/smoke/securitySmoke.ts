@@ -245,23 +245,28 @@ async function main(): Promise<void> {
   const ws = await scaffoldWorkdirWithCli(pyneBinPath(pythonBin), path.join(base, 'workdir'), log);
 
   // Two synthetic .ohlcv + .toml pairs: the chart feed (NASDAQ:AAPL @ 60) and
-  // the cross-symbol feed the global map derives (capitalcom:MSFT -> file
-  // `capitalcom_MSFT_60`).
+  // the cross-symbol feed the global map derives. The mapped provider is `ccxt`
+  // because pynecore derives the expected file name through the provider class
+  // (`load_plugin(...).get_ohlcv_path()`), and ccxt is the one provider the
+  // managed environment always installs — an uninstalled provider would simply
+  // report `mapped_file: None`. ccxt is multi-broker, so the broker is part of
+  // both the mapped symbol and the file name (`ccxt:BYBIT:MSFT/USDT` ->
+  // `ccxt_BYBIT_MSFT_USDT_60`); nothing here goes near the network.
   const dataDir = path.join(ws.workdir, 'data');
   const chartStem = 'aapl_60';
   writeOhlcv(path.join(dataDir, `${chartStem}.ohlcv`), START_TS, BAR_COUNT, 100);
   writeSyminfo(path.join(dataDir, `${chartStem}.toml`), 'NASDAQ', 'AAPL', '60', 'stock');
 
-  const crossStem = 'capitalcom_MSFT_60';
+  const crossStem = 'ccxt_BYBIT_MSFT_USDT_60';
   writeOhlcv(path.join(dataDir, `${crossStem}.ohlcv`), START_TS, BAR_COUNT, 300);
-  writeSyminfo(path.join(dataDir, `${crossStem}.toml`), 'CAPITALCOM', 'MSFT', '60', 'stock');
+  writeSyminfo(path.join(dataDir, `${crossStem}.toml`), 'BYBIT', 'MSFT/USDT', '60', 'crypto');
 
   fs.writeFileSync(path.join(ws.workdir, 'scripts', 'security_demo.py'), SECURITY_SCRIPT);
 
   const configDir = path.join(ws.workdir, 'config');
 
   // ---- (a) inspect-security: buckets + global-map fields ----
-  writeSymbolMap(configDir, '[symbol_map]\n"NASDAQ:MSFT" = "capitalcom:MSFT"\n');
+  writeSymbolMap(configDir, '[symbol_map]\n"NASDAQ:MSFT" = "ccxt:BYBIT:MSFT/USDT"\n');
   const inspectEvents = await inspectSecurity(
     pythonBin,
     bridgeRoot,
@@ -281,8 +286,10 @@ async function main(): Promise<void> {
   if (!msft) fail('missing NASDAQ:MSFT cross-symbol requirement');
   if (msft.timeframe !== '60') fail(`MSFT tf: ${msft.timeframe}`);
   if (msft.hasGlobalMap !== true) fail('MSFT hasGlobalMap not true');
-  if (msft.mappedProvider !== 'capitalcom') fail(`MSFT mappedProvider: ${msft.mappedProvider}`);
-  if (msft.mappedNativeSymbol !== 'MSFT') fail(`MSFT mappedNativeSymbol: ${msft.mappedNativeSymbol}`);
+  if (msft.mappedProvider !== 'ccxt') fail(`MSFT mappedProvider: ${msft.mappedProvider}`);
+  if (msft.mappedNativeSymbol !== 'BYBIT:MSFT/USDT') {
+    fail(`MSFT mappedNativeSymbol: ${msft.mappedNativeSymbol}`);
+  }
   if (!msft.mappedFile || !msft.mappedFile.endsWith(`${crossStem}.ohlcv`)) {
     fail(`MSFT mappedFile: ${msft.mappedFile}`);
   }
@@ -302,7 +309,7 @@ async function main(): Promise<void> {
   // Point the map at a provider file that does NOT exist, then override with an
   // explicit --security mapping to the real file. Reaching `end` proves the
   // explicit mapping wins over the global map.
-  writeSymbolMap(configDir, '[symbol_map]\n"NASDAQ:MSFT" = "capitalcom:NOPE"\n');
+  writeSymbolMap(configDir, '[symbol_map]\n"NASDAQ:MSFT" = "ccxt:BYBIT:NOPE/USDT"\n');
   const cRun = await runBridge(
     pythonBin,
     bridgeRoot,

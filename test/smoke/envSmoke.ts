@@ -248,7 +248,9 @@ async function debugSmoke(pythonBin: string, bridgeRoot: string, workdir: string
       frameId: frame.id,
       context: 'watch',
     })) as { result: string };
-    if (counterEval.result !== '1') {
+    // `1` or `1.0`: pynecore stores a Pine int as a double, and the raw slot
+    // expression is evaluated by debugpy, so it renders the runtime value.
+    if (!/^1(\.0)?$/.test(counterEval.result)) {
       throw new Error(`debug: persistent slot value mismatch: ${counterEval.result}`);
     }
     const seriesEval = (await dap.request('evaluate', {
