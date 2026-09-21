@@ -25,20 +25,34 @@ const common = {
   sourcemap: true,
 };
 
+/** typeshed subtrees dropped from the bundled pyright (see `copyPyright`). */
+const PYRIGHT_DROPPED = [path.join('typeshed-fallback', 'stubs')];
+
 /**
  * Ship the pyright language server inside the VSIX: node_modules is
  * .vscodeignore'd, so the needed runtime files are copied under dist/pyright
  * (the CLI bundle and source maps are left out). Skipped when dist already
- * holds the same pyright version.
+ * holds the same pyright version, trimmed the same way.
+ *
+ * `typeshed-fallback/stubs` — third-party stubs for packages that ship no
+ * types of their own (requests, PyYAML, six, …) — is left out: it is 4654 of
+ * the copy's 5416 files, and in the VSIX it costs ~2.5MB compressed plus
+ * ~1.2MB of pure zip-entry overhead, over half the package. A Pyne script
+ * imports pynecore (typed inline) and the stdlib, whose `typeshed-fallback/
+ * stdlib` branch MUST stay. For anything else pyright falls back to the
+ * installed package's own code (`useLibraryCodeForTypes`), and an
+ * uninstalled import is a missing import with or without the stubs.
  */
 function copyPyright() {
   const require = createRequire(import.meta.url);
   const srcRoot = path.dirname(require.resolve('pyright/package.json'));
   const outRoot = path.resolve('dist/pyright');
   const version = JSON.parse(fs.readFileSync(path.join(srcRoot, 'package.json'), 'utf8')).version;
+  const dropped = PYRIGHT_DROPPED.map((rel) => path.join(srcRoot, 'dist', rel));
   try {
     const existing = JSON.parse(fs.readFileSync(path.join(outRoot, 'package.json'), 'utf8'));
-    if (existing.version === version) return;
+    const trimmed = PYRIGHT_DROPPED.every((rel) => !fs.existsSync(path.join(outRoot, 'dist', rel)));
+    if (existing.version === version && trimmed) return;
   } catch {
     // Missing or unreadable — copy below.
   }
@@ -48,7 +62,10 @@ function copyPyright() {
   }
   fs.cpSync(path.join(srcRoot, 'dist'), path.join(outRoot, 'dist'), {
     recursive: true,
-    filter: (src) => !src.endsWith('.map') && !src.endsWith(`${path.sep}pyright.js`),
+    filter: (src) =>
+      !src.endsWith('.map') &&
+      !src.endsWith(`${path.sep}pyright.js`) &&
+      !dropped.some((dir) => src === dir || src.startsWith(dir + path.sep)),
   });
   console.log(`esbuild: bundled pyright ${version} into dist/pyright`);
 }
