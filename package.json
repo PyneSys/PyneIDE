@@ -49,6 +49,16 @@
     "onDebugDynamicConfigurations:pyne",
     "onCustomEditor:pyneide.ohlcvTable"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "PyneIDE compiles, runs and debugs workspace scripts, and launches interpreters configured by workspace settings. Trust the folder to enable it."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "PyneIDE needs a local file system to manage its Python environment and to compile, run and debug scripts."
+    }
+  },
   "contributes": {
     "configurationDefaults": {
       "explorer.fileNesting.enabled": true,
