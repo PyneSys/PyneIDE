@@ -156,6 +156,11 @@ the PyneCore runtime — with **no dependency on the Microsoft Python extension*
 nothing to configure. It sets itself up on first run so you can go straight to
 writing scripts.
 
+The one-time setup downloads about 80 MB (uv + Python + PyneCore) and takes
+roughly 250 MB on disk in VS Code's extension storage — **PyneIDE: Reveal
+Environment Folder** shows the exact location, **PyneIDE: Remove Environment**
+gives the space back.
+
 In a project you initialized with PyneIDE, the **integrated terminal** opens with
 that environment already activated: `pyne`, `python` and `pip` are the managed
 ones, and the CLI is pointed at the same workdir the extension uses, so
@@ -188,11 +193,11 @@ view keeps your Scripts, Data, and Output in one place.
 1. **Install** PyneIDE from the Marketplace.
 2. Open a folder and run **PyneIDE: Initialize Pyne Project** — it scaffolds a
    runnable demo plus sample data.
-3. When prompted, let PyneIDE **set up the Python environment** (a one-time download
-   of `uv` + Python + PyneCore into extension storage). It stays there when the
-   extension is uninstalled, so **PyneIDE: Remove Environment** is there to delete
-   it again and give the disk space back; **PyneIDE: Reveal Environment Folder**
-   shows where it lives.
+3. When prompted, let PyneIDE **set up the Python environment** (a one-time ~80 MB
+   download of `uv` + Python + PyneCore into extension storage, ~250 MB on disk).
+   It stays there when the extension is uninstalled, so **PyneIDE: Remove
+   Environment** is there to delete it again and give the disk space back;
+   **PyneIDE: Reveal Environment Folder** shows where it lives.
 4. Press **Run** on the demo and watch the chart appear.
 5. To run your own **Pine**: open a `.pine` file, **Sign In** with your PyneSys API
    key when prompted, then Run — it compiles in the cloud and runs like any other
