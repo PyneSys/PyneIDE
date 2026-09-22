@@ -76,14 +76,16 @@ PyneIDE.
 
 ## How to sign
 
-On your first pull request, add a comment containing exactly:
+When you open your first pull request, a bot comments on it and the CLA status
+check stays red until you sign. To sign, post a comment containing exactly:
 
 ```
-I have read the CLA document and I hereby sign the CLA.
+I have read the CLA Document and I hereby sign the CLA
 ```
 
-Signing covers that pull request and every later one you submit to this
-repository, unless you state otherwise.
+Your signature is recorded in `signatures/version1/cla.json` in this
+repository, and it covers that pull request and every later one you submit here.
+If the status check does not update, comment `recheck`.
 
 If you are contributing on behalf of a company, an authorized person should sign
 on its behalf and say so in the same comment.

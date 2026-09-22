@@ -279,6 +279,13 @@ Everything else — running, charting and debugging Pyne code, and Pine editing
 support once the language server is installed — happens **entirely on your
 machine**.
 
+## Contributing
+
+Bug reports and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the tests to run
+before a pull request, and the [CLA](CLA.md). Found a security issue? Please
+follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
 ## License
 
 Copyright (C) 2026 PYNESYS LLC
