@@ -17,6 +17,7 @@ MEMORY.md
 # README screenshots — the Marketplace renders them from the repository, not
 # from the package. media/walkthrough/*.svg is used at runtime and stays.
 media/*.png
+media/*.gif
 dist/env-smoke.js
 dist/pinels-smoke.js
 dist/pyright-smoke.js

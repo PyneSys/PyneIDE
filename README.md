@@ -89,7 +89,13 @@ and watch series history such as `close[1]` right in the Watch panel.
 
 It works the same whether you wrote Pine or Pyne code.
 
-![PyneIDE debugger paused with OHLCV variables, series history, and the live chart](media/debug.png)
+![Stepping bar by bar in a paused Pine script: the Pyne scope updates, the chart grows one candle at a time, and a series unfolds into its own history](media/debug.gif)
+
+*Next bar, one candle at a time — the live **Pyne** scope, and `fastMa` unfolded into its series history.*
+
+![Choose Bar on Chart: pick a bar directly on the candlestick chart and the debugger pauses on exactly that bar](media/chart-breakpoint.gif)
+
+*Chart-bar breakpoint: pick the bar on the chart, and the run stops there.*
 
 ## One-click compile and run
 
@@ -100,7 +106,9 @@ Python unless you want to. Compiling Pine needs a PyneSys account and API key
 ([create one at app.pynesys.io](https://app.pynesys.io)); running **Pyne code** needs
 no account and runs entirely on your machine.
 
-![Compile and run a Pine script with a live chart](media/compile.png)
+![One click above line one compiles the Pine script and streams it onto a candlestick chart beside the code](media/run.gif)
+
+*One click above line one: compile, run, and the chart builds beside your code.*
 
 ## Inputs without touching the code
 
@@ -116,7 +124,9 @@ byte-for-byte as you wrote it while the settings stay diffable and committable. 
 field back. A `.pine` file and its compiled Python share one form, so it makes no
 difference which of the two you have open.
 
-![A Pine script's inputs as a generated form, edited beside the source](media/inputs.png)
+![The inputs form opens beside the script, the MA type is switched in a dropdown, and Save re-runs the chart](media/inputs.gif)
+
+*Switch a declared option, hit Save — the chart re-runs, the source stays byte-for-byte.*
 
 ## Interactive chart and backtests
 
@@ -128,7 +138,9 @@ equity/performance curve, and Trades / Stats tables. A per-plot layers popup, a
 measure tool, go-to-date, fullscreen, and CSV export of plot and trade data are all
 built in.
 
-![Interactive strategy chart with trade markers and performance](media/chart.png)
+![The Layers popup toggling individual plots off and back on, with the chart updating instantly](media/chart.gif)
+
+*Toggle a plot off in the Layers popup and it's gone instantly — nothing re-runs.*
 
 ## Pyne code, done right
 
