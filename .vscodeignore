@@ -10,6 +10,8 @@ tsconfig.json
 PLAN.md
 TODO.md
 MEMORY.md
+CONTRIBUTING.md
+CLA.md
 .gitignore
 **/*.map
 **/__pycache__/**
