@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Remove Environment.** The status bar menu (and the `PyneIDE: Remove
+  Environment` command) now deletes what PyneIDE downloaded — the Python
+  environment with its installed plugins, and optionally the Pine language
+  server — after showing how much each one takes. Until now the only way out
+  was a clean reinstall, and uninstalling the extension left the whole
+  environment on disk. **Reveal Environment Folder** opens that location in the
+  file manager.
+
 ### Changed
 
 - **PyneCore pin 6.7.0 → 6.10.2.** The managed environment installs the newer

@@ -55,8 +55,8 @@ export async function ensureUv(
   options: EnsureUvOptions = {}
 ): Promise<UvPaths> {
   const { cancel, onProgress } = options;
-  const uvDir = path.join(storageDir, 'uv');
-  const uvBin = path.join(uvDir, uvBinName());
+  const dir = uvDir(storageDir);
+  const uvBin = path.join(dir, uvBinName());
   throwIfCancelled(cancel);
 
   if (fs.existsSync(uvBin)) {
@@ -79,10 +79,10 @@ export async function ensureUv(
     );
   }
 
-  fs.rmSync(uvDir, { recursive: true, force: true });
-  fs.mkdirSync(uvDir, { recursive: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
 
-  const archivePath = path.join(uvDir, artifact.name);
+  const archivePath = path.join(dir, artifact.name);
   await downloadFile(uvDownloadUrl(artifact), archivePath, log, {
     cancel,
     onProgress: (received, total) => {
@@ -96,7 +96,7 @@ export async function ensureUv(
 
   // tar.gz on macOS/Linux; on Windows 10+ the bundled bsdtar extracts zip too.
   onProgress?.(1, `Unpacking uv ${UV_VERSION}…`);
-  const extractDir = path.join(uvDir, 'extract');
+  const extractDir = path.join(dir, 'extract');
   fs.mkdirSync(extractDir, { recursive: true });
   await execChecked('tar', ['-xf', archivePath, '-C', extractDir], log, {
     timeoutMs: 60000,
@@ -122,7 +122,7 @@ export async function ensureUv(
 /** Environment for uv child processes: self-contained python + optional proxy. */
 export function uvEnv(storageDir: string, proxyUrl?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    UV_PYTHON_INSTALL_DIR: path.join(storageDir, 'python'),
+    UV_PYTHON_INSTALL_DIR: managedPythonDir(storageDir),
     // Without this uv prefers a system interpreter (e.g. Homebrew framework
     // Python) over its own standalone build, so the env depends on whatever
     // Python the machine happens to have.
@@ -156,6 +156,16 @@ export function pyneBinPath(pythonBin: string): string {
 /** Default location of the managed venv. */
 export function managedVenvDir(storageDir: string): string {
   return path.join(storageDir, 'venv');
+}
+
+/** Directory holding the pinned uv binary. */
+export function uvDir(storageDir: string): string {
+  return path.join(storageDir, 'uv');
+}
+
+/** Where uv installs its standalone CPython builds (UV_PYTHON_INSTALL_DIR). */
+export function managedPythonDir(storageDir: string): string {
+  return path.join(storageDir, 'python');
 }
 
 export function defaultStorageTmp(): string {

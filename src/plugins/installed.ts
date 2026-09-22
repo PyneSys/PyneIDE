@@ -100,9 +100,14 @@ export async function listInstalledPlugins(
  * its layout there instead of prompting — and never in a folder the user sees.
  */
 export function cliWorkdir(storageDir: string): string {
-  const dir = path.join(storageDir, 'cli-workdir');
+  const dir = cliWorkdirPath(storageDir);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** The same location without creating it — for callers that only remove it. */
+export function cliWorkdirPath(storageDir: string): string {
+  return path.join(storageDir, 'cli-workdir');
 }
 
 /** Built-ins ship inside PyneCore itself, so they cannot be uninstalled. */

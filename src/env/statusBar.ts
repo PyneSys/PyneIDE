@@ -246,8 +246,18 @@ export class EnvStatusBar {
           action: () => void this.manager.setup({ recreate: true }),
         },
         {
+          label: '$(trash) Remove Environment…',
+          description: 'Delete what PyneIDE downloaded and free the disk space',
+          action: () => void vscode.commands.executeCommand('pyneide.removeEnvironment'),
+        },
+        {
           label: '$(new-folder) Initialize Pyne Project',
           action: () => void vscode.commands.executeCommand('pyneide.createWorkspace'),
+        },
+        {
+          label: '$(folder-opened) Reveal Environment Folder',
+          description: 'Where PyneIDE keeps Python, PyneCore and the Pine language server',
+          action: () => void vscode.commands.executeCommand('pyneide.revealEnvironmentFolder'),
         },
         {
           label: '$(output) Show Environment Log',

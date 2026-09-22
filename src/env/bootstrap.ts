@@ -115,7 +115,8 @@ function logInterpreterDiag(info: VerifyInfo, log: Logger): void {
   }
 }
 
-function markerPath(storageDir: string): string {
+/** The `env.json` marker describing what the managed venv was built from. */
+export function markerPath(storageDir: string): string {
   return path.join(storageDir, 'env.json');
 }
 

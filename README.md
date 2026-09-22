@@ -189,7 +189,10 @@ view keeps your Scripts, Data, and Output in one place.
 2. Open a folder and run **PyneIDE: Initialize Pyne Project** — it scaffolds a
    runnable demo plus sample data.
 3. When prompted, let PyneIDE **set up the Python environment** (a one-time download
-   of `uv` + Python + PyneCore into extension storage).
+   of `uv` + Python + PyneCore into extension storage). It stays there when the
+   extension is uninstalled, so **PyneIDE: Remove Environment** is there to delete
+   it again and give the disk space back; **PyneIDE: Reveal Environment Folder**
+   shows where it lives.
 4. Press **Run** on the demo and watch the chart appear.
 5. To run your own **Pine**: open a `.pine` file, **Sign In** with your PyneSys API
    key when prompted, then Run — it compiles in the cloud and runs like any other

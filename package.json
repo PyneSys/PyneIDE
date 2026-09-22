@@ -90,6 +90,16 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.removeEnvironment",
+        "title": "Remove Environment",
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.revealEnvironmentFolder",
+        "title": "Reveal Environment Folder",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.showEnvironmentLog",
         "title": "Show Environment Log",
         "category": "PyneIDE"

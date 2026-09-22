@@ -16,6 +16,7 @@ import { registerPyneDebug } from './debug/pyneDebug';
 import { currentMarker } from './env/bootstrap';
 import { PYNECORE_VERSION, SETUP_DOWNLOAD_MB } from './env/constants';
 import { EnvManager, type EnvState } from './env/manager';
+import { registerRemoveEnvironment } from './env/removeCommand';
 import { EnvStatusBar } from './env/statusBar';
 import { registerTerminalEnv, updateTerminalEnv } from './env/terminalEnv';
 import { pyneBinPath } from './env/uv';
@@ -116,7 +117,8 @@ export function activate(context: vscode.ExtensionContext): void {
         `${context.extension.id}#${WALKTHROUGH_ID}`
       )
     ),
-    registerHelpCommands(context)
+    registerHelpCommands(context),
+    ...registerRemoveEnvironment(context, manager, pineLs, output)
   );
 
   // Make the integrated terminal an activated Pyne environment: the `pyne` CLI

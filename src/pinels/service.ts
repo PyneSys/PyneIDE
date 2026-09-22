@@ -79,6 +79,11 @@ export class PineLsService {
     this.manager.check();
   }
 
+  /** Release the installed binary (it is about to be deleted). */
+  async stopServer(): Promise<void> {
+    await this.client.stop();
+  }
+
   /** Activation entry: local check, one-time install offer, background update. */
   async initialize(): Promise<void> {
     const state = this.manager.check();
