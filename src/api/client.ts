@@ -212,24 +212,13 @@ export class PyneApiClient {
   }
 
   /**
-   * Upgrade a Pine v4/v5 script to v6 by chaining the API's converter
-   * endpoints. Conversion is quota-free (it consumes no compile limit, credits
-   * or script history). `fromVersion` must be 4 or 5; a v4 script is routed
-   * through v5 first. On any step's failure the chain stops with that error.
+   * Upgrade a pre-v6 Pine script to v6. The API detects the version and runs
+   * every conversion step itself. Conversion is quota-free (it consumes no
+   * compile limit, credits or script history).
    */
-  async convertToV6(script: string, fromVersion: number): Promise<ConvertResult> {
-    let current = script;
-    if (fromVersion <= 4) {
-      const v5 = await this.convertStep('/compiler/v4tov5', current);
-      if (!v5.ok) return v5;
-      current = v5.code;
-    }
-    return this.convertStep('/compiler/v5tov6', current);
-  }
-
-  private async convertStep(path: string, script: string): Promise<ConvertResult> {
+  async convertToV6(script: string): Promise<ConvertResult> {
     const body = new URLSearchParams({ script }).toString();
-    const res = await this.request('POST', path, {
+    const res = await this.request('POST', '/compiler/tov6', {
       body,
       contentType: 'application/x-www-form-urlencoded',
       timeoutMs: 60000,

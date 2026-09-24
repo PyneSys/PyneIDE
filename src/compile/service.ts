@@ -61,7 +61,8 @@ export class CompileService {
 
   /**
    * Drives `pyneide.canConvertToV6`, which hides the Convert action for
-   * scripts it cannot help with: already-v6 sources and v1-v3 (unsupported).
+   * already-v6 sources. A v1-v3 source (no annotation means v1) converts too,
+   * just without a guarantee.
    */
   private updateConvertContextKey(): void {
     const doc = vscode.window.activeTextEditor?.document;
@@ -72,7 +73,7 @@ export class CompileService {
     void vscode.commands.executeCommand(
       'setContext',
       'pyneide.canConvertToV6',
-      version !== undefined && version >= 4 && version < 6
+      doc?.languageId === 'pine' && (version === undefined || version < 6)
     );
   }
 
@@ -143,7 +144,7 @@ export class CompileService {
   }
 
   /**
-   * Upgrade a Pine v4/v5 document to v6 in place (like TradingView's editor):
+   * Upgrade a pre-v6 Pine document to v6 in place (like TradingView's editor):
    * the .pine content is replaced through a WorkspaceEdit so a plain editor
    * Undo reverts it. Returns true when the file is v6 afterwards (already v6,
    * or just converted), false when conversion was impossible or failed.
@@ -152,13 +153,6 @@ export class CompileService {
   async convertActiveToV6(doc: vscode.TextDocument): Promise<boolean> {
     const version = detectPineVersion(doc.getText());
     if (version !== undefined && version >= 6) return true;
-    if (version === undefined || version < 4) {
-      void vscode.window.showErrorMessage(
-        'PyneIDE: automatic conversion supports Pine v4 and v5 only — please upgrade this ' +
-          'script to v6 manually.'
-      );
-      return false;
-    }
 
     const client = await this.auth.requireClient();
     if (!client) return false;
@@ -169,7 +163,7 @@ export class CompileService {
       try {
         result = await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Window, title: 'Converting to Pine v6…' },
-          () => client.convertToV6(doc.getText(), version)
+          () => client.convertToV6(doc.getText())
         );
       } catch (err) {
         this.log(`Convert failed: ${flattenErrorMessage(err)}`);
