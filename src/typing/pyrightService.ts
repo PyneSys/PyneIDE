@@ -17,6 +17,7 @@ import { ensurePyrightConfig } from '../env/workdir';
 import { resolvePyneIdeWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { pyneAliasAt } from './pyneAlias';
+import { isPineNumberReport } from './numberFilter';
 import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
 import { isExactSpan, isSeriesAccess, seriesSpanIndex } from './seriesFilter';
 
@@ -68,6 +69,10 @@ type PyrightStatus =
  * - workspace/configuration: injects the managed venv interpreter as
  *   python.pythonPath, so pynecore imports resolve without the ms-python
  *   extension; re-pushed whenever the environment state changes.
+ * - handleDiagnostics: Pine-number filter in `@pyne` documents — a float-typed
+ *   number in an int slot is valid Pyne (a Pine int is a double at runtime,
+ *   and Pine types `int / int` as an int), so those assignability reports are
+ *   dropped by their reason chain (`numberFilter`).
  * - handleDiagnostics: per-access reportIndexIssue filter in `@pyne` documents
  *   (L5c). `close[1]` is valid Pyne that the transparent `Series[T] = T` alias
  *   cannot express, so the accesses pynecomp rewrites into series-buffer reads
@@ -423,26 +428,32 @@ export class PyrightService {
   }
 
   /**
-   * Drop the series-history `reportIndexIssue` noise from `@pyne` documents.
+   * Drop the Pine-number reports and the series-history `reportIndexIssue`
+   * noise from `@pyne` documents.
    *
-   * With an analysis in hand only the accesses pynecomp actually rewrites into
-   * buffer reads are dropped; everything else stays as a genuine error with a
-   * Pyne-specific hint appended. Without one — no interpreter, unparsable
-   * source, analysis still running — the whole rule is dropped, so the fallback
-   * can only ever be quieter than the truth, never noisier.
+   * A Pine-number report (a float-typed number in an int slot, see
+   * `numberFilter`) is recognised from its message alone, so it is dropped
+   * before anything else. For the index rule, with an analysis in hand only the
+   * accesses pynecomp actually rewrites into buffer reads are dropped;
+   * everything else stays as a genuine error with a Pyne-specific hint
+   * appended. Without one — no interpreter, unparsable source, analysis still
+   * running — the whole rule is dropped, so the fallback can only ever be
+   * quieter than the truth, never noisier.
    */
   private filterDiagnostics(
     uri: vscode.Uri,
     diagnostics: vscode.Diagnostic[]
   ): vscode.Diagnostic[] {
     if (this.isForeignSource(uri)) return syntaxOnly(diagnostics);
-    if (!needsAnalysis(diagnostics) || !this.isPyneUri(uri)) return diagnostics;
+    if (!needsFiltering(diagnostics) || !this.isPyneUri(uri)) return diagnostics;
+    const kept = dropPineNumberReports(diagnostics);
+    if (!needsAnalysis(kept)) return kept;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropUnavailableRules(diagnostics);
+    if (text === undefined) return dropUnavailableRules(kept);
     const analysis = this.analyzer.cached(uri, text);
-    if (analysis) return applySeriesAnalysis(diagnostics, analysis, text);
+    if (analysis) return applySeriesAnalysis(kept, analysis, text);
     void this.analyzeAndRepublish(uri, text);
-    return dropUnavailableRules(diagnostics);
+    return dropUnavailableRules(kept);
   }
 
   /**
@@ -456,12 +467,14 @@ export class PyrightService {
     items: vscode.Diagnostic[]
   ): Promise<vscode.Diagnostic[]> {
     if (this.isForeignSource(uri)) return syntaxOnly(items);
-    if (!needsAnalysis(items) || !this.isPyneUri(uri)) return items;
+    if (!needsFiltering(items) || !this.isPyneUri(uri)) return items;
+    const kept = dropPineNumberReports(items);
+    if (!needsAnalysis(kept)) return kept;
     const text = SeriesAnalyzer.readText(uri);
-    if (text === undefined) return dropUnavailableRules(items);
+    if (text === undefined) return dropUnavailableRules(kept);
     const analysis = await this.analyzer.analyze(uri, text);
-    if (!analysis) return dropUnavailableRules(items);
-    return applySeriesAnalysis(items, analysis, text);
+    if (!analysis) return dropUnavailableRules(kept);
+    return applySeriesAnalysis(kept, analysis, text);
   }
 
   /**
@@ -475,7 +488,7 @@ export class PyrightService {
     const raw = this.rawDiagnostics.get(uri.toString());
     if (!raw) return;
     if (SeriesAnalyzer.readText(uri) !== text) return;
-    this.publish(uri, applySeriesAnalysis(raw, analysis, text));
+    this.publish(uri, applySeriesAnalysis(dropPineNumberReports(raw), analysis, text));
   }
 
   /** Hover cosmetics: show `Series[float]`, not the alias-collapsed `float`. */
@@ -612,6 +625,19 @@ const FILTERED_RULES = new Set([INDEX_RULE, REDECL_RULE, UNUSED_FUNCTION_RULE]);
 const INDEX_HINT =
   'Pyne: history indexing (`x[1]`) only works on series values — ' +
   'declare the variable as `Series[...]` or index a lib series directly.';
+
+/** Whether any report is one of the `@pyne` filters' concern. */
+function needsFiltering(diagnostics: vscode.Diagnostic[]): boolean {
+  return needsAnalysis(diagnostics) || diagnostics.some(isPineNumber);
+}
+
+function isPineNumber(diagnostic: vscode.Diagnostic): boolean {
+  return isPineNumberReport(diagnosticRule(diagnostic), diagnostic.message);
+}
+
+function dropPineNumberReports(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
+  return diagnostics.filter((d) => !isPineNumber(d));
+}
 
 function needsAnalysis(diagnostics: vscode.Diagnostic[]): boolean {
   return diagnostics.some((diagnostic) => {

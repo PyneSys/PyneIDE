@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and nothing to port; the message, when given, must be a string literal
   (`pyne-edge-assert` otherwise).
 
+### Fixed
+
+- **No type errors for a float in an int slot.** A Pine `int` is a double at
+  runtime, and Pine types `int / int` as an int while Python types it as a
+  float, so valid Pyne code such as `ta.wma(src, length / 2)`, `count: int =
+  total / 2` or `for i in range(n / 2)` was flagged by the bundled pyright. In
+  `@pyne` documents these reports are now dropped when the only failure is a
+  `float` where an `int` (or an optional int) is expected; a container mismatch
+  (`list[float]` into `list[int]`), a non-number and a subscript index still
+  report.
+
 ## [0.1.0] - 2026-07-24
 
 First public preview. This is everything the initial preview ships with.

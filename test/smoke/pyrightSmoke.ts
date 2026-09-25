@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { ensurePyrightConfig } from '../../src/env/workdir';
+import { isPineNumberReport } from '../../src/typing/numberFilter';
 import {
   isExactSpan,
   isSeriesAccess,
@@ -60,6 +61,47 @@ def main() -> None:
     scalar = 42
     broken = scalar[0]
     print(hist, lib_hist, broken)
+`;
+
+/**
+ * Pine-number probe. `half` is a Pine int (`int / int` is int-typed in Pine)
+ * that Python types as a float; every slot marked `dropped` is valid Pyne. The
+ * `kept` lines are genuine errors the filter must leave alone.
+ */
+const NUMBER_SCRIPT = `"""
+@pyne
+"""
+from dataclasses import dataclass
+
+
+@dataclass
+class Level:
+    left: int = 0
+
+
+def take(n: int) -> int:
+    return n / 2  # dropped: return
+
+
+def take_optional(n: int | None = None) -> None:
+    print(n)
+
+
+def main() -> None:
+    length: int = 14
+    half = length / 2
+    count: int = half  # dropped: declaration
+    take(half)  # dropped: argument
+    take_optional(half)  # dropped: optional argument
+    level = Level()
+    level.left = half  # dropped: attribute
+    for _ in range(half):  # dropped: range() argument
+        pass
+    floats: list[float] = [1.0]
+    ints: list[int] = floats  # kept: container
+    name: int = "x"  # kept: not a number
+    items = [1, 2]
+    print(count, ints, name, items[half])  # kept: subscript
 `;
 
 const LIB_SCRIPT = `"""
@@ -134,6 +176,7 @@ async function main(): Promise<void> {
   fs.rmSync(workdir, { recursive: true, force: true });
 
   await checkPreciseFilter(serverModule);
+  await checkPineNumbers(serverModule);
   await checkPullDiagnostics(serverModule);
   await checkLibraryExports(serverModule);
   log('PYRIGHT SMOKE OK');
@@ -311,6 +354,55 @@ async function checkPreciseFilter(serverModule: string): Promise<void> {
     );
   }
   log(`Precise filter OK (3 raw index errors -> 1 real, spans: ${JSON.stringify(spans)})`);
+  fs.rmSync(workdir, { recursive: true, force: true });
+}
+
+/**
+ * Pine numbers: a float-typed number in an int slot is valid Pyne, so its
+ * assignability report is dropped by its reason chain, while a container
+ * mismatch, a non-number and a subscript index keep theirs.
+ */
+async function checkPineNumbers(serverModule: string): Promise<void> {
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-numbers-'));
+  ensurePyrightConfig(workdir);
+  const scriptPath = path.join(workdir, 'scripts', 'numbers.py');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, NUMBER_SCRIPT);
+  const scriptUri = pathToFileURL(scriptPath).toString();
+
+  const lines = NUMBER_SCRIPT.split('\n');
+  const marked = (tag: string): number[] =>
+    lines.flatMap((line, i) => (line.includes(`# ${tag}`) ? [i] : []));
+  const droppedLines = marked('dropped');
+  const keptLines = marked('kept');
+  const diag = await diagnose(
+    serverModule,
+    workdir,
+    scriptPath,
+    scriptUri,
+    NUMBER_SCRIPT,
+    (p) => new Set(p.diagnostics.map((d) => d.range.start.line)).size >= droppedLines.length
+  );
+  const rule = (d: PublishParams['diagnostics'][number]): string | undefined =>
+    typeof d.code === 'string' ? d.code : undefined;
+  const dropped = diag.diagnostics.filter((d) => isPineNumberReport(rule(d), d.message));
+  const kept = diag.diagnostics.filter((d) => !isPineNumberReport(rule(d), d.message));
+  const droppedAt = new Set(dropped.map((d) => d.range.start.line));
+  const keptAt = new Set(kept.map((d) => d.range.start.line));
+  const missing = droppedLines.filter((line) => !droppedAt.has(line));
+  const wrong = [...droppedAt].filter((line) => !droppedLines.includes(line));
+  const lost = keptLines.filter((line) => !keptAt.has(line));
+  if (missing.length || wrong.length || lost.length) {
+    throw new Error(
+      `Pine-number filter mismatch (not dropped: ${JSON.stringify(missing)}, ` +
+        `wrongly dropped: ${JSON.stringify(wrong)}, genuine lost: ${JSON.stringify(lost)}): ` +
+        JSON.stringify(diag.diagnostics.map((d) => [d.range.start.line, d.code, d.message]))
+    );
+  }
+  log(
+    `Pine numbers OK (${dropped.length} float-in-int reports dropped, ` +
+      `${kept.length} genuine kept)`
+  );
   fs.rmSync(workdir, { recursive: true, force: true });
 }
 
