@@ -211,6 +211,7 @@ tabPropertiesBtn.addEventListener('click', () => showTab('properties'));
 function render(payload: InputsPayload): void {
   specs = payload.inputs;
   titleEl.textContent = payload.script;
+  titleEl.title = payload.script;
   values.clear();
   for (const spec of specs) {
     const v = payload.values[spec.name];
@@ -287,7 +288,7 @@ function renderProperties(): void {
 function propertyRow(field: PropertyField): HTMLElement {
   const keys = [field.key, ...(field.unit && propValues.has(field.unit.key) ? [field.unit.key] : [])];
   const row = document.createElement('div');
-  row.className = 'field';
+  row.className = 'field property-field';
   const syncModified = (): void => {
     row.classList.toggle('modified', keys.some(isOverridden));
   };
@@ -300,8 +301,7 @@ function propertyRow(field: PropertyField): HTMLElement {
   const control = document.createElement('div');
   control.className = 'control';
   control.appendChild(propertyControl(field, syncModified));
-  if (field.kind !== 'bool') {
-    // A fixed-width slot after every number keeps the inputs aligned.
+  if (field.kind !== 'bool' && (field.suffix || (field.unit && propValues.has(field.unit.key)))) {
     const after = document.createElement('span');
     after.className = 'after';
     if (field.unit && propValues.has(field.unit.key)) {
@@ -548,7 +548,8 @@ function makeControl(spec: InputSpec): HTMLElement {
     num.id = id;
     if (spec.minval !== null) num.min = String(spec.minval);
     if (spec.maxval !== null) num.max = String(spec.maxval);
-    num.step = spec.step !== null ? String(spec.step) : spec.type === 'int' ? '1' : 'any';
+    // Pine's step is an increment, not HTML's grid anchored at minval.
+    num.step = 'any';
     num.value = current !== undefined ? String(current) : '';
     num.addEventListener('input', () => {
       const n = Number(num.value);
@@ -556,7 +557,68 @@ function makeControl(spec: InputSpec): HTMLElement {
         values.set(spec.name, spec.type === 'int' ? Math.trunc(n) : n);
       }
     });
-    return num;
+    const wrap = document.createElement('div');
+    wrap.className = 'numeric-input';
+    wrap.appendChild(num);
+    const stepper = document.createElement('div');
+    stepper.className = 'numeric-stepper';
+    const step = spec.step !== null && spec.step > 0 ? spec.step : 1;
+    const increment = (direction: number): void => {
+      const current = num.value.trim() === '' ? Number(spec.defval ?? 0) : num.valueAsNumber;
+      if (!Number.isFinite(current)) return;
+      // Use the browser's decimal stepping, with the CURRENT value as its
+      // base and no min/max grid. Clamp to the declared bounds afterwards.
+      const calculation = document.createElement('input');
+      calculation.type = 'number';
+      calculation.step = String(step);
+      calculation.setAttribute('value', String(current));
+      calculation.stepUp(direction);
+      let next = calculation.valueAsNumber;
+      if (spec.minval !== null) next = Math.max(spec.minval, next);
+      if (spec.maxval !== null) next = Math.min(spec.maxval, next);
+      if (!Number.isFinite(next)) return;
+      num.value = String(next);
+      num.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    num.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+      event.preventDefault();
+      increment(event.key === 'ArrowUp' ? 1 : -1);
+    });
+    for (const direction of [1, -1]) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = direction === 1 ? '▴' : '▾';
+      button.setAttribute('aria-label', `${direction === 1 ? 'Increase' : 'Decrease'} ${spec.title ?? spec.name}`);
+      let repeat: ReturnType<typeof setTimeout> | undefined;
+      const stop = (): void => {
+        clearTimeout(repeat);
+        repeat = undefined;
+      };
+      button.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        num.focus();
+        button.setPointerCapture(event.pointerId);
+        increment(direction);
+        const tick = (): void => {
+          if (!button.isConnected) { stop(); return; }
+          increment(direction);
+          repeat = setTimeout(tick, 75);
+        };
+        repeat = setTimeout(tick, 400);
+      });
+      button.addEventListener('pointerup', stop);
+      button.addEventListener('pointercancel', stop);
+      button.addEventListener('lostpointercapture', stop);
+      button.addEventListener('click', (event) => {
+        // Keyboard/assistive clicks have no pointerdown to apply the step.
+        if (event.detail === 0) increment(direction);
+      });
+      stepper.appendChild(button);
+    }
+    wrap.appendChild(stepper);
+    return wrap;
   }
 
   if (spec.type === 'color') {

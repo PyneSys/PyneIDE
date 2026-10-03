@@ -305,6 +305,8 @@ export class InputsViewManager {
     background: var(--vscode-editor-background);
     border-bottom: 1px solid var(--vscode-panel-border, #444); }
   #header { padding: 8px 0 10px; display: flex; align-items: center; gap: 12px; }
+  #actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+  #actions > button { white-space: nowrap; }
   #tabs { display: flex; gap: 2px; }
   #tabs[hidden] { display: none; }
   #tabs > button { background: none; color: var(--vscode-descriptionForeground);
@@ -313,15 +315,17 @@ export class InputsViewManager {
   #tabs > button:hover { background: none; color: var(--vscode-foreground); }
   #tabs > button[aria-selected=true] { color: var(--vscode-foreground);
     border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background)); }
-  #title { font-size: 14px; font-weight: 600; flex: 1 1 auto;
+  #title { font-size: 14px; font-weight: 600; flex: 1 1 auto; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #warning { color: var(--vscode-descriptionForeground); font-size: 12px; padding: 8px 0; }
   .group { margin-top: 16px; }
   .group > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--vscode-descriptionForeground); margin: 0 0 6px; font-weight: 600; }
-  .field { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
-  .field > label { flex: 0 0 44%; min-width: 0;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 18px;
+    align-items: center; gap: 8px; padding: 4px 0; }
+  .property-field { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 18px 18px;
+    align-items: start; }
+  .field > label { min-width: 0; overflow-wrap: anywhere; line-height: 1.4; }
   .help { flex: 0 0 18px; width: 18px; height: 18px; box-sizing: border-box;
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: 50%; border: 1px solid var(--vscode-descriptionForeground);
@@ -331,21 +335,23 @@ export class InputsViewManager {
   .help:hover { opacity: 1; color: var(--vscode-foreground);
     border-color: var(--vscode-foreground); }
   .help.empty { border: none; cursor: default; }
-  .tooltip-pop { position: fixed; z-index: 100; max-width: 320px;
+  .tooltip-pop { position: fixed; z-index: 100; max-width: min(320px, calc(100vw - 16px));
+    box-sizing: border-box;
     background: var(--vscode-editorHoverWidget-background, #252526);
     color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
     border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
     border-radius: 4px; padding: 8px 10px; font-size: 13px; line-height: 1.45;
     box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-  .field > .control { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; }
+  .control { min-width: 0; display: flex; flex: 1 1 auto; align-items: center; gap: 8px; }
   input[type=text], input[type=number], select {
-    width: 100%; box-sizing: border-box;
+    width: 100%; min-width: 0; box-sizing: border-box;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #444));
     border-radius: 2px; padding: 3px 6px; font-family: inherit; font-size: 12px;
   }
-  input[type=checkbox] { width: 16px; height: 16px; }
-  input[type=color] { width: 40px; height: 24px; padding: 0; border: none; background: none; }
+  input[type=checkbox] { width: 16px; height: 16px; margin: 0; flex: 0 0 16px; }
+  input[type=color] { width: 40px; height: 24px; flex: 0 0 40px;
+    padding: 0; border: none; background: none; }
   button {
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
     border: none; border-radius: 2px; padding: 5px 14px; cursor: pointer; font-size: 12px;
@@ -356,9 +362,25 @@ export class InputsViewManager {
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
     border: 1px solid var(--vscode-panel-border, #444);
   }
+  .numeric-input { position: relative; width: 100%; min-width: 0; }
+  .numeric-input > input { padding-right: 22px; appearance: textfield; }
+  .numeric-input > input::-webkit-inner-spin-button,
+  .numeric-input > input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .numeric-stepper { position: absolute; top: 1px; right: 1px; bottom: 1px;
+    display: flex; flex-direction: column; width: 18px; }
+  .numeric-stepper > button { flex: 1; min-height: 0; padding: 0; border-radius: 0;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    font-size: 10px; line-height: 1; }
+  .numeric-stepper > button:hover { background: var(--vscode-toolbar-hoverBackground, #444); }
   #empty { color: var(--vscode-descriptionForeground); padding: 24px 0; }
-  .after { flex: 0 0 140px; color: var(--vscode-descriptionForeground); font-size: 12px;
-    white-space: nowrap; }
+  .property-field > .control { flex-wrap: wrap; gap: 6px 8px; }
+  .property-field input[type=number] { flex: 1 1 5rem; min-width: min(5rem, 100%); }
+  .property-field input[type=checkbox] { margin-top: 3px; }
+  .after { flex: 0 1 auto; min-width: 0; max-width: 100%;
+    color: var(--vscode-descriptionForeground); font-size: 12px; }
+  .after select { width: auto; max-width: 100%; }
+  .property-field > label { align-self: start; padding-top: 2px; }
+  .property-field > .help, .property-field > .revert { align-self: start; margin-top: 2px; }
   .field.modified > label { font-weight: 600; }
   .field.modified > label::before { content: '●'; font-size: 8px; margin-right: 6px;
     vertical-align: middle; color: var(--vscode-focusBorder, var(--vscode-button-background)); }
@@ -367,6 +389,13 @@ export class InputsViewManager {
     visibility: hidden; }
   .revert:hover { background: none; color: var(--vscode-foreground); }
   .field.modified .revert { visibility: visible; }
+  @media (max-width: 600px) {
+    #root { padding: 8px 12px 40px; }
+    #header { flex-wrap: wrap; gap: 8px; }
+    #title { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+    #actions { margin-left: auto; }
+    .field { padding: 6px 0; }
+  }
 </style>
 </head>
 <body>
@@ -374,8 +403,10 @@ export class InputsViewManager {
   <div id="top">
     <div id="header">
       <div id="title">Loading…</div>
-      <button id="reset" class="secondary" type="button" hidden>Reset to defaults</button>
-      <button id="save" type="button" hidden>Save</button>
+      <div id="actions">
+        <button id="reset" class="secondary" type="button" hidden>Reset to defaults</button>
+        <button id="save" type="button" hidden>Save</button>
+      </div>
     </div>
     <div id="tabs" role="tablist" hidden>
       <button id="tab-inputs" type="button" role="tab" aria-selected="true">Inputs</button>
