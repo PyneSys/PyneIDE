@@ -267,7 +267,8 @@ const INFO_GROUPS: Group[] = [
     ],
   },
 ];
-const DAY_NAMES = ['', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// pynecore SymInfo schedule days are Python weekdays: 0=Mon … 6=Sun.
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function renderSymInfoPanel(meta: OhlcvMeta, recordCount: number): void {
   const groups: string[] = [];

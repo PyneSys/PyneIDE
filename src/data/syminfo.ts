@@ -25,7 +25,7 @@ export function parseSymbolSection(text: string): Record<string, string> {
 }
 
 /** One `[[opening_hours]]` row: an exchange-local trading interval on `day`
- * (Pine dayofweek: 1=Sun … 7=Sat). Times are "HH:MM:SS" strings. */
+ * (Python weekday: 0=Mon … 6=Sun). Times are "HH:MM:SS" strings. */
 export interface SymInfoInterval {
   day?: number;
   start?: string;
