@@ -10,6 +10,8 @@
  *  - with `preciseIndexFilter` the rule comes back, and the real analyzer
  *    worker + span matching drop exactly the series accesses, keeping the
  *    genuine index error.
+ *  - persistent state does not produce type-based unreachable hints, while
+ *    statically false conditions, structural dead code and type errors remain.
  * Usage: node dist/pyright-smoke.js
  */
 import { spawn } from 'node:child_process';
@@ -128,6 +130,28 @@ const PYNECORE_STUB = `from typing import TypeAlias, TypeVar
 
 T = TypeVar('T')
 Series: TypeAlias = T
+Persistent: TypeAlias = T
+`;
+
+const REACHABILITY_SCRIPT = `"""
+@pyne
+"""
+from pynecore import Persistent
+
+
+def main(aboveRange: bool, belowRange: bool) -> None:
+    breakoutSide: Persistent[int] = 0
+    startBreakout: bool = aboveRange and breakoutSide != 1 or (belowRange and breakoutSide != -1)
+    if startBreakout:
+        breakoutSide = 1 if aboveRange else -1
+    elif breakoutSide != 0:
+        print("pending breakout")
+    wrong: int = "not a number"
+    print(wrong)
+    if False:
+        print("constant false")
+    return
+    print("after return")
 `;
 
 const PYNECORE_LIB_STUB = `close: float = 0.0
@@ -139,6 +163,7 @@ interface PublishParams {
     code?: unknown;
     message: string;
     severity?: number;
+    tags?: number[];
     range: { start: { line: number; character: number }; end: { line: number; character: number } };
   }[];
 }
@@ -179,7 +204,63 @@ async function main(): Promise<void> {
   await checkPineNumbers(serverModule);
   await checkPullDiagnostics(serverModule);
   await checkLibraryExports(serverModule);
+  await checkReachability(serverModule);
   log('PYRIGHT SMOKE OK');
+}
+
+/** Persistent initialization is not a per-bar assignment; Python narrowing is unsound. */
+async function checkReachability(serverModule: string): Promise<void> {
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-reachability-'));
+  const configPath = path.join(workdir, 'pyrightconfig.json');
+  ensurePyrightConfig(workdir);
+  fs.mkdirSync(path.join(workdir, 'pynecore'), { recursive: true });
+  fs.writeFileSync(path.join(workdir, 'pynecore', '__init__.py'), PYNECORE_STUB);
+  const scriptPath = path.join(workdir, 'scripts', 'reachability.py');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, REACHABILITY_SCRIPT);
+  const scriptUri = pathToFileURL(scriptPath).toString();
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  if (config.enableReachabilityAnalysis !== false) {
+    throw new Error('new Pyne config enables unsound type-based reachability hints');
+  }
+  config.enableReachabilityAnalysis = true;
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const probe = (): Promise<PublishParams> =>
+    diagnose(
+      serverModule, workdir, scriptPath, scriptUri, REACHABILITY_SCRIPT,
+      (p) => p.diagnostics.some((d) => d.code === 'reportAssignmentType'),
+      { textDocument: { publishDiagnostics: { tagSupport: { valueSet: [1, 2] } } } }
+    );
+  const pendingLine = REACHABILITY_SCRIPT.split('\n').findIndex((line) =>
+    line.includes('print("pending breakout")')
+  );
+  const before = await probe();
+  if (!before.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line === pendingLine)) {
+    throw new Error(`persistent branch did not reproduce the false unreachable hint: ${JSON.stringify(before)}`);
+  }
+  if (!ensurePyrightConfig(workdir)) {
+    throw new Error('generated config did not reconcile reachability analysis');
+  }
+  if (ensurePyrightConfig(workdir)) {
+    throw new Error('reachability reconciliation is not idempotent');
+  }
+  const after = await probe();
+  if (after.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line === pendingLine)) {
+    throw new Error(`persistent branch is still dimmed: ${JSON.stringify(after)}`);
+  }
+  for (const marker of ['constant false', 'after return']) {
+    const line = REACHABILITY_SCRIPT.split('\n').findIndex((text) => text.includes(marker));
+    if (!after.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line === line)) {
+      throw new Error(`genuine unreachable code lost its hint: ${marker}`);
+    }
+  }
+  const userConfig = { typeCheckingMode: 'basic', enableReachabilityAnalysis: true };
+  fs.writeFileSync(configPath, JSON.stringify(userConfig));
+  if (ensurePyrightConfig(workdir) || fs.readFileSync(configPath, 'utf8') !== JSON.stringify(userConfig)) {
+    throw new Error('reachability reconciliation overwrote a user-authored config');
+  }
+  fs.rmSync(workdir, { recursive: true, force: true });
+  log('Reachability OK (persistent branch visible; constant/structural hints and type errors kept)');
 }
 
 /**
@@ -509,7 +590,8 @@ async function diagnose(
   scriptPath: string,
   scriptUri: string,
   text: string,
-  ready: (params: PublishParams) => boolean
+  ready: (params: PublishParams) => boolean,
+  capabilities: object = {}
 ): Promise<PublishParams> {
   const lsp = new LspStdio(process.execPath, [serverModule, '--stdio']);
   // workspaceFolders is what makes pyright 1.1.411 register the workspace and
@@ -519,7 +601,7 @@ async function diagnose(
     processId: process.pid,
     rootUri: pathToFileURL(workdir).toString(),
     workspaceFolders: [{ uri: pathToFileURL(workdir).toString(), name: 'smoke' }],
-    capabilities: {},
+    capabilities,
   })) as { capabilities?: { textDocumentSync?: unknown } };
   if (!init.capabilities?.textDocumentSync) {
     throw new Error(`lsp: missing capabilities: ${JSON.stringify(init)}`);

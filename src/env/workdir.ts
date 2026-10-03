@@ -162,6 +162,9 @@ const PYNEIDE_MARKER = 'PYNEIDE';
  *   blanket suppression.
  * - `basic` mode: Pylance's default is "off"; the cleaned-up pynecore stubs
  *   make basic-level checking actually usable on @pyne scripts.
+ * - Type-based reachability hints are disabled: Python narrows a
+ *   `Persistent[int] = 0` to zero, but Pyne restores its previous bar's value.
+ *   Structural dead code and statically false conditions keep their hints.
  * - `pythonVersion` is pinned because a type checker infers it from the
  *   interpreter the EDITOR selected, and PyneIDE's managed venv lives in
  *   globalStorage where Pylance never sees it. Left unpinned on a machine
@@ -172,6 +175,7 @@ const PYNEIDE_MARKER = 'PYNEIDE';
  */
 const PYRIGHT_CONFIG = {
   typeCheckingMode: 'basic',
+  enableReachabilityAnalysis: false,
   defineConstant: { TYPECHECKER: 'pyright', [PYNEIDE_MARKER]: true },
   reportIndexIssue: 'none',
   reportRedeclaration: 'none',
@@ -272,9 +276,10 @@ function applyVenv(
  * Ensure the generated `pyrightconfig.json` in `dir` is present and current.
  *
  * A missing config is written from the template. An existing config we
- * generated has its `extraPaths` and index-rule severity reconciled to the
- * provided options. A user-authored config — anything without our fingerprint
- * — is never touched. Returns true when the file was written or changed.
+ * generated has its reachability setting updated and its `extraPaths` and
+ * index-rule severity reconciled to the provided options. A user-authored
+ * config — anything without our fingerprint — is never touched. Returns true
+ * when the file was written or changed.
  *
  * Note: Pylance only reads the config at the workspace root, so callers pass
  * the workspace folder as well when the workdir is a subfolder.
@@ -294,14 +299,6 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
 
   if (fs.existsSync(configPath)) {
     const wantsExtraPaths = extraPaths !== undefined && extraPaths.length > 0;
-    if (
-      !wantsExtraPaths &&
-      indexRule === undefined &&
-      pythonVersion === undefined &&
-      opts.pythonBin === undefined
-    ) {
-      return false;
-    }
     let existing: unknown;
     try {
       existing = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -311,6 +308,10 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
     if (!isGeneratedConfig(existing)) return false;
     const config = existing as Record<string, unknown>;
     let changed = false;
+    if (config.enableReachabilityAnalysis !== false) {
+      config.enableReachabilityAnalysis = false;
+      changed = true;
+    }
     if (wantsExtraPaths) {
       const current = Array.isArray(config.extraPaths) ? config.extraPaths : undefined;
       if (!current || JSON.stringify(current) !== JSON.stringify(extraPaths)) {
