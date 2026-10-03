@@ -350,6 +350,33 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
 }
 
 /**
+ * The `[python]` block that keeps Pylance's "Switch to Default" prompt away
+ * from a workspace whose `python.languageServer` is "None" — see
+ * `writePylancePromptGuard` in typing/pyrightService.ts for why it works.
+ */
+export const PYTHON_LANGUAGE_BLOCK = '[python]';
+export const LANGUAGE_SERVER_SETTING = 'python.languageServer';
+export const PROMPT_GUARD_VALUE = 'Default';
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * `<projectDir>/.vscode/settings.json` as an object (empty when missing), or
+ * undefined when it exists but cannot be parsed (e.g. JSONC comments).
+ */
+function readProjectSettings(projectDir: string): Record<string, unknown> | undefined {
+  const settingsPath = path.join(projectDir, '.vscode', 'settings.json');
+  if (!fs.existsSync(settingsPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Merge `values` into `<projectDir>/.vscode/settings.json`. Used on the init
  * path that has no folder open yet, where the VSCode configuration API cannot
  * reach the project. Only keys the caller did not already set are added, so a
@@ -360,16 +387,15 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
 function addProjectSettings(projectDir: string, values: Record<string, unknown>): boolean {
   const vscodeDir = path.join(projectDir, '.vscode');
   const settingsPath = path.join(vscodeDir, 'settings.json');
-  let settings: Record<string, unknown> = {};
-  if (fs.existsSync(settingsPath)) {
-    try {
-      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-    } catch {
-      return false;
-    }
-  }
+  const settings = readProjectSettings(projectDir);
+  if (!settings) return false;
   for (const [key, value] of Object.entries(values)) {
+    const current = settings[key];
     if (!(key in settings)) settings[key] = value;
+    else if (isPlainObject(current) && isPlainObject(value)) {
+      // A `[python]`-style block the user already has: add only missing keys.
+      settings[key] = { ...value, ...current };
+    }
   }
   fs.mkdirSync(vscodeDir, { recursive: true });
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
@@ -385,7 +411,11 @@ function addProjectSettings(projectDir: string, values: Record<string, unknown>)
  */
 export function markProjectAsWorkdir(projectDir: string, takeOverAnalysis: boolean): boolean {
   const values: Record<string, unknown> = { 'pyneide.workdir': '.' };
-  if (takeOverAnalysis) values['python.languageServer'] = 'None';
+  // A language server the user already chose stays, and needs no guard.
+  if (takeOverAnalysis && !(LANGUAGE_SERVER_SETTING in (readProjectSettings(projectDir) ?? {}))) {
+    values[LANGUAGE_SERVER_SETTING] = 'None';
+    values[PYTHON_LANGUAGE_BLOCK] = { [LANGUAGE_SERVER_SETTING]: PROMPT_GUARD_VALUE };
+  }
   return addProjectSettings(projectDir, values);
 }
 

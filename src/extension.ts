@@ -50,7 +50,7 @@ import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
 import { SecurityStatusService } from './typing/securityStatus';
 import { PyneHoverProvider } from './typing/pyneHover';
-import { PYLANCE_EXTENSION, PyrightService, restorePythonAnalysis } from './typing/pyrightService';
+import { PYLANCE_EXTENSION, PyrightService, routeAnalysisToPyne } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
@@ -568,29 +568,23 @@ async function initialCheck(
  * Written once at workspace scope, and only from "Initialize Pyne Project" —
  * turning another extension off is intrusive enough that it must follow an
  * explicit request, never a guess about what kind of project this is. An
- * explicit workspace-level value the user set themselves — including switching
- * back to "Pylance" — is respected and never overwritten.
+ * explicit workspace-level value the user set themselves is respected and
+ * never overwritten. No undo button: a Pyne project gains nothing from
+ * Pylance, and a one-click way back would be clicked unread. Returns whether
+ * Pylance was turned off now, so the init message can say so.
  */
-async function takeOverPythonAnalysis(): Promise<void> {
-  if (!vscode.extensions.getExtension(PYLANCE_EXTENSION)) return;
+async function takeOverPythonAnalysis(): Promise<boolean> {
+  if (!vscode.extensions.getExtension(PYLANCE_EXTENSION)) return false;
   const config = vscode.workspace.getConfiguration('python');
-  if (config.get<string>('languageServer') === 'None') return;
-  if (config.inspect<string>('languageServer')?.workspaceValue !== undefined) return;
+  if (config.get<string>('languageServer') === 'None') return false;
+  if (config.inspect<string>('languageServer')?.workspaceValue !== undefined) return false;
   try {
-    await config.update('languageServer', 'None', vscode.ConfigurationTarget.Workspace);
+    await routeAnalysisToPyne();
   } catch {
     // No writable workspace (e.g. no folder open) — nothing to take over.
-    return;
+    return false;
   }
-  // The moment of the takeover is the moment anyone who did not want it will
-  // say so, so the undo goes here rather than in a settings instruction. Later
-  // on, the "Pyne typing off" language status offers the way back in.
-  const choice = await vscode.window.showInformationMessage(
-    'PyneIDE now provides Python analysis in this Pyne workspace instead of Pylance ' +
-      '("python.languageServer": "None" in workspace settings).',
-    'Keep Pylance'
-  );
-  if (choice === 'Keep Pylance') await restorePythonAnalysis();
+  return true;
 }
 
 /**
@@ -688,13 +682,18 @@ async function initProjectCommand(
       hideGeneratedFiles(folder.uri.fsPath);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       updateTerminalEnv(context, manager);
-      void takeOverPythonAnalysis();
+      const pylanceOff = await takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
       await vscode.window.showTextDocument(doc);
+      const done = result.created
+        ? `PyneIDE: Pyne project initialized at ${result.workdir}.`
+        : `PyneIDE: existing workdir completed at ${result.workdir} (nothing was overwritten).`;
       void vscode.window.showInformationMessage(
-        result.created
-          ? `PyneIDE: Pyne project initialized at ${result.workdir}`
-          : `PyneIDE: existing workdir completed at ${result.workdir} (nothing was overwritten)`
+        pylanceOff
+          ? `${done} Pylance is turned off in this workspace only, so PyneIDE can provide ` +
+              'Pyne-aware Python analysis. You can change "python.languageServer" in the ' +
+              'workspace settings, but it is not recommended.'
+          : done
       );
     } catch (err) {
       void vscode.window.showErrorMessage(

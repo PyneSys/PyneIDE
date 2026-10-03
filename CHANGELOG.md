@@ -77,9 +77,9 @@ First public preview. This is everything the initial preview ships with.
   go-to-definition, hover, signature help, and call-argument diagnostics.
 - **Python-analysis takeover**: initializing a Pyne project routes `.py`
   analysis to the bundled, Pyne-aware pyright setup instead of Pylance — in
-  workspace settings only, announced by a notification carrying a "Keep Pylance"
-  undo. Never a guess: an existing workspace choice of yours is left alone, and
-  "Use PyneIDE for Python Analysis" is there to ask for it later.
+  workspace settings only, noted in the "project initialized" message. Never a
+  guess: an existing workspace choice of yours is left alone, and "Use PyneIDE
+  for Python Analysis" is there to ask for it later.
 
 #### Pine → Pyne compilation
 

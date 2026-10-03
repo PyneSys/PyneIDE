@@ -13,7 +13,12 @@ import {
 } from 'vscode-languageclient/node';
 
 import type { EnvManager } from '../env/manager';
-import { ensurePyrightConfig } from '../env/workdir';
+import {
+  ensurePyrightConfig,
+  LANGUAGE_SERVER_SETTING,
+  PROMPT_GUARD_VALUE,
+  PYTHON_LANGUAGE_BLOCK,
+} from '../env/workdir';
 import { resolvePyneIdeWorkdir } from '../env/workdirConfig';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
 import { pyneAliasAt } from './pyneAlias';
@@ -778,28 +783,43 @@ function rewriteHoverPart(
  * operation — the client starts on the resulting change event.
  */
 async function usePyneAnalysis(): Promise<void> {
-  await writeLanguageServer('None', 'PyneIDE could not take over Python analysis');
-}
-
-/**
- * Hand Python analysis back. The workspace override is removed rather than set
- * to "Default": the user may have chosen a different server globally, and that
- * choice is theirs to keep.
- */
-export async function restorePythonAnalysis(): Promise<void> {
-  await writeLanguageServer(undefined, 'PyneIDE could not restore your Python analysis setting');
-}
-
-async function writeLanguageServer(value: string | undefined, failure: string): Promise<void> {
   try {
-    await vscode.workspace
-      .getConfiguration('python')
-      .update('languageServer', value, vscode.ConfigurationTarget.Workspace);
+    await routeAnalysisToPyne();
   } catch (err) {
     // No writable workspace — nothing to switch, and silence would look broken.
     const message = err instanceof Error ? err.message : String(err);
-    void vscode.window.showErrorMessage(`${failure}: ${message}`);
+    void vscode.window.showErrorMessage(`PyneIDE could not take over Python analysis: ${message}`);
   }
+}
+
+/**
+ * Set workspace `python.languageServer` to "None", Pylance prompt guard first:
+ * Pylance re-checks on every change event, and a guard over "Default" is
+ * inert. Throws when there is no writable workspace.
+ */
+export async function routeAnalysisToPyne(): Promise<void> {
+  await writePylancePromptGuard();
+  await vscode.workspace
+    .getConfiguration('python')
+    .update('languageServer', 'None', vscode.ConfigurationTarget.Workspace);
+}
+
+/**
+ * Pylance answers "None" with a "features are disabled — Switch to Default"
+ * toast that users click through, undoing the takeover. The toast reads the
+ * setting language-scoped (`{uri, languageId}`), while Pylance's on/off mode
+ * reads it unscoped, so a `[python]` block saying "Default" silences only the
+ * toast. The setting is not language-overridable: the API's `overrideInLanguage`
+ * refuses it, so the block is written as its own key (the settings editor
+ * dims it, VS Code still applies it). Should Pylance ever read its mode
+ * language-scoped, this guard would turn Pylance back on.
+ */
+async function writePylancePromptGuard(): Promise<void> {
+  const root = vscode.workspace.getConfiguration();
+  const block = { ...root.inspect<Record<string, unknown>>(PYTHON_LANGUAGE_BLOCK)?.workspaceValue };
+  if (block[LANGUAGE_SERVER_SETTING] === PROMPT_GUARD_VALUE) return;
+  block[LANGUAGE_SERVER_SETTING] = PROMPT_GUARD_VALUE;
+  await root.update(PYTHON_LANGUAGE_BLOCK, block, vscode.ConfigurationTarget.Workspace);
 }
 
 /** `$` is special in String.replace replacement patterns — make it literal. */
