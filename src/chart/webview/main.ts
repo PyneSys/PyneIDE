@@ -2224,6 +2224,7 @@ const tabPerformanceEl = document.getElementById('tab-performance');
 const tabTradesEl = document.getElementById('tab-trades');
 const tabStatsEl = document.getElementById('tab-stats');
 const tabToggleEl = document.getElementById('tab-toggle');
+const strategyPropertiesEl = document.getElementById('strategy-properties');
 const panelSplitterEl = document.getElementById('panel-splitter');
 let activeTab: 'performance' | 'trades' | 'stats' = 'trades';
 let bottomPanelHeight: number | undefined;
@@ -2466,6 +2467,7 @@ function renderTables(): void {
   tabTradesEl?.classList.toggle('active', activeTab === 'trades');
   tabStatsEl?.classList.toggle('active', activeTab === 'stats');
   if (tabPerformanceEl) tabPerformanceEl.hidden = state?.start.scriptType !== 'strategy';
+  if (strategyPropertiesEl) strategyPropertiesEl.hidden = state?.start.scriptType !== 'strategy';
   if (tabTradesEl && state) tabTradesEl.textContent = `Trades (${state.trades.length})`;
   if (bottomEl.classList.contains('collapsed')) return;
   tabBodyEl.innerHTML =
@@ -2496,6 +2498,7 @@ tabToggleEl?.addEventListener('click', () => {
   setCollapsed(!bottomEl?.classList.contains('collapsed'));
   renderTables();
 });
+strategyPropertiesEl?.addEventListener('click', () => vscode.postMessage({ type: 'editProperties' }));
 tabBodyEl?.addEventListener('click', (event) => {
   const row = (event.target as HTMLElement).closest('tr[data-ts]');
   const ts = row ? Number((row as HTMLElement).dataset.ts) : 0;

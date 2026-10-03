@@ -52,6 +52,7 @@ import { SecurityStatusService } from './typing/securityStatus';
 import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService, routeAnalysisToPyne } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
+import type { InputsTab } from './workspace/inputsMessages';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
@@ -223,7 +224,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(
     registerReportCommand(context, { context, manager, pineLs }, auth, compileOutput),
-    vscode.commands.registerCommand('pyneide.editInputs', async (arg?: { uri?: vscode.Uri } | vscode.Uri) => {
+    vscode.commands.registerCommand('pyneide.editInputs', async (
+      arg?: { uri?: vscode.Uri; tab?: InputsTab } | vscode.Uri
+    ) => {
       const explicitUri = arg instanceof vscode.Uri ? arg : arg?.uri;
       const explicitScript = explicitUri && /\.(?:pine|py)$/i.test(explicitUri.fsPath)
         ? explicitUri
@@ -231,7 +234,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const chartScript = chartManager.activeInputScriptPath();
       const target = explicitScript ?? (chartScript ? vscode.Uri.file(chartScript) : undefined);
       const uri = await editInputsUri(target, compileService);
-      if (uri) void inputsView.open(uri);
+      if (uri) void inputsView.open(uri, arg instanceof vscode.Uri ? undefined : arg?.tab);
     }),
     vscode.commands.registerCommand('pyneide.dataDownloadWizard', () =>
       openSymbolBrowser(context, manager, output)

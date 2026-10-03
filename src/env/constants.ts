@@ -7,7 +7,7 @@
 
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.10.2';
+export const PYNECORE_VERSION = '6.10.6';
 export const DEBUGPY_VERSION = '1.8.21';
 
 /**
@@ -19,7 +19,7 @@ export const DEBUGPY_VERSION = '1.8.21';
  * unconditionally) wrote through POSIX-only `os.pread`/`os.pwrite` before it, so
  * any OHLCV write died on Windows.
  */
-export const PYNECORE_MIN_VERSION = '6.10.2';
+export const PYNECORE_MIN_VERSION = '6.10.6';
 
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;

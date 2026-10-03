@@ -47,6 +47,7 @@ export type ChartInMessage =
 export type ChartOutMessage =
   | { type: 'ready' }
   | { type: 'openCsv'; which: 'plot' | 'trades' }
+  | { type: 'editProperties' }
   /** Toolbar pick: the host owns persistence, the webview only asks. */
   | { type: 'setCandleStyle'; style: CandleStyleId }
   | { type: 'setPriceScale'; scale: PriceScaleId }

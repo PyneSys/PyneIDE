@@ -108,7 +108,7 @@ export class ChartPanel {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    chartKey: string,
+    private readonly chartKey: string,
     private readonly onSelectData: () => void,
     private readonly onWebviewClosed?: () => void,
     private readonly onViewStateChanged?: (active: boolean) => void,
@@ -312,6 +312,12 @@ export class ChartPanel {
       }
       case 'selectData':
         this.onSelectData();
+        break;
+      case 'editProperties':
+        void vscode.commands.executeCommand('pyneide.editInputs', {
+          uri: vscode.Uri.file(this.chartKey),
+          tab: 'properties',
+        });
         break;
       case 'setCandleStyle':
         // The config change echoes back through ChartManager, which is what
@@ -838,6 +844,8 @@ export class ChartPanel {
     <button id="tab-trades" class="active">Trades</button>
     <button id="tab-stats">Stats</button>
     <span class="spacer"></span>
+    <button id="strategy-properties" title="Strategy properties: capital, order size, costs"
+            aria-label="Strategy properties" hidden>⚙</button>
     <button id="tab-toggle" title="Show/hide panel">▴</button>
   </div>
   <div class="tab-body" id="tab-body"></div>

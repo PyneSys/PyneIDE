@@ -1,9 +1,11 @@
 /**
  * The Pyne script input editor: a webview form for a script's `input.*()`
- * declarations. Metadata (type, title, defval, options, min/max/step, group,
- * tooltip) comes from the bridge's one-shot `--inspect-inputs` mode; current
- * values come from the sibling `<script>.toml` `[inputs.*]` sections and are
- * written back there on save, preserving the rest of the file.
+ * declarations and, for strategies, a Properties tab for the `[script]`
+ * settings (capital, order size, costs, fills). Metadata (type, title, defval,
+ * options, min/max/step, group, tooltip) and each setting's declared default
+ * come from the bridge's one-shot `--inspect-inputs` mode; current values come
+ * from the sibling `<script>.toml` and are written back there on save,
+ * preserving the rest of the file.
  */
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
@@ -13,7 +15,15 @@ import * as vscode from 'vscode';
 import { canonicalChartKey, openChartKeys } from '../chart/chartKey';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
-import type { InputSpec, InputsOutMessage, InputsPayload, InputValue } from './inputsMessages';
+import type {
+  InputSpec,
+  InputsInMessage,
+  InputsOutMessage,
+  InputsPayload,
+  InputsTab,
+  InputValue,
+  PropertyState,
+} from './inputsMessages';
 
 const VIEW_TYPE = 'pyneide.inputsForm';
 
@@ -21,6 +31,7 @@ interface InspectResult {
   inputs: InputSpec[];
   /** Current values, read back through pynecore's own toml loader. */
   values: Record<string, InputValue>;
+  properties: Record<string, PropertyState> | null;
   scriptType?: string;
   warning?: string | null;
 }
@@ -52,8 +63,9 @@ export class InputsViewManager {
     }
   }
 
-  /** Open (or reveal) the input form for a `.py` Pyne script. */
-  async open(scriptUri: vscode.Uri): Promise<void> {
+  /** Open (or reveal) the input form for a `.py` Pyne script, on `tab` when
+   * given (an indicator has no Properties tab and ignores it). */
+  async open(scriptUri: vscode.Uri, tab?: InputsTab): Promise<void> {
     const scriptPath = scriptUri.fsPath;
     const key = canonicalChartKey(scriptPath);
     // A `.pine` and its `.py` are one script, so the label is the shared stem
@@ -62,6 +74,7 @@ export class InputsViewManager {
     const existing = this.panels.get(key);
     if (existing) {
       existing.reveal();
+      if (tab) void existing.webview.postMessage({ type: 'showTab', tab } satisfies InputsInMessage);
       return;
     }
 
@@ -93,7 +106,7 @@ export class InputsViewManager {
     const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist');
     const panel = vscode.window.createWebviewPanel(
       VIEW_TYPE,
-      `Inputs: ${displayName}`,
+      `${inspect.properties ? 'Settings' : 'Inputs'}: ${displayName}`,
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [distRoot] }
     );
@@ -108,6 +121,8 @@ export class InputsViewManager {
       scriptType: inspect.scriptType,
       inputs: inspect.inputs,
       values,
+      properties: inspect.properties,
+      tab,
       warning: inspect.warning,
     };
 
@@ -115,11 +130,18 @@ export class InputsViewManager {
       if (msg.type === 'ready') {
         void panel.webview.postMessage({ type: 'data', payload });
       } else if (msg.type === 'save') {
-        this.writeInputs(pythonBin, bridgeRoot, workdir.path, scriptPath, msg.values)
+        this.writeInputs(pythonBin, bridgeRoot, workdir.path, scriptPath, msg.values, msg.properties)
           .then(() => {
+            // A reloaded webview replays the payload, so it must hold what was saved.
+            payload.values = msg.values;
+            for (const [name, value] of Object.entries(msg.properties ?? {})) {
+              const state = payload.properties?.[name];
+              if (state) state.value = value;
+            }
+            payload.tab = undefined;
             void panel.webview.postMessage({ type: 'saved' });
             void vscode.window.showInformationMessage(
-              `PyneIDE: saved inputs for ${displayName}.`
+              `PyneIDE: saved ${msg.properties ? 'settings' : 'inputs'} for ${displayName}.`
             );
             void this.onDidSave?.(key).catch((err: unknown) => {
               this.output.appendLine(
@@ -160,19 +182,22 @@ export class InputsViewManager {
     return {
       inputs,
       values,
+      properties: (event.properties as Record<string, PropertyState> | null) ?? null,
       scriptType: event.scriptType as string | undefined,
       warning: (event.warning as string | null) ?? null,
     };
   }
 
-  /** Persist input values through the bridge's canonical writer (pynecore's
-   * `Script.save`) — the IDE never generates a second toml format. */
+  /** Persist input values (and strategy properties) through the bridge's
+   * canonical writer (pynecore's `Script.save`) — the IDE never generates a
+   * second toml format. */
   private async writeInputs(
     pythonBin: string,
     bridgeRoot: string,
     workdir: string,
     scriptPath: string,
-    values: Record<string, InputValue>
+    values: Record<string, InputValue>,
+    properties: Record<string, InputValue> | undefined
   ): Promise<void> {
     await this.oneShot(
       pythonBin,
@@ -180,7 +205,7 @@ export class InputsViewManager {
       workdir,
       ['--write-inputs', scriptPath],
       'written',
-      { values }
+      { values, properties }
     );
   }
 
@@ -276,10 +301,18 @@ export class InputsViewManager {
     font-size: 13px;
   }
   #root { max-width: 720px; margin: 0 auto; padding: 12px 16px 80px; }
-  #header { position: sticky; top: 0; z-index: 2;
+  #top { position: sticky; top: 0; z-index: 2;
     background: var(--vscode-editor-background);
-    padding: 8px 0 10px; border-bottom: 1px solid var(--vscode-panel-border, #444);
-    display: flex; align-items: center; gap: 12px; }
+    border-bottom: 1px solid var(--vscode-panel-border, #444); }
+  #header { padding: 8px 0 10px; display: flex; align-items: center; gap: 12px; }
+  #tabs { display: flex; gap: 2px; }
+  #tabs[hidden] { display: none; }
+  #tabs > button { background: none; color: var(--vscode-descriptionForeground);
+    border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 4px 12px 6px; font-size: 12px; }
+  #tabs > button:hover { background: none; color: var(--vscode-foreground); }
+  #tabs > button[aria-selected=true] { color: var(--vscode-foreground);
+    border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background)); }
   #title { font-size: 14px; font-weight: 600; flex: 1 1 auto;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #warning { color: var(--vscode-descriptionForeground); font-size: 12px; padding: 8px 0; }
@@ -324,18 +357,37 @@ export class InputsViewManager {
     border: 1px solid var(--vscode-panel-border, #444);
   }
   #empty { color: var(--vscode-descriptionForeground); padding: 24px 0; }
+  .after { flex: 0 0 140px; color: var(--vscode-descriptionForeground); font-size: 12px;
+    white-space: nowrap; }
+  .field.modified > label { font-weight: 600; }
+  .field.modified > label::before { content: '●'; font-size: 8px; margin-right: 6px;
+    vertical-align: middle; color: var(--vscode-focusBorder, var(--vscode-button-background)); }
+  .revert { flex: 0 0 18px; width: 18px; height: 18px; padding: 0; line-height: 1;
+    background: none; color: var(--vscode-descriptionForeground); font-size: 16px;
+    visibility: hidden; }
+  .revert:hover { background: none; color: var(--vscode-foreground); }
+  .field.modified .revert { visibility: visible; }
 </style>
 </head>
 <body>
 <div id="root">
-  <div id="header">
-    <div id="title">Loading…</div>
-    <button id="reset" class="secondary" type="button" hidden>Reset to defaults</button>
-    <button id="save" type="button" hidden>Save</button>
+  <div id="top">
+    <div id="header">
+      <div id="title">Loading…</div>
+      <button id="reset" class="secondary" type="button" hidden>Reset to defaults</button>
+      <button id="save" type="button" hidden>Save</button>
+    </div>
+    <div id="tabs" role="tablist" hidden>
+      <button id="tab-inputs" type="button" role="tab" aria-selected="true">Inputs</button>
+      <button id="tab-properties" type="button" role="tab" aria-selected="false">Properties</button>
+    </div>
   </div>
   <div id="warning" hidden></div>
-  <div id="fields"></div>
-  <div id="empty" hidden>This script declares no inputs.</div>
+  <div id="inputs-pane" role="tabpanel">
+    <div id="fields"></div>
+    <div id="empty" hidden>This script declares no inputs.</div>
+  </div>
+  <div id="properties-pane" role="tabpanel" hidden></div>
 </div>
 <script src="${scriptUri}"></script>
 </body>

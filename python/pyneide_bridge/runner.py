@@ -379,23 +379,37 @@ def inspect_inputs(args: Any, emitter: Emitter) -> int:
         _serialize_input(name, data, _old_input_values.get(name, _MISSING))
         for name, data in inputs.items() if name
     ]
+    script_type = _script_type_name(script_obj)
     emitter.emit({
         "e": "inputs",
         "script": str(script),
-        "scriptType": _script_type_name(script_obj),
+        "scriptType": script_type,
         "inputs": serialized,
+        "properties": _serialize_properties(script_obj) if script_type == "strategy" else None,
         "warning": warning,
     })
     return 0
 
 
+def _serialize_properties(script_obj: Any) -> dict[str, dict[str, Any]]:
+    """Every ``[script]`` setting of a strategy with the value the script itself
+    declares (``default``) and the one in effect after the toml (``value``) — the
+    form picks the fields it shows, and an override is just ``value != default``."""
+    return {
+        key: {"default": sanitize(script_obj.default(key)), "value": sanitize(getattr(script_obj, key))}
+        for key in script_obj.settable_fields()
+    }
+
+
 def write_inputs(args: Any, emitter: Emitter) -> int:
-    """Persist input values to the sibling ``<script>.toml`` through pynecore's
-    CANONICAL writer (``Script.save``), so the IDE never emits a second toml
-    format. Values arrive as a JSON object ``{name: value}`` on stdin; they are
-    fed in as pynecore ``_programmatic_inputs`` before importing the script, so
-    the ``@script`` decorator loads any existing toml, overlays these values,
-    and writes the full self-documenting toml (metadata comments + ``value``).
+    """Persist input values (and strategy properties) to the sibling
+    ``<script>.toml`` through pynecore's CANONICAL writer (``Script.save``), so
+    the IDE never emits a second toml format. A JSON object ``{"values": {name:
+    value}, "properties": {setting: value}}`` arrives on stdin; both are passed
+    to pynecore's ``import_script(inputs=..., settings=..., save_overrides=True)``,
+    so the ``@script`` decorator loads any existing toml, overlays them, and
+    writes the full self-documenting toml. A property equal
+    to the script's own declaration is no override and is written commented out.
 
     Only indicator/strategy scripts persist a toml (pynecore's rule); a library
     import writes nothing and reports it so the IDE can surface that.
@@ -403,7 +417,6 @@ def write_inputs(args: Any, emitter: Emitter) -> int:
     import json
     import os
 
-    from pynecore.core.script import _programmatic_inputs
     from pynecore.core.script_runner import import_script
 
     workdir = Path(args.workdir).resolve()
@@ -416,12 +429,11 @@ def write_inputs(args: Any, emitter: Emitter) -> int:
     raw = sys.stdin.read() or "{}"
     payload = json.loads(raw)
     values = payload.get("values", payload) if isinstance(payload, dict) else {}
+    properties = (payload.get("properties") or {}) if isinstance(payload, dict) else {}
 
-    _programmatic_inputs.clear()
-    _programmatic_inputs.update(values)
     os.environ["PYNE_SAVE_SCRIPT_TOML"] = "1"
 
-    module = import_script(script)
+    module = import_script(script, inputs=values, settings=properties, save_overrides=True)
     main = getattr(module, "main", None)
     script_obj = getattr(main, "script", None)
     script_type = _script_type_name(script_obj) if script_obj is not None else None
@@ -823,7 +835,8 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
     if chart_breakpoints:
         runner.ohlcv_iter = _chart_breakpoint_iter(
             runner.ohlcv_iter, emitter, control)
-    gen = runner.run_iter()
+    # Every bar's plot_data is read before the next one: no per-bar copy needed
+    gen = runner.run_iter(copy_results=False)
     try:
         for item in gen:
             if control.idle:

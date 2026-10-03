@@ -24,6 +24,17 @@ export interface InputSpec {
 /** A form field value, in the toml's scalar space. */
 export type InputValue = string | number | boolean;
 
+/** A strategy setting (a `[script]` toml field): the value the script itself
+ * declares and the one in effect after the toml. `value !== default` is an
+ * override. */
+export interface PropertyState {
+  default: InputValue | null;
+  value: InputValue | null;
+}
+
+/** The form's tabs; `properties` exists for strategies only. */
+export type InputsTab = 'inputs' | 'properties';
+
 export interface InputsPayload {
   /** Display name of the script (basename). */
   script: string;
@@ -31,15 +42,25 @@ export interface InputsPayload {
   inputs: InputSpec[];
   /** Current values from the sibling toml, keyed by input name. */
   values: Record<string, InputValue>;
+  /** Strategy settings keyed by `[script]` field name; absent for indicators. */
+  properties?: Record<string, PropertyState> | null;
+  /** The tab to show first. */
+  tab?: InputsTab;
   /** Non-fatal note (e.g. no inputs collected). */
   warning?: string | null;
 }
 
 export type InputsInMessage =
   | { type: 'data'; payload: InputsPayload }
+  | { type: 'showTab'; tab: InputsTab }
   | { type: 'saved' }
   | { type: 'error'; message: string };
 
 export type InputsOutMessage =
   | { type: 'ready' }
-  | { type: 'save'; values: Record<string, InputValue> };
+  | {
+      type: 'save';
+      values: Record<string, InputValue>;
+      /** Strategy settings shown in the form; one equal to its default is no override. */
+      properties?: Record<string, InputValue>;
+    };

@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **PyneCore pin 6.7.0 → 6.10.2.** The managed environment installs the newer
+- **PyneCore pin 6.7.0 → 6.10.6.** The managed environment installs the newer
   release, and an own install older than it is no longer accepted: 6.7.x wrote
   the v2 OHLCV format through POSIX-only `os.pread`/`os.pwrite`, so every data
   download and the demo data generator failed on Windows. The debugger follows
