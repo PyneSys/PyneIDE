@@ -40,6 +40,7 @@ from pynecore.core.config import ensure_config
 from pynecore.core.download_info import read_download_provider
 from pynecore.core.download_runner import (DownloadProgress, DownloadPlan,
                                            download_to_file)
+from pynecore.core.ohlcv import OHLCVReader
 from pynecore.core.provider_string import parse_provider_string
 from pynecore.core.plugin import (ProviderPlugin, discover_plugins,
                                    get_plugin_metadata, get_plugin_summary,
@@ -407,6 +408,9 @@ class ProviderService:
             full_symbol = f"{broker}:{symbol}" if broker else symbol
             inst = provider_class(symbol=full_symbol, timeframe=timeframe,
                                   ohlcv_dir=self.data_dir, config=config)
+            if not truncate and isinstance(time_from, datetime) \
+                    and self._file_starts_at(inst.ohlcv_path, time_from):
+                time_from = "continue"
 
             def on_start(plan: DownloadPlan) -> None:
                 self.emitter.emit({
@@ -457,6 +461,25 @@ class ProviderService:
         finally:
             with self._lock:
                 self._download_id = None
+
+    @staticmethod
+    def _file_starts_at(ohlcv_path: Path | None, time_from: datetime) -> bool:
+        """Does the existing ``.ohlcv`` file begin exactly at ``time_from``?
+
+        Then a repeat download from the same start date (typically after an
+        interrupted one) holds nothing new before the file's end, so it can
+        resume from there instead of re-fetching the stored range only for
+        ``save_ohlcv_data`` to drop it.
+
+        :param ohlcv_path: The download target, or None if the provider has none.
+        :param time_from: The requested start date.
+        :return: True if the file exists and its first bar is at ``time_from``.
+        """
+        if ohlcv_path is None or not ohlcv_path.exists():
+            return False
+        with OHLCVReader(ohlcv_path) as reader:
+            start_ts = reader.start_timestamp
+        return start_ts is not None and start_ts == int(time_from.timestamp() * 1000)
 
     @staticmethod
     def _parse_from(value: Any) -> datetime | str:
