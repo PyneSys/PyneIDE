@@ -49,6 +49,7 @@ Response ``{"id": N, "ok": true, "spans": [[line, col, endCol], ...],
             "problems": [[line, col, endCol, "code", "message"], ...],
             "overloads": [[line, col, endCol], ...],
             "exports": [[line, col, endCol], ...],
+            "usedParameters": [[line, col, endCol], ...],
             "securityCalls": [{"line", "col", "endCol", "symbol", "timeframe",
                                "isLtf", "dynamic"}, ...]}``
          ``{"id": N, "ok": false, "error": "..."}`` on unparsable source.
@@ -68,6 +69,7 @@ import ast
 import json
 import re
 import sys
+import symtable
 from typing import Any, Iterable
 
 try:
@@ -1149,6 +1151,57 @@ def _exported_def_spans(tree: ast.Module,
     return sorted(set(spans))
 
 
+def _used_parameter_spans(tree: ast.Module, source: str,
+                          columns: _Utf16Columns) -> list[tuple[int, int, int]]:
+    """Parameter reads in any branch, resolved with Python's lexical scopes.
+
+    Pyright ignores reads in branches it considers unreachable. Pyne's
+    persistent state makes that inference unsound; the symbol table retains
+    those reads and distinguishes them from same-named inner bindings.
+    """
+    tables: dict[tuple[str, int], Any] = {}
+
+    def collect(table: Any) -> None:
+        if table.get_type() == 'function':
+            tables[(table.get_name(), table.get_lineno())] = table
+        for child in table.get_children():
+            collect(child)
+
+    def referenced(table: Any, name: str) -> bool:
+        if table.lookup(name).is_referenced():
+            return True
+        for child in table.get_children():
+            try:
+                symbol = child.lookup(name)
+            except KeyError:
+                continue
+            if symbol.is_free() and referenced(child, name):
+                return True
+        return False
+
+    try:
+        collect(symtable.symtable(source, '<pyne>', 'exec'))
+    except SyntaxError:
+        return []
+    spans = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        table = tables.get((node.name, node.lineno))
+        if table is None:
+            continue
+        args = node.args
+        for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs,
+                    *([args.vararg] if args.vararg else []),
+                    *([args.kwarg] if args.kwarg else [])]:
+            if referenced(table, arg.arg):
+                line = arg.lineno - 1
+                start = columns.convert(line, arg.col_offset)
+                end = start + len(arg.arg.encode('utf-16-le')) // 2
+                spans.append((line, start, end))
+    return sorted(spans)
+
+
 def analyze(source: str) -> dict[str, Any]:
     """Analyze Pyne source: series spans/references plus checker problems."""
     tree = ast.parse(source)
@@ -1174,6 +1227,7 @@ def analyze(source: str) -> dict[str, Any]:
         'problems': [list(problem) for problem in problems],
         'overloads': [list(span) for span in _overload_def_spans(tree, columns)],
         'exports': [list(span) for span in _exported_def_spans(tree, columns)],
+        'usedParameters': [list(span) for span in _used_parameter_spans(tree, source, columns)],
         'securityCalls': analyzer.security_calls,
     }
 

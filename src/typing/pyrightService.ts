@@ -86,6 +86,9 @@ type PyrightStatus =
  *   Python files keep the rule untouched. The same analyzer removes
  *   `reportUnusedFunction` only from library API defs linked by `__all__` or
  *   PyneCore's runtime `@export`; dead internal helpers remain visible.
+ * - unused-parameter hints: source-level scope analysis retains reads in
+ *   branches Python narrowing incorrectly skips for persistent Pyne state.
+ *   Only parameters with an actual read lose their unused hint.
  * - provideHover: puts the declared `Series[...]` back into hovers, which the
  *   transparent alias otherwise renders as the bare element type — both for a
  *   variable declared with one and for the alias name itself, which resolves
@@ -647,8 +650,17 @@ function dropPineNumberReports(diagnostics: vscode.Diagnostic[]): vscode.Diagnos
 function needsAnalysis(diagnostics: vscode.Diagnostic[]): boolean {
   return diagnostics.some((diagnostic) => {
     const rule = diagnosticRule(diagnostic);
-    return rule !== undefined && FILTERED_RULES.has(rule);
+    return (rule !== undefined && FILTERED_RULES.has(rule)) || isUnusedHint(diagnostic);
   });
+}
+
+/** Pyright's unused-parameter hints carry a tag but no rule code. */
+function isUnusedHint(diagnostic: vscode.Diagnostic): boolean {
+  return (
+    diagnosticRule(diagnostic) === undefined &&
+    diagnostic.severity === vscode.DiagnosticSeverity.Hint &&
+    diagnostic.tags?.includes(vscode.DiagnosticTag.Unnecessary) === true
+  );
 }
 
 function dropUnavailableRules(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
@@ -666,7 +678,8 @@ function syntaxOnly(diagnostics: vscode.Diagnostic[]): vscode.Diagnostic[] {
 /**
  * Keep index errors whose base is not a series access, redeclarations that are
  * not pynecore `@overload` implementations, and unused-function reports that
- * are not attached to a public library export.
+ * are not attached to a public library export. Unused-parameter hints survive
+ * only when the parameter has no source-level read in its lexical scope.
  */
 function applySeriesAnalysis(
   diagnostics: vscode.Diagnostic[],
@@ -677,10 +690,17 @@ function applySeriesAnalysis(
   const index = seriesSpanIndex(analysis.spans);
   const overloads = seriesSpanIndex(analysis.overloads);
   const exports = seriesSpanIndex(analysis.exports);
+  const usedParameters = seriesSpanIndex(analysis.usedParameters);
   const kept: vscode.Diagnostic[] = [];
   for (const diagnostic of diagnostics) {
     const rule = diagnosticRule(diagnostic);
     const { start, end } = diagnostic.range;
+    if (
+      isUnusedHint(diagnostic) && start.line === end.line &&
+      isExactSpan(usedParameters, start.line, start.character, end.character)
+    ) {
+      continue;
+    }
     if (rule === UNUSED_FUNCTION_RULE) {
       if (
         start.line === end.line &&

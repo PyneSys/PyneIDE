@@ -52,6 +52,30 @@ async function main(): Promise<void> {
     assert((valid.refs ?? []).length > 0, `valid: expected non-empty refs, got ${JSON.stringify(valid.refs)}`);
     log('valid OK');
 
+    const parameterSource = HEAD + `def main(
+    rewardRisk: float = 2.0,
+    unused: float = 1.0,
+    shadowed: float = 0.0,
+    captured: float = 3.0,
+    π: float = 1.0,
+):
+    if False:
+        print(rewardRisk, π)
+    def helper(shadowed):
+        return shadowed + captured
+    print(helper(1), [shadowed for shadowed in range(2)])
+`;
+    const parameters = await worker.request(parameterSource);
+    assert(parameters.ok, 'used-parameters: analyzer failed');
+    const parameterNames = (parameters.usedParameters ?? []).map(([line, start, end]) =>
+      parameterSource.split('\n')[line].slice(start, end)
+    );
+    assert(
+      JSON.stringify(parameterNames) === JSON.stringify(['rewardRisk', 'captured', 'π', 'shadowed']),
+      `used-parameters: closure/shadowing/UTF-16 mismatch: ${JSON.stringify(parameterNames)}`
+    );
+    log('used-parameters OK (dead-branch reads, closures, shadowing, annotated Unicode names)');
+
     // --- missing main: one pyne-main-missing anchored on line 0 --------------
     const missing = await worker.request(HEAD + 'def helper():\n    pass\n');
     expectCodes(missing, ['pyne-main-missing'], 'missing-main');

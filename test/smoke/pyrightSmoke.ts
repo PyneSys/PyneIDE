@@ -139,12 +139,15 @@ const REACHABILITY_SCRIPT = `"""
 from pynecore import Persistent
 
 
-def main(aboveRange: bool, belowRange: bool) -> None:
+def main(aboveRange: bool, belowRange: bool, rewardRisk=2.0, unused=1.0) -> None:
     breakoutSide: Persistent[int] = 0
+    activeTarget: Persistent[float] = 0.0
     startBreakout: bool = aboveRange and breakoutSide != 1 or (belowRange and breakoutSide != -1)
     if startBreakout:
         breakoutSide = 1 if aboveRange else -1
     elif breakoutSide != 0:
+        isLong: bool = breakoutSide == -1
+        activeTarget = 100.0 + rewardRisk if isLong else 100.0 - rewardRisk
         print("pending breakout")
     wrong: int = "not a number"
     print(wrong)
@@ -232,10 +235,10 @@ async function checkReachability(serverModule: string): Promise<void> {
       { textDocument: { publishDiagnostics: { tagSupport: { valueSet: [1, 2] } } } }
     );
   const pendingLine = REACHABILITY_SCRIPT.split('\n').findIndex((line) =>
-    line.includes('print("pending breakout")')
+    line.includes('print("pending breakout"')
   );
   const before = await probe();
-  if (!before.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line === pendingLine)) {
+  if (!before.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line <= pendingLine && d.range.end.line >= pendingLine)) {
     throw new Error(`persistent branch did not reproduce the false unreachable hint: ${JSON.stringify(before)}`);
   }
   if (!ensurePyrightConfig(workdir)) {
@@ -245,6 +248,21 @@ async function checkReachability(serverModule: string): Promise<void> {
     throw new Error('reachability reconciliation is not idempotent');
   }
   const after = await probe();
+  const usedParameters = seriesSpanIndex((await analyzeSource(REACHABILITY_SCRIPT)).usedParameters);
+  const unusedHints = after.diagnostics.filter((d) => d.code === undefined && d.severity === 4 && d.tags?.includes(1));
+  const lines = REACHABILITY_SCRIPT.split('\n');
+  const nameOf = (d: PublishParams['diagnostics'][number]): string =>
+    lines[d.range.start.line].slice(d.range.start.character, d.range.end.character);
+  if (!unusedHints.some((d) => nameOf(d) === 'rewardRisk')) {
+    throw new Error(`missing reproduction of the false unused-parameter hint: ${JSON.stringify(after)}`);
+  }
+  const keptHints = unusedHints.filter((d) =>
+    d.range.start.line !== d.range.end.line ||
+    !isExactSpan(usedParameters, d.range.start.line, d.range.start.character, d.range.end.character)
+  );
+  if (keptHints.some((d) => nameOf(d) === 'rewardRisk') || !keptHints.some((d) => nameOf(d) === 'unused')) {
+    throw new Error(`used-parameter filter kept the wrong hints: ${JSON.stringify(keptHints)}`);
+  }
   if (after.diagnostics.some((d) => d.tags?.includes(1) && d.range.start.line === pendingLine)) {
     throw new Error(`persistent branch is still dimmed: ${JSON.stringify(after)}`);
   }
@@ -260,7 +278,7 @@ async function checkReachability(serverModule: string): Promise<void> {
     throw new Error('reachability reconciliation overwrote a user-authored config');
   }
   fs.rmSync(workdir, { recursive: true, force: true });
-  log('Reachability OK (persistent branch visible; constant/structural hints and type errors kept)');
+  log('Reachability OK (persistent branch and used parameter visible; genuine unused/static/structural hints and type errors kept)');
 }
 
 /**
@@ -546,7 +564,7 @@ async function analyzeSpans(source: string): Promise<Span[]> {
 }
 
 /** Drive the real analyzer worker over one source. */
-function analyzeSource(source: string): Promise<{ spans: Span[]; exports: Span[] }> {
+function analyzeSource(source: string): Promise<{ spans: Span[]; exports: Span[]; usedParameters: Span[] }> {
   const script = path.resolve('python/pyneide_series.py');
   return new Promise((resolve, reject) => {
     const python = process.platform === 'win32' ? 'python' : 'python3';
@@ -568,9 +586,10 @@ function analyzeSource(source: string): Promise<{ spans: Span[]; exports: Span[]
         ok?: boolean;
         spans?: Span[];
         exports?: Span[];
+        usedParameters?: Span[];
       };
       if (!response.ok) reject(new Error(`series analyzer failed: ${out.slice(0, newline)}`));
-      else resolve({ spans: response.spans ?? [], exports: response.exports ?? [] });
+      else resolve({ spans: response.spans ?? [], exports: response.exports ?? [], usedParameters: response.usedParameters ?? [] });
     });
     worker.stderr.on('data', (chunk: Buffer) => {
       err += chunk.toString();

@@ -59,6 +59,8 @@ export interface SeriesAnalysis {
    * pynecore's runtime `@export` decorator.
    */
   exports: Span[];
+  /** Parameters referenced in source, including type-narrowed-away branches. */
+  usedParameters: Span[];
   /** `request.security()` call sites for the data-requirement diagnostics. */
   securityCalls: SecurityCall[];
 }
@@ -81,6 +83,7 @@ interface WorkerResponse {
   problems?: [number, number, number, string, string][];
   overloads?: Span[];
   exports?: Span[];
+  usedParameters?: Span[];
   securityCalls?: SecurityCall[];
   error?: string;
 }
@@ -287,6 +290,7 @@ export class SeriesAnalyzer implements vscode.Disposable {
       })),
       overloads: response.overloads ?? [],
       exports: response.exports ?? [],
+      usedParameters: response.usedParameters ?? [],
       securityCalls: response.securityCalls ?? [],
     });
   }
