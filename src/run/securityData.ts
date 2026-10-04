@@ -2,10 +2,11 @@
  * Run-time resolution of a script's `request.security()` data requirements.
  *
  * The core (pynecore) already resolves everything it can — the chart's own
- * feed, same-symbol coarser timeframes (resampled from the chart data), and any
+ * feed, same-symbol coarser intraday timeframes, and any
  * cross-symbol requirement that hits the global `config/symbol_map.toml` and
  * whose derived `.ohlcv` exists. This layer only asks the user about the
- * REMAINDER: unresolved cross-symbol feeds. Each gets a chained QuickPick of
+ * REMAINDER: feeds needing separate data. Same-symbol files are matched by
+ * instrument metadata and timeframe; unresolved feeds get a QuickPick of
  * candidate `.ohlcv` files (ticker-matching suggestions ranked first), a
  * Download entry, and a Skip / Run-anyway escape.
  *
@@ -46,6 +47,7 @@ export interface SecurityRequirementItem {
   ignoreInvalidSymbol: boolean;
   fromLibrary: boolean;
   hasSecurityMapping: boolean;
+  derivedFromChart?: boolean;
   hasGlobalMap: boolean;
   mappedProvider: string | null;
   mappedNativeSymbol: string | null;
@@ -87,6 +89,7 @@ type Choice =
 
 interface FileMeta {
   label: string;
+  symbol?: string;
   /** Provider-qualified native symbol (the `[download]` string minus `@TF`). */
   nativeProvider?: string;
   period?: string;
@@ -162,7 +165,7 @@ export class SecurityDataService {
   }
 
   /**
-   * Resolve the unresolved cross-symbol requirements. Prompts only for what the
+   * Resolve requirements needing separate data. Prompts only for what the
    * core cannot resolve; returns the explicit `--security` args (if any), and
    * signals cancellation (abort the run) or unsupported (caller warns once).
    */
@@ -189,11 +192,16 @@ export class SecurityDataService {
     let mapWritten = false;
     let changed = false;
 
-    for (const req of inspection.crossSymbol) {
+    for (const req of [...inspection.sameSymbolOtherTf, ...inspection.crossSymbol]) {
       if (req.symbol == null || req.timeframe == null) continue;
+      const sameSymbol = inspection.sameSymbolOtherTf.includes(req);
+      if (sameSymbol && (req.derivedFromChart ?? (
+        !req.isLtf && /^\d+S?$/.test(req.timeframe) &&
+        timeframeSeconds(req.timeframe) >= timeframeSeconds(inspection.chartTf ?? '')
+      ))) continue;
       // Core resolves a mapped-and-present feed on its own (config_dir is passed
       // to the run), so no arg — and no prompt — is needed.
-      if (req.hasGlobalMap && req.mappedFileExists) continue;
+      if (!sameSymbol && req.hasGlobalMap && req.mappedFileExists) continue;
 
       const secKey = `${req.symbol}:${req.timeframe}`;
       const remembered = overrides[secKey];
@@ -202,7 +210,12 @@ export class SecurityDataService {
         continue;
       }
 
-      const choice = await this.promptForRequirement(opts.workdir, req);
+      const automatic = sameSymbol
+        ? this.findSameSymbolFile(opts.workdir, opts.dataStem, req.timeframe)
+        : undefined;
+      const choice: Choice = automatic
+        ? { kind: 'file', stem: automatic }
+        : await this.promptForRequirement(opts.workdir, req);
       if (choice.kind === 'cancel') return { security: [], cancelled: true, unsupported: false };
       if (choice.kind === 'download') {
         this.launchDownload(req, opts.workdir, opts.chartKey);
@@ -215,7 +228,7 @@ export class SecurityDataService {
       // Prefer a persistent symbol_map.toml entry (CLI benefits too) when the
       // file names its origin provider AND its timeframe matches the request —
       // only then does the core's get_ohlcv_path derivation land on this file.
-      if (meta.nativeProvider && meta.period && meta.period === req.timeframe) {
+      if (!sameSymbol && meta.nativeProvider && meta.period && meta.period === req.timeframe) {
         writeSymbolMapEntry(opts.workdir, req.symbol, meta.nativeProvider);
         this.output.appendLine(`symbol_map: "${req.symbol}" -> "${meta.nativeProvider}"`);
         mapWritten = true;
@@ -224,8 +237,10 @@ export class SecurityDataService {
         // Manual / import data with no provider (or a TF mismatch): pass it
         // explicitly for this run and remember it so re-runs stay silent.
         security.push(`${secKey}=${stem}`);
-        this.rememberOverride(opts.chartKey, secKey, stem);
-        changed = true;
+        if (!automatic) {
+          this.rememberOverride(opts.chartKey, secKey, stem);
+          changed = true;
+        }
       }
     }
 
@@ -382,6 +397,21 @@ export class SecurityDataService {
     return fs.existsSync(path.join(workdir, 'data', `${stem}.ohlcv`));
   }
 
+  private findSameSymbolFile(workdir: string, dataStem: string, timeframe: string): string | undefined {
+    const chart = this.readFileMeta(workdir, dataStem);
+    const matches = this.listOhlcv(path.join(workdir, 'data')).filter((stem) => {
+      const meta = this.readFileMeta(workdir, stem);
+      if (normalizeTimeframe(meta.period ?? '') !== normalizeTimeframe(timeframe)) return false;
+      // Provider identity takes precedence: display prefixes can differ from
+      // the download venue (for example BATS:NVDA versus NASDAQ:NVDA).
+      if (chart.nativeProvider && meta.nativeProvider) {
+        return chart.nativeProvider === meta.nativeProvider;
+      }
+      return !!chart.symbol && chart.symbol === meta.symbol;
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
   private readFileMeta(workdir: string, stem: string): FileMeta {
     try {
       const text = fs.readFileSync(path.join(workdir, 'data', `${stem}.toml`), 'utf8');
@@ -398,7 +428,7 @@ export class SecurityDataService {
         const at = info.provider.lastIndexOf('@');
         nativeProvider = at > 0 ? info.provider.slice(0, at) : info.provider;
       }
-      return { label, nativeProvider, period };
+      return { label, nativeProvider, period, symbol: prefix && ticker ? `${prefix}:${ticker}` : undefined };
     } catch {
       return { label: stem };
     }
@@ -500,6 +530,7 @@ function normalizeReq(r: Record<string, unknown>): SecurityRequirementItem {
     ignoreInvalidSymbol: r.ignoreInvalidSymbol === true,
     fromLibrary: r.fromLibrary === true,
     hasSecurityMapping: r.hasSecurityMapping === true,
+    derivedFromChart: typeof r.derivedFromChart === 'boolean' ? r.derivedFromChart : undefined,
     hasGlobalMap: r.hasGlobalMap === true,
     mappedProvider: str(r.mappedProvider),
     mappedNativeSymbol: str(r.mappedNativeSymbol),
@@ -510,6 +541,17 @@ function normalizeReq(r: Record<string, unknown>): SecurityRequirementItem {
       ? r.fileSuggestions.filter((s): s is string => typeof s === 'string')
       : [],
   };
+}
+
+function normalizeTimeframe(tf: string): string {
+  return /^[DWM]$/.test(tf) ? `1${tf}` : tf;
+}
+
+function timeframeSeconds(tf: string): number {
+  const match = /^(\d+)(S|D|W|M)?$/.exec(normalizeTimeframe(tf));
+  if (!match) return NaN;
+  const units: Record<string, number> = { S: 1, D: 86400, W: 604800, M: 2592000 };
+  return Number(match[1]) * (match[2] ? units[match[2]] : 60);
 }
 
 /** Newest mtime (ms) among `.py`/`.pine` files under `dir`, recursively; 0 if none. */

@@ -21,11 +21,14 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as assert from 'node:assert/strict';
+import type * as vscode from 'vscode';
 
 import { execProcess } from '../../src/env/exec';
 import { managedVenvDir, pyneBinPath, venvPythonPath } from '../../src/env/uv';
 import { scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { BridgeRun, type BridgeEvent } from '../../src/run/bridgeClient';
+import { SecurityDataService } from '../../src/run/securityData';
 
 const log = (msg: string): void => console.log(msg);
 
@@ -64,12 +67,12 @@ function fail(msg: string): never {
 }
 
 /** Write `count` synthetic 24-byte OHLCV records (uint32 ts + 5x float32 LE). */
-function writeOhlcv(file: string, startTs: number, count: number, base: number): void {
+function writeOhlcv(file: string, startTs: number, count: number, base: number, step = HOUR): void {
   const buf = Buffer.alloc(count * RECORD_SIZE);
   for (let i = 0; i < count; i++) {
     const o = i * RECORD_SIZE;
     const price = base + i;
-    buf.writeUInt32LE(startTs + i * HOUR, o);
+    buf.writeUInt32LE(startTs + i * step, o);
     buf.writeFloatLE(price, o + 4); // open
     buf.writeFloatLE(price + 0.5, o + 8); // high
     buf.writeFloatLE(price - 0.5, o + 12); // low
@@ -139,6 +142,7 @@ interface SecReq {
   mappedNativeSymbol?: string | null;
   mappedFile?: string | null;
   mappedFileExists?: boolean;
+  derivedFromChart?: boolean;
 }
 
 /** Spawn `--inspect-security` directly and collect the emitted proto events. */
@@ -281,6 +285,7 @@ async function main(): Promise<void> {
   if (sec.chartTf !== '60') fail(`chartTf: ${sec.chartTf}`);
   const sameTf = sec.sameSymbolOtherTf ?? [];
   if (!sameTf.some((r) => r.timeframe === '240')) fail('missing same-symbol 240 requirement');
+  assert.equal(sameTf.find((r) => r.timeframe === '240')?.derivedFromChart, true);
   const cross = sec.crossSymbol ?? [];
   const msft = cross.find((r) => r.symbol === 'NASDAQ:MSFT');
   if (!msft) fail('missing NASDAQ:MSFT cross-symbol requirement');
@@ -335,6 +340,60 @@ async function main(): Promise<void> {
   const dEnd = dRun.events.find((e) => e.e === 'end');
   if (dEnd && dEnd.e === 'end' && dEnd.bars > 0) fail('(d) run should not have completed bars');
   log('(d) missing-mapping error OK');
+
+  // Exercise the IDE resolver itself, including inspection and bridge args.
+  const state = new Map<string, unknown>();
+  const context = {
+    workspaceState: {
+      get: (key: string, fallback: unknown) => state.get(key) ?? fallback,
+      update: async (key: string, value: unknown) => { state.set(key, value); },
+    },
+  } as unknown as vscode.ExtensionContext;
+  const service = new SecurityDataService(
+    context, { appendLine: log } as vscode.OutputChannel,
+    { fsPath: path.join(__dirname, '..') } as vscode.Uri
+  );
+  const minuteStem = 'tradingview_NASDAQ_NVDA_1';
+  const dailyStem = 'tradingview_NASDAQ_NVDA_1D';
+  for (const [stem, tf, step, basePrice] of [
+    [minuteStem, '1', 60, 100],
+    [dailyStem, '1D', 86400, 500],
+    ['other_venue_NVDA_1D', '1D', 86400, 900],
+  ] as const) {
+    writeOhlcv(path.join(dataDir, `${stem}.ohlcv`), START_TS, 240, basePrice, step);
+    writeSyminfo(path.join(dataDir, `${stem}.toml`), 'BATS', 'NVDA', tf, 'stock');
+    fs.appendFileSync(path.join(dataDir, `${stem}.toml`),
+      `\n[download]\nprovider = "tradingview:${stem.startsWith('other') ? 'NYSE' : 'NASDAQ'}:NVDA@${tf}"\n`);
+  }
+  const dailyScript = path.join(ws.workdir, 'scripts', 'daily_security.py');
+  fs.writeFileSync(dailyScript, SECURITY_SCRIPT
+    .replace('"240"', '"1D"')
+    .replace('request.security("NASDAQ:MSFT", "60", close)', 'request.security(syminfo.ticker, "5", close)'));
+  const opts = {
+    pythonBin, workdir: ws.workdir, scriptPath: dailyScript,
+    dataStem: minuteStem, chartKey: dailyScript,
+  };
+  const missing = await runBridge(pythonBin, bridgeRoot, ws.workdir, 'daily_security', minuteStem);
+  assert.ok(missing.events.some(e => e.e === 'error' && /No OHLCV data found/.test(e.message)));
+  const resolved = await service.resolveSecurityData(opts);
+  assert.deepEqual(resolved, {
+    security: [`BATS:NVDA:1D=${dailyStem}`], cancelled: false, unsupported: false,
+  });
+  const dailyRun = await runBridge(pythonBin, bridgeRoot, ws.workdir, 'daily_security', minuteStem, resolved.security);
+  assert.equal(dailyRun.exitCode, 0);
+  assert.ok(!dailyRun.events.some(e => e.e === 'error'));
+  assert.ok(dailyRun.events.some(e => e.e === 'end' && e.bars === 240));
+  // Re-inspection is cached, but data-file selection must reflect disk changes.
+  fs.renameSync(path.join(dataDir, `${dailyStem}.ohlcv`), path.join(dataDir, 'renamed_daily.ohlcv'));
+  fs.renameSync(path.join(dataDir, `${dailyStem}.toml`), path.join(dataDir, 'renamed_daily.toml'));
+  assert.deepEqual((await service.resolveSecurityData(opts)).security, ['BATS:NVDA:1D=renamed_daily']);
+  fs.copyFileSync(path.join(dataDir, 'renamed_daily.ohlcv'), path.join(dataDir, 'duplicate.ohlcv'));
+  fs.copyFileSync(path.join(dataDir, 'renamed_daily.toml'), path.join(dataDir, 'duplicate.toml'));
+  await assert.rejects(service.resolveSecurityData(opts), /Unexpected security data prompt/);
+  fs.unlinkSync(path.join(dataDir, 'duplicate.ohlcv'));
+  fs.unlinkSync(path.join(dataDir, 'renamed_daily.ohlcv'));
+  await assert.rejects(service.resolveSecurityData(opts), /Unexpected security data prompt/);
+  log('(e) minute chart + daily feed: failure reproduced, IDE auto-resolution and real run OK; ambiguous/missing files prompt');
 
   log('BRIDGE SECURITY SMOKE OK');
 }

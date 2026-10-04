@@ -152,6 +152,7 @@ if (smoke) {
 } else if (smokeBridgeSecurity) {
   await esbuild.build({
     ...common,
+    alias: { vscode: './test/smoke/securityVscodeStub.ts' },
     entryPoints: ['test/smoke/securitySmoke.ts'],
     outfile: 'dist/bridge-security-smoke.js',
     minify: false,

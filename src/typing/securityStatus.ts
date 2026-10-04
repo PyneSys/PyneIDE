@@ -248,11 +248,17 @@ export class SecurityStatusService {
     if (call.symbol == null || call.timeframe == null) return undefined;
     const label = `${call.symbol} @ ${call.timeframe}`;
 
-    // Same symbol as the chart feed: coarser TFs resample from it, finer ones
-    // need a separate finer feed the chart data cannot provide.
+    // D/W/M contexts use their own history; only intraday coarser timeframes
+    // can be resampled from the chart feed.
     if (ctx.chartSymbol && sameSymbol(call.symbol, ctx.chartSymbol)) {
       if (ctx.chartTf && sameTf(call.timeframe, ctx.chartTf)) {
         return { severity: info, message: `request.security: ${label} → chart feed` };
+      }
+      if (/[DWM]$/i.test(call.timeframe)) {
+        return {
+          severity: info,
+          message: `request.security: ${label} needs a separate feed — resolved before the run`,
+        };
       }
       const reqMin = tfMinutes(call.timeframe);
       const chartMin = ctx.chartTf ? tfMinutes(ctx.chartTf) : undefined;

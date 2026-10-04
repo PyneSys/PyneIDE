@@ -450,8 +450,8 @@ def _serialize_security_req(req: Any) -> dict[str, Any]:
     """Serialize one pynecore ``SecurityRequirement`` to a JSON-safe dict for the
     IDE's run-time data-requirement resolution (see ``list_data_requirements``).
     The map/file fields are populated only for cross-symbol requirements; they
-    default to ``None``/``False``/``[]`` for chart-main and same-symbol feeds
-    (which resample from the chart data and need no external file)."""
+    default to ``None``/``False``/``[]`` for chart-main and same-symbol feeds.
+    ``derivedFromChart`` identifies feeds that need no separate data."""
     return {
         "secId": req.sec_id,
         "symbol": req.symbol,
@@ -460,6 +460,7 @@ def _serialize_security_req(req: Any) -> dict[str, Any]:
         "ignoreInvalidSymbol": bool(req.ignore_invalid_symbol),
         "fromLibrary": bool(req.from_library),
         "hasSecurityMapping": bool(req.has_security_mapping),
+        "derivedFromChart": getattr(req, "derived_from_chart", None),
         "hasGlobalMap": bool(getattr(req, "has_global_map", False)),
         "mappedProvider": getattr(req, "mapped_provider", None),
         "mappedNativeSymbol": getattr(req, "mapped_native_symbol", None),
