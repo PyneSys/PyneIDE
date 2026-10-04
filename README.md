@@ -173,6 +173,13 @@ roughly 250 MB on disk in VS Code's extension storage — **PyneIDE: Reveal
 Environment Folder** shows the exact location, **PyneIDE: Remove Environment**
 gives the space back.
 
+To use a separate development environment, set `pyneide.venvPath` to its directory
+or `pyneide.pythonPath` to its Python executable (`venvPath` takes precedence).
+Install PyneCore and `debugpy` there yourself. Setup and update commands then only
+check that environment; they do not modify it or update PyneIDE's internal one.
+With both paths empty, PyneIDE manages its internal environment and updates it
+to the pinned PyneCore release in place, preserving installed plugins.
+
 In a project you initialized with PyneIDE, the **integrated terminal** opens with
 that environment already activated: `pyne`, `python` and `pip` are the managed
 ones, and the CLI is pointed at the same workdir the extension uses, so

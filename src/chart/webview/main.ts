@@ -2300,14 +2300,8 @@ function equitySummary(): EquitySummary | undefined {
   return state ? calculateEquitySummary(state.bars, state.start.initialCapital) : undefined;
 }
 
-function renderPerformance(): string {
-  const summary = equitySummary();
-  if (!summary) {
-    return '<span class="muted">The equity curve appears as strategy bars are processed.</span>';
-  }
+function renderPerformanceSummary(summary: EquitySummary): string {
   return (
-    '<div class="performance-view">' +
-    '<div class="performance-summary">' +
     performanceMetric('Cumulative P&L', signed(summary.pnl), summary.pnl, percent(summary.returnPct)) +
     performanceMetric(
       'Max run-up',
@@ -2321,7 +2315,18 @@ function renderPerformance(): string {
       -summary.maxDrawdown,
       summary.maxDrawdownPct === null ? '—' : `−${fmt(summary.maxDrawdownPct)}%`
     ) +
-    performanceMetric('Final equity', fmt(summary.finalEquity), null) +
+    performanceMetric('Final equity', fmt(summary.finalEquity), null)
+  );
+}
+
+function renderPerformance(summary = equitySummary()): string {
+  if (!summary) {
+    return '<span class="muted">The equity curve appears as strategy bars are processed.</span>';
+  }
+  return (
+    '<div class="performance-view">' +
+    '<div class="performance-summary">' +
+    renderPerformanceSummary(summary) +
     '</div>' +
     '<div class="equity-chart-wrap">' +
     '<span class="equity-chart-title">Cumulative P&amp;L · full run</span>' +
@@ -2333,11 +2338,20 @@ function renderPerformance(): string {
 }
 
 function drawPerformance(): void {
-  if (activeTab !== 'performance' || bottomEl?.classList.contains('collapsed')) return;
+  if (!tabBodyEl || activeTab !== 'performance' || bottomEl?.classList.contains('collapsed')) return;
+  const summary = equitySummary();
+  if (!summary) return;
+  // The first streamed equity sample replaces the empty state. Later ticks
+  // keep the canvases in place so the live crosshair retains its pointer.
+  if (!tabBodyEl.querySelector('#equity-canvas')) {
+    tabBodyEl.innerHTML = renderPerformance(summary);
+  } else {
+    const metrics = tabBodyEl.querySelector('.performance-summary');
+    if (metrics) metrics.innerHTML = renderPerformanceSummary(summary);
+  }
   const canvas = document.getElementById('equity-canvas') as HTMLCanvasElement | null;
   const overlay = document.getElementById('equity-crosshair') as HTMLCanvasElement | null;
-  const summary = equitySummary();
-  if (!canvas || !overlay || !summary) return;
+  if (!canvas || !overlay) return;
   const p = palette();
   const theme = {
     foreground: cssVar('--vscode-editor-foreground', '#ccc'),

@@ -10,8 +10,14 @@ import * as path from 'node:path';
 import { sha256 } from '../../src/compile/sourcemap';
 import { demangleName, demangleVariables } from '../../src/debug/demangle';
 import { PineSourceMapper } from '../../src/debug/sourceMapper';
-import { bootstrapManagedEnv, readMarker } from '../../src/env/bootstrap';
+import {
+  bootstrapManagedEnv,
+  currentMarker,
+  markerUpToDate,
+  readMarker,
+} from '../../src/env/bootstrap';
 import { CancelSource, CancelledError, isCancelledError } from '../../src/env/cancel';
+import { DEBUGPY_VERSION, PYNECORE_VERSION } from '../../src/env/constants';
 import { execChecked } from '../../src/env/exec';
 import {
   SETUP_TARGET,
@@ -26,7 +32,7 @@ import {
   parseUvOutput,
   type SetupProgress,
 } from '../../src/env/progress';
-import { venvPythonPath, managedVenvDir, pyneBinPath } from '../../src/env/uv';
+import { venvPythonPath, managedVenvDir, pyneBinPath, uvEnv } from '../../src/env/uv';
 import { findWorkdir, resolveWorkdir, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { BridgeRun, type BridgeEvent } from '../../src/run/bridgeClient';
 import { DapClient } from './dapClient';
@@ -670,6 +676,53 @@ async function setupCancelSmoke(): Promise<void> {
   log('Setup cancellation OK');
 }
 
+/** A managed PyneCore pin bump must update in place and preserve extra plugins. */
+async function managedUpgradeSmoke(pythonBin: string, storageDir: string): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-upgrade-'));
+  try {
+    const venv = managedVenvDir(dir);
+    await execChecked(pythonBin, ['-m', 'venv', '--without-pip', venv], log);
+    const upgradePython = venvPythonPath(venv);
+    const uvName = process.platform === 'win32' ? 'uv.exe' : 'uv';
+    fs.mkdirSync(path.join(dir, 'uv'));
+    const uvBin = path.join(dir, 'uv', uvName);
+    fs.copyFileSync(path.join(storageDir, 'uv', uvName), uvBin);
+    const previousPin = '6.10.6';
+    await execChecked(uvBin, ['pip', 'install', '--python', upgradePython,
+      `pynesys-pynecore[all]==${previousPin}`, `debugpy==${DEBUGPY_VERSION}`], log, {
+      env: uvEnv(storageDir), timeoutMs: 600000,
+    });
+    const site = (await execChecked(upgradePython, ['-c',
+      'import sysconfig; print(sysconfig.get_path("purelib"))'], log)).stdout.trim();
+    fs.writeFileSync(path.join(site, 'extra_plugin.py'), 'installed = True\n');
+    const pluginMeta = path.join(site, 'pyneide_smoke_plugin-1.0.0.dist-info');
+    fs.mkdirSync(pluginMeta);
+    fs.writeFileSync(path.join(pluginMeta, 'METADATA'),
+      'Metadata-Version: 2.1\nName: pyneide-smoke-plugin\nVersion: 1.0.0\n');
+    const sentinel = path.join(venv, 'preserve-on-upgrade');
+    fs.writeFileSync(sentinel, 'existing venv');
+    fs.writeFileSync(path.join(dir, 'env.json'),
+      JSON.stringify({ ...currentMarker(), pynecore: previousPin }));
+    if (markerUpToDate(dir)) throw new Error('upgrade: old pin should require an update');
+    const lines: string[] = [];
+    const result = await bootstrapManagedEnv({ storageDir: dir, log: (line) => lines.push(line) });
+    if (!result.verify.ok || result.verify.pynecoreVersion !== PYNECORE_VERSION ||
+        !markerUpToDate(dir)) {
+      throw new Error(`upgrade: pin was not updated ${JSON.stringify(result.verify)}`);
+    }
+    if (fs.readFileSync(sentinel, 'utf8') !== 'existing venv' ||
+        lines.some((line) => line.includes('Removing existing') || line.includes('Creating venv'))) {
+      throw new Error('upgrade: managed venv was rebuilt');
+    }
+    await execChecked(upgradePython, ['-c',
+      'from importlib import metadata; import extra_plugin; ' +
+      'assert extra_plugin.installed; assert metadata.version("pyneide-smoke-plugin") == "1.0.0"'], log);
+    log(`Managed upgrade ${previousPin} -> ${PYNECORE_VERSION} preserved the venv and extra plugin`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   sourcemapUnitTests();
   setupProgressUnitTests();
@@ -704,6 +757,8 @@ async function main(): Promise<void> {
   if (pythonBin !== venvPythonPath(managedVenvDir(storageDir))) {
     throw new Error('Unexpected python path for managed venv');
   }
+
+  await managedUpgradeSmoke(pythonBin, storageDir);
 
   // The pyne CLI must start from the venv.
   const pyneBin = pyneBinPath(pythonBin);

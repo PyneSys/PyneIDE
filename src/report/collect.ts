@@ -38,13 +38,8 @@ const SENSITIVE_SETTINGS = [
   'pineLs.baseUrl',
 ] as const;
 
-/**
- * Settings that are plain booleans and go in as they are. Hidden development
- * overrides (`included: false` in package.json) register no default value, so
- * `get()` returns undefined for them unless the user set one.
- */
+/** Settings that are plain booleans and go in as they are. */
 const BOOLEAN_SETTINGS = [
-  'useOwnPynecore',
   'strictCompile',
   'debug.justMyCode',
   'pyright.enabled',

@@ -180,6 +180,7 @@ export class EnvManager {
     }
 
     this.setupRunning = true;
+    let offerRepair = true;
     // Chosen in the catch, run after the finally: `setupRunning` is only
     // cleared there, so a retry started from inside the catch would hit the
     // "already running" guard and silently do nothing.
@@ -200,7 +201,6 @@ export class EnvManager {
             storageDir: this.storageDir,
             log: this.log,
             proxyUrl: this.proxyUrl(),
-            useOwnPynecore: this.config().get<boolean>('useOwnPynecore') ?? false,
             recreate: options.recreate,
             cancel: token,
             progress: ({ message, percent }) => {
@@ -211,6 +211,7 @@ export class EnvManager {
             },
           });
           if (!verify.ok) {
+            if (verify.failure === 'pynecore-too-old') offerRepair = false;
             throw new Error(verify.error ?? 'unknown verification error');
           }
         }
@@ -244,14 +245,16 @@ export class EnvManager {
         retry: () => {
           followUp = 'retry';
         },
-        actions: [
-          {
-            title: 'Repair (clean reinstall)',
-            run: () => {
-              followUp = 'repair';
+        actions: offerRepair
+          ? [
+            {
+              title: 'Repair (clean reinstall)',
+              run: () => {
+                followUp = 'repair';
+              },
             },
-          },
-        ],
+          ]
+          : [],
         showLog: () => this.output.show(),
       });
     } finally {
@@ -329,7 +332,9 @@ export class EnvManager {
     }
     if (state.kind !== 'ready') {
       void vscode.window.showErrorMessage(
-        'PyneIDE: the Python environment is not available.'
+        state.kind === 'error'
+          ? `PyneIDE: ${state.message}`
+          : 'PyneIDE: the Python environment is not available.'
       );
       return undefined;
     }

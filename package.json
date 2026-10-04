@@ -1116,14 +1116,14 @@
             "default": "",
             "scope": "machine",
             "order": 1,
-            "markdownDescription": "Path to a Python interpreter to use instead of the managed environment. PyneIDE does not install packages into it, only checks that `pynesys-pynecore` and `debugpy` are available."
+            "markdownDescription": "Path to a Python interpreter to use instead of PyneIDE's internal environment. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this interpreter; they never change it or update the internal environment while this setting is active."
           },
           "pyneide.venvPath": {
             "type": "string",
             "default": "",
             "scope": "machine",
             "order": 2,
-            "markdownDescription": "Path to a virtualenv directory to use instead of the managed environment. Takes precedence over `#pyneide.pythonPath#`. PyneIDE does not install packages into it."
+            "markdownDescription": "Path to a virtualenv directory to use instead of PyneIDE's internal environment. Takes precedence over `#pyneide.pythonPath#`. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this environment; they never change it or update the internal environment while this setting is active."
           }
         }
       },
@@ -1132,13 +1132,6 @@
         "title": "Development",
         "order": 99,
         "properties": {
-          "pyneide.useOwnPynecore": {
-            "type": "boolean",
-            "default": false,
-            "scope": "machine",
-            "included": false,
-            "markdownDescription": "Development override, hidden from the Settings UI. Keep an already installed (e.g. editable/development) PyneCore in the managed environment instead of the pinned version; only a minimum-version check is performed."
-          },
           "pyneide.apiBaseUrl": {
             "type": "string",
             "default": "https://api.pynesys.io",

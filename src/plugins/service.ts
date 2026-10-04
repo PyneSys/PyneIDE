@@ -9,8 +9,8 @@
  *    the catalogue still renders, just without installed state.
  *
  * A package installed into the managed venv is recorded in globalState as well:
- * a `Repair (clean reinstall)` or a pin bump rebuilds the venv from scratch, and
- * that record is the only way to notice the plugins went with it.
+ * an explicit repair or a managed layout change can rebuild the venv, and that
+ * record is the only way to notice the plugins went with it.
  */
 import * as vscode from 'vscode';
 
@@ -431,7 +431,7 @@ export class PluginService {
 
   /**
    * Packages PyneIDE installed that are no longer loadable — the fingerprint of
-   * a venv rebuild (Repair, pin bump). Empty when the installed set is unknown,
+   * a venv rebuild. Empty when the installed set is unknown,
    * so a broken environment never looks like "everything vanished".
    */
   async missingManagedPlugins(): Promise<ManagedPlugin[]> {

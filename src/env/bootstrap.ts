@@ -28,6 +28,7 @@ export interface EnvMarker {
 
 export interface VerifyResult {
   ok: boolean;
+  failure?: 'pynecore-too-old';
   pythonVersion?: string;
   pynecoreVersion?: string;
   debugpyVersion?: string;
@@ -45,8 +46,6 @@ export interface BootstrapOptions {
   storageDir: string;
   log: Logger;
   proxyUrl?: string;
-  /** Keep an already importable pynecore instead of installing the pin. */
-  useOwnPynecore?: boolean;
   /** Aborts the current download or child process and throws a CancelledError. */
   cancel?: CancelToken;
   /** Overall progress for the UI; the log stream is not a progress source. */
@@ -183,22 +182,25 @@ export async function verifyPython(
       logInterpreterDiag(info, log);
       return { ok: false, pythonVersion: info.python, error: 'pynesys-pynecore is not installed' };
     }
+    if (compareVersions(info.pynecore, PYNECORE_MIN_VERSION) < 0) {
+      return {
+        ok: false,
+        failure: 'pynecore-too-old',
+        pythonVersion: info.python,
+        pynecoreVersion: info.pynecore,
+        debugpyVersion: info.debugpy ?? undefined,
+        pynecoreRoot,
+        error: `pynesys-pynecore ${info.pynecore} is older than the required ${PYNECORE_MIN_VERSION}`,
+      };
+    }
     if (!info.debugpy) {
       logInterpreterDiag(info, log);
       return {
         ok: false,
         pythonVersion: info.python,
         pynecoreVersion: info.pynecore,
+        pynecoreRoot,
         error: 'debugpy is not installed',
-      };
-    }
-    if (compareVersions(info.pynecore, PYNECORE_MIN_VERSION) < 0) {
-      return {
-        ok: false,
-        pythonVersion: info.python,
-        pynecoreVersion: info.pynecore,
-        debugpyVersion: info.debugpy,
-        error: `pynesys-pynecore ${info.pynecore} is older than the required ${PYNECORE_MIN_VERSION}`,
       };
     }
     return {
@@ -232,7 +234,7 @@ async function runBootstrap(
   options: BootstrapOptions & { recreate?: boolean },
   tracker: SetupProgressTracker
 ): Promise<{ pythonBin: string; verify: VerifyResult }> {
-  const { storageDir, log, proxyUrl, useOwnPynecore, recreate, cancel } = options;
+  const { storageDir, log, proxyUrl, recreate, cancel } = options;
   fs.mkdirSync(storageDir, { recursive: true });
   const env = uvEnv(storageDir, proxyUrl);
   tracker.begin('uv', 'Preparing the package manager…');
@@ -275,20 +277,7 @@ async function runBootstrap(
   }
   throwIfCancelled(cancel);
 
-  const packages: string[] = [`debugpy==${DEBUGPY_VERSION}`];
-  let installPynecore = true;
-  if (useOwnPynecore) {
-    const check = await verifyPython(pythonBin, log, cancel);
-    if (check.pynecoreVersion) {
-      log(`Keeping user-provided pynecore ${check.pynecoreVersion} (pyneide.useOwnPynecore)`);
-      installPynecore = false;
-    } else {
-      log('pyneide.useOwnPynecore is set but pynecore is not importable; installing the pin');
-    }
-  }
-  if (installPynecore) {
-    packages.unshift(`pynesys-pynecore[all]==${PYNECORE_VERSION}`);
-  }
+  const packages = [`pynesys-pynecore[all]==${PYNECORE_VERSION}`, `debugpy==${DEBUGPY_VERSION}`];
 
   log(`Installing: ${packages.join(', ')}`);
   tracker.begin('packages', 'Resolving packages…');
@@ -309,7 +298,7 @@ async function runBootstrap(
   // A cancel surfaces here as a failed verification (verifyPython never
   // throws), and must not be mistaken for a broken install worth rebuilding.
   throwIfCancelled(cancel);
-  if (!verify.ok && !recreate) {
+  if (!verify.ok && !recreate && verify.failure !== 'pynecore-too-old') {
     log(`Verification failed (${verify.error}); recreating the environment once`);
     tracker.note('Verification failed — rebuilding the environment…');
     return runBootstrap({ ...options, recreate: true }, tracker);

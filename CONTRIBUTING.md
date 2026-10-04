@@ -43,13 +43,14 @@ managed entirely by the extension — do not point it at a system Python.
 ### Working against a local PyneCore checkout
 
 By default the managed environment installs a pinned PyneCore from PyPI. To run
-your own checkout instead, editable-install it into the managed venv and set
-`"pyneide.useOwnPynecore": true`. Two things bite regularly:
+your own checkout instead, create a separate development venv and install
+PyneCore in editable mode, with its `[all]` extra and `debugpy`. Set
+`pyneide.venvPath` to that venv's directory, or `pyneide.pythonPath` to its Python
+executable. `venvPath` takes precedence when both are set.
 
-- A physical `site-packages/pynecore/` directory shadows the editable install —
-  remove it.
-- Resetting the environment (**Setup Environment** -> recreate) wipes the venv,
-  and with it the editable install. Redo it afterwards.
+PyneIDE only checks a selected external environment; setup, update and repair
+commands do not modify it. Refresh the editable installation after changing
+PyneCore's package version so its installed metadata reflects the checkout.
 
 ## Before you open a pull request
 
