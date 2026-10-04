@@ -684,6 +684,11 @@ export class ChartPanel {
   }
   .tab-body tr.clickable { cursor: pointer; }
   .tab-body tr.clickable:hover { background: var(--vscode-list-hoverBackground, #333); }
+  .tab-body tr.clickable.selected {
+    background: var(--vscode-list-inactiveSelectionBackground, #37373d);
+    color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-editor-foreground));
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
+  }
   .performance-view {
     height: 100%; min-height: 0; display: flex; flex-direction: column;
     box-sizing: border-box; padding: 8px 10px 6px;
@@ -709,7 +714,8 @@ export class ChartPanel {
     position: absolute; z-index: 1; top: 2px; left: 10px; font-size: 10px;
     color: var(--vscode-descriptionForeground); pointer-events: none;
   }
-  #equity-canvas { display: block; width: 100%; height: 100%; }
+  #equity-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #equity-crosshair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   @media (max-width: 620px) {
     .performance-summary { gap: 5px; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
     .performance-metric { padding: 3px 5px; }

@@ -50,8 +50,10 @@ import { ColorTrack } from './colorTrack';
 import {
   calculateEquitySummary,
   drawEquityCurve,
+  EquityCrosshair,
   type EquitySummary,
 } from './equityCurve';
+import { tradeAtTimestamp } from './tradeNavigation';
 import {
   DrawingStore,
   drawDrawings,
@@ -838,6 +840,8 @@ function unfreezeAfterPaint(): void {
 }
 
 function startRun(start: StartEvent): void {
+  selectedTradeIndex = undefined;
+  performanceCrosshair?.reset();
   measureOverlayId = undefined;
   measureDrawing = false;
   tbMeasureEl?.classList.remove('active');
@@ -2229,6 +2233,18 @@ const panelSplitterEl = document.getElementById('panel-splitter');
 let activeTab: 'performance' | 'trades' | 'stats' = 'trades';
 let bottomPanelHeight: number | undefined;
 let panelResizeFrame: number | undefined;
+let selectedTradeIndex: number | undefined;
+const performanceCrosshair = tabBodyEl
+  ? new EquityCrosshair(
+      tabBodyEl,
+      (point) => {
+        const index = state?.tsToIndex.get(point.timestamp);
+        const time = new Date(point.timestamp).toISOString().replace('T', ' ').slice(0, 19);
+        return index === undefined ? time : `${time} (${index})`;
+      },
+      revealTradeAtTimestamp
+    )
+  : undefined;
 
 const MIN_CHART_HEIGHT = 120;
 const MIN_BOTTOM_PANEL_HEIGHT = 120;
@@ -2310,6 +2326,7 @@ function renderPerformance(): string {
     '<div class="equity-chart-wrap">' +
     '<span class="equity-chart-title">Cumulative P&amp;L · full run</span>' +
     '<canvas id="equity-canvas"></canvas>' +
+    '<canvas id="equity-crosshair" aria-hidden="true"></canvas>' +
     '</div>' +
     '</div>'
   );
@@ -2318,16 +2335,32 @@ function renderPerformance(): string {
 function drawPerformance(): void {
   if (activeTab !== 'performance' || bottomEl?.classList.contains('collapsed')) return;
   const canvas = document.getElementById('equity-canvas') as HTMLCanvasElement | null;
+  const overlay = document.getElementById('equity-crosshair') as HTMLCanvasElement | null;
   const summary = equitySummary();
-  if (!canvas || !summary) return;
+  if (!canvas || !overlay || !summary) return;
   const p = palette();
-  drawEquityCurve(canvas, summary, {
+  const theme = {
     foreground: cssVar('--vscode-editor-foreground', '#ccc'),
     muted: cssVar('--vscode-descriptionForeground', '#999'),
     grid: isDark() ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
     positive: p.up,
     negative: p.down,
-  });
+    crosshairBackground: isDark() ? '#555' : '#333',
+  };
+  const layout = drawEquityCurve(canvas, summary, theme);
+  if (layout) performanceCrosshair?.update(canvas, overlay, summary, theme, layout);
+}
+
+function revealTradeAtTimestamp(timestamp: number): void {
+  if (!state || !tabBodyEl) return;
+  const index = tradeAtTimestamp(state.trades, timestamp);
+  if (index === undefined) return;
+  selectedTradeIndex = index;
+  activeTab = 'trades';
+  setCollapsed(false);
+  renderTables();
+  const row = tabBodyEl.querySelector<HTMLElement>(`tr[data-trade-index="${index}"]`);
+  row?.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
 function bottomPanelLimits(): { min: number; max: number } {
@@ -2420,8 +2453,10 @@ function renderTrades(): string {
   const rows = st.trades
     .map((t, i) => {
       const long = (t.size ?? 0) > 0;
+      const selected = i === selectedTradeIndex;
       return (
-        `<tr class="clickable" data-ts="${t.entryTime}">` +
+        `<tr class="clickable${selected ? ' selected' : ''}" data-trade-index="${i}" ` +
+        `data-ts="${t.entryTime}"${selected ? ' aria-selected="true"' : ''}>` +
         `<td>${i + 1} ${long ? '▲' : '▼'} ${esc(t.entryId ?? '')}</td>` +
         `<td>${fmtTime(t.entryTime)}</td><td>${fmt(t.entryPrice, d)}</td>` +
         `<td>${fmtTime(t.exitTime)}</td><td>${fmt(t.exitPrice, d)}</td>` +
@@ -2463,6 +2498,9 @@ function renderStats(): string {
 
 function renderTables(): void {
   if (!tabBodyEl || !bottomEl) return;
+  if (activeTab !== 'performance' || bottomEl.classList.contains('collapsed')) {
+    performanceCrosshair?.reset();
+  }
   tabPerformanceEl?.classList.toggle('active', activeTab === 'performance');
   tabTradesEl?.classList.toggle('active', activeTab === 'trades');
   tabStatsEl?.classList.toggle('active', activeTab === 'stats');

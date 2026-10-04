@@ -29,9 +29,159 @@ export interface EquityTheme {
   grid: string;
   positive: string;
   negative: string;
+  crosshairBackground: string;
 }
 
 const PAD = { left: 10, right: 64, top: 12, bottom: 22 };
+
+interface EquityLayout {
+  width: number;
+  height: number;
+  ratio: number;
+  plotWidth: number;
+  plotHeight: number;
+  xFor: (timestamp: number) => number;
+  yFor: (value: number) => number;
+}
+
+/** Search the full-resolution series, including points omitted from the trace. */
+export function equityPointAtX(
+  points: readonly EquityPoint[],
+  x: number,
+  plotWidth: number
+): EquityPoint | undefined {
+  if (!points.length) return undefined;
+  const first = points[0].timestamp;
+  const last = points[points.length - 1].timestamp;
+  const timestamp = first + Math.min(1, Math.max(0, (x - PAD.left) / plotWidth)) * (last - first);
+  let low = 0;
+  let high = points.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (points[mid].timestamp < timestamp) low = mid + 1;
+    else high = mid;
+  }
+  const before = points[Math.max(0, low - 1)];
+  const after = points[low];
+  return timestamp - before.timestamp <= after.timestamp - timestamp ? before : after;
+}
+
+/** Keep pointer repaints separate from the potentially large equity trace. */
+export class EquityCrosshair {
+  private pointer: { x: number; y: number } | undefined;
+  private view: {
+    canvas: HTMLCanvasElement;
+    overlay: HTMLCanvasElement;
+    summary: EquitySummary;
+    theme: EquityTheme;
+    layout: EquityLayout;
+  } | undefined;
+
+  constructor(
+    container: HTMLElement,
+    private readonly formatTime: (point: EquityPoint) => string,
+    onSelect: (timestamp: number) => void
+  ) {
+    container.addEventListener('pointermove', (event) => {
+      if (event.target !== this.view?.canvas) {
+        this.clear();
+        return;
+      }
+      this.pointer = { x: event.clientX, y: event.clientY };
+      this.draw();
+    });
+    container.addEventListener('pointerleave', () => this.clear());
+    container.addEventListener('click', (event) => {
+      if (event.target !== this.view?.canvas) return;
+      this.pointer = { x: event.clientX, y: event.clientY };
+      const point = this.point();
+      if (point) onSelect(point.timestamp);
+    });
+  }
+
+  update(
+    canvas: HTMLCanvasElement,
+    overlay: HTMLCanvasElement,
+    summary: EquitySummary,
+    theme: EquityTheme,
+    layout: EquityLayout
+  ): void {
+    this.view = { canvas, overlay, summary, theme, layout };
+    overlay.width = canvas.width;
+    overlay.height = canvas.height;
+    this.draw();
+  }
+
+  clear(): void {
+    this.pointer = undefined;
+    this.draw();
+  }
+
+  reset(): void {
+    this.clear();
+    this.view = undefined;
+  }
+
+  private point(): EquityPoint | undefined {
+    if (!this.view || !this.pointer) return undefined;
+    const bounds = this.view.canvas.getBoundingClientRect();
+    const x = this.pointer.x - bounds.left;
+    const y = this.pointer.y - bounds.top;
+    const { plotWidth, plotHeight } = this.view.layout;
+    if (x < PAD.left || x > PAD.left + plotWidth || y < PAD.top || y > PAD.top + plotHeight) {
+      return undefined;
+    }
+    return equityPointAtX(this.view.summary.points, x, plotWidth);
+  }
+
+  private draw(): void {
+    if (!this.view) return;
+    const { overlay, theme, layout } = this.view;
+    const ctx = overlay.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(layout.ratio, 0, 0, layout.ratio, 0, 0);
+    ctx.clearRect(0, 0, layout.width, layout.height);
+    const point = this.point();
+    if (!point) return;
+
+    const x = layout.xFor(point.timestamp);
+    const y = layout.yFor(point.pnl);
+    ctx.beginPath();
+    ctx.moveTo(x, PAD.top);
+    ctx.lineTo(x, PAD.top + layout.plotHeight);
+    ctx.moveTo(PAD.left, y);
+    ctx.lineTo(PAD.left + layout.plotWidth, y);
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = theme.muted;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = point.pnl >= 0 ? theme.positive : theme.negative;
+    ctx.fill();
+
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const label = (text: string, left: number, top: number): void => {
+      const width = Math.min(layout.width, ctx.measureText(text).width + 10);
+      left = Math.max(0, Math.min(layout.width - width, left));
+      top = Math.max(0, Math.min(layout.height - 18, top));
+      ctx.fillStyle = theme.crosshairBackground;
+      ctx.fillRect(left, top, width, 18);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, left + 5, top + 9, Math.max(1, width - 10));
+    };
+    const time = this.formatTime(point);
+    label(time, x - (ctx.measureText(time).width + 10) / 2, PAD.top + layout.plotHeight + 2);
+    const value = `${point.pnl > 0 ? '+' : point.pnl < 0 ? '−' : ''}${Math.abs(point.pnl).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+    label(value, PAD.left + layout.plotWidth + 2, y - 9);
+  }
+}
 
 export function calculateEquitySummary(
   samples: readonly EquitySample[],
@@ -144,7 +294,7 @@ export function drawEquityCurve(
   canvas: HTMLCanvasElement,
   summary: EquitySummary,
   theme: EquityTheme
-): void {
+): EquityLayout | undefined {
   const bounds = canvas.getBoundingClientRect();
   const width = Math.max(1, Math.floor(bounds.width));
   const height = Math.max(1, Math.floor(bounds.height));
@@ -254,4 +404,5 @@ export function drawEquityCurve(
   ctx.fillText(dateLabel(summary.points[0].timestamp), PAD.left, height - 2);
   ctx.textAlign = 'right';
   ctx.fillText(dateLabel(last.timestamp), PAD.left + plotWidth, height - 2);
+  return { width, height, ratio, plotWidth, plotHeight, xFor, yFor };
 }

@@ -1261,6 +1261,7 @@
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
     "test:bridge-security": "node esbuild.mjs --smoke-bridge-security && node dist/bridge-security-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
+    "test:equity-navigation": "node esbuild.mjs --smoke-equity-navigation && node dist/equity-navigation-smoke.js",
     "test:library-imports": "node esbuild.mjs --smoke-library-imports && node dist/library-imports-smoke.js",
     "test:symbol-map": "node esbuild.mjs --smoke-symbol-map && node dist/symbol-map-smoke.js",
     "test:report": "node esbuild.mjs --smoke-report && node dist/report-smoke.js",
