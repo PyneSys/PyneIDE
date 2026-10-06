@@ -2,6 +2,9 @@ import esbuild from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { verifyPyneCoreDocs } from './scripts/pynecore-docs.mjs';
+
+verifyPyneCoreDocs();
 
 const watch = process.argv.includes('--watch');
 const smoke = process.argv.includes('--smoke');

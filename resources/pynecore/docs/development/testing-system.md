@@ -1,0 +1,217 @@
+<!--
+---
+weight: 1104
+title: "Testing System"
+description: "Overview of the PyneCore testing system"
+icon: "science"
+date: "2025-03-31"
+lastmod: "2026-06-10"
+draft: false
+toc: true
+categories: ["Development", "Testing"]
+tags: ["testing", "pytest", "infrastructure", "quality-assurance", "ast", "reference-data"]
+---
+-->
+
+# Testing System Overview
+
+## Introduction
+
+The PyneCore testing system is a comprehensive framework that ensures the proper functioning of the TradingView Pine Script compatible Python implementation. The unique aspect of the testing system is that **the tests themselves are Pyne code**, which the PyneCore system runs, thus ensuring testing in a real usage environment. This "dogfooding" approach allows the tests to use exactly the same environment that end users will use.
+
+## Testing System Architecture
+
+The testing system is built around the following main components:
+
+1. **Directory Structure**: Tests are organized in a hierarchical directory structure that reflects the system components
+2. **Pytest Extensions**: Custom pytest fixtures, hooks, and extensions
+3. **Test Cases**: Individual test files that also function as real Pyne code
+4. **Reference Data**: Expected outputs and transformed code examples for verification
+5. **Fixtures and Utilities**: Helper functions and test data sources
+
+### Directory Structure
+
+```
+pynecore/tests/
+├── conftest.py                 # Pytest configuration and fixtures
+├── t00_pynecore/               # Core system tests
+│   ├── ast/                    # AST transformation tests
+│   │   ├── data/               # Reference data for tests
+│   │   ├── test_00X_*.py       # Tests for various AST features
+│   ├── core/                   # Runtime core tests
+├── t01_lib/                    # Library function tests
+│   ├── t00_base/               # Base functionality tests
+│   ├── t01_timeframe/          # Timeframe handling tests
+│   ├── ...
+│   └── t30_strategy/           # Strategy functionality tests
+```
+
+The structure uses a prefix naming convention (`t00_`, `t01_`) to control the test execution order, ensuring that dependencies are tested before dependent features.
+
+## Tests as Pyne Code
+
+In the PyneCore testing system, every test file is also valid Pyne code that the system can run. This is implemented as follows:
+
+1. Each test file starts with the `"""@pyne"""` annotation, indicating it is Pyne code.
+2. The test files contain a `main()` function that runs as real Pyne code.
+3. They also contain one or more `__test_*__` functions that are the test functions run by pytest.
+
+This unique approach allows:
+- The test code to behave as real Pyne code
+- The PyneCore system to use its own functionality for its own tests
+- Tests to run in exactly the same environment as real user code
+
+## Test Docstring Convention
+
+Every `__test_*__` function is documented by its docstring, and the test runner (the `pytest-spec` integration configured in `conftest.py`) prints that documentation next to the test result. To keep the output readable, the docstring follows a strict layout:
+
+1. **First line — a concise one-line summary.** This is the *only* line shown in the test runner output. Keep it short and self-contained: it must read as a complete description of what the test guards, not as the opening fragment of a longer sentence.
+2. **One blank line.**
+3. **Optional detailed description.** Any number of paragraphs explaining the rationale, the invariant under test, the phases of the scenario, etc. This is documentation for whoever reads or maintains the test; it never appears in the runner output.
+
+```python
+def __test_modify_rejected_restores_pre_modify_active_intent__(tmp_path):
+    """Rejected modify restores the pre-modify active intent so the next diff re-emits modify_entry.
+
+    Preserving the slot would leave it pointing at the NEW intent, so the
+    next sync would see Pine == active, the diff would stay silent, and the
+    exchange order would be stranded on the OLD parameters. The rejected
+    branch restores the snapshot stashed by ``_park_pending(..., old_intent=old)``.
+    """
+    ...
+```
+
+The runner only renders the first line. `conftest.py` truncates the summary to that first line explicitly, so a docstring whose summary accidentally wraps onto a second line still produces one clean line — but write the summary to fit on one line regardless, because a wrapped summary is silently cut off mid-sentence.
+
+## Test Categories and Types
+
+Tests are organized into several main categories, each with its own verification methodology:
+
+### 1. AST Transformation Tests
+
+These tests verify that Python code with Pyne annotations is correctly transformed into Python code that mimics Pine Script behavior. The process involves:
+
+1. The original code is transformed through the AST transformation pipeline
+2. The transformed code is compared against reference examples
+3. The test fails if the transformation doesn't match the expected output
+
+Example test:
+```python
+def __test_simple_persistent__(ast_transformed_code, file_reader, log):
+    """ Simple Persistent """
+    try:
+        assert ast_transformed_code == file_reader(subdir="data", suffix="_ast_modified.py")
+    except AssertionError:
+        log.error("AST transformed code:\n%s\n", ast_transformed_code)
+        log.warning("Expected code:\n%s\n", file_reader(subdir="data", suffix="_ast_modified.py"))
+        raise
+```
+
+This type of test ensures that:
+- Persistent variables are correctly converted to state-vector slots
+- Series objects are properly managed
+- Function isolation is applied correctly
+- Import statements are normalized
+- Library calls are properly transformed
+
+### 2. CSV and Data-Based Tests
+
+These tests check the execution of Pyne code on real data and compare their output with expected values. The test outputs are compared with pre-calculated reference values stored in a CSV file:
+
+```python
+def __test_sma__(csv_reader, runner, dict_comparator, log):
+    """ SMA """
+    with csv_reader('ma.csv', subdir="data") as cr:
+        for i, (candle, plot) in enumerate(runner(cr).run_iter()):
+            dict_comparator(plot, candle.extra_fields)
+            if i > 100:
+                break
+```
+
+In the CSV files, the columns of expected results match the names of the values calculated by the Pyne code (e.g., "ta.sma(close, 10)"), making comparison automated. These columns often contain actual values exported from TradingView that serve as references.
+
+### 3. Log Output Tests
+
+Some functionality is tested by checking the logged output. These tests compare the log outputs generated by the Pyne code with an expected log output:
+
+```python
+def __test_with_log_comparison__(log_comparator, runner, csv_reader):
+    """ Log comparison """
+    expected_log = """
+    [2023-01-01 00:00:00 DEBUG] Function called with value: 42
+    [2023-01-01 00:00:01 INFO] Calculation result: 84
+    """
+    with log_comparator(expected_log) as _:
+        with csv_reader('example.csv', subdir="data") as cr:
+            for _ in runner(cr).run_iter():
+                pass
+```
+
+These tests are particularly useful for functionality that primarily generates log outputs or where the content of logged values is important.
+
+### 4. Strategy Tests
+
+Strategy tests verify the PyneCore strategy handling capabilities, which involve executing trading strategies and collecting trading results:
+
+```python
+def __test_strat_barupdown__(csv_reader, runner, strat_equity_comparator, log):
+    """ BarUpDn """
+    with csv_reader('strat_ohlcv.csv', subdir="data") as cr, \
+            csv_reader('barupdown.csv', subdir="data") as cr_equity:
+        r = runner(cr, syminfo_override=dict(timezone="US/Eastern"))
+        equity_iter = iter(cr_equity)
+        for i, (candle, plot, new_closed_trades) in enumerate(r.run_iter()):
+            for trade in new_closed_trades:
+                good_entry = next(equity_iter)
+                good_exit = next(equity_iter)
+                strat_equity_comparator(trade, good_entry.extra_fields, good_exit.extra_fields)
+```
+
+These tests often use CSV reference data that contains expected trading signals, entry/exit points, and strategy performance metrics.
+
+## Key Testing Components
+
+### Fixtures and Utilities
+
+The testing system provides powerful fixtures that simplify test creation:
+
+#### 1. `ast_transformed_code`
+
+This fixture captures the transformed AST code for verification against reference examples. It applies all transformations that would occur during normal execution.
+
+#### 2. `runner`
+
+Creates a `ScriptRunner` instance that executes Pyne code on a given data series, enabling bar-by-bar execution testing.
+
+#### 3. `dict_comparator`
+
+Compares dictionaries of values with special handling for numerical values (using `math.isclose()`) and NA values.
+
+The interesting aspect of `dict_comparator` is that it takes into account floating-point imprecision and compares numbers with appropriate tolerance, which is essential for proper testing of numerical library functions.
+
+#### 4. `log_comparator`
+
+Compares log outputs against reference logs, with special handling for date/time and floating-point precision.
+
+#### 5. `file_reader` and `csv_reader`
+
+Utilities for reading reference files and CSV data for tests.
+
+## Integration of Tests and PyneCore System
+
+The testing system tightly integrates with the PyneCore runtime system. This is implemented as follows:
+
+```python
+@pytest.fixture(scope="function")
+def runner(script_path, module_key, syminfo):
+    # ... setup code ...
+    def _runner(ohlcv_iter, syminfo_override=None, *, syminfo_path=None):
+        # ... Create script runner ...
+        r = ScriptRunner(script_path, ohlcv_iter, syminfo)
+        # ... Clean up and reload modules ...
+        return r
+    return _runner
+```
+
+This allows tests to execute scripts bar-by-bar, just as they would run in a real trading environment.
+

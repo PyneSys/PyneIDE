@@ -1,0 +1,299 @@
+<!--
+---
+weight: 429
+title: "strategy"
+description: "Strategy order management — entry, exit, close, and order functions"
+icon: "trending_up"
+date: "2026-03-28"
+lastmod: "2026-08-06"
+draft: false
+toc: true
+categories: ["Reference", "Library"]
+tags: ["strategy", "library", "reference"]
+---
+-->
+
+# strategy
+
+Manage entries, exits, and track position metrics for backtesting strategies. The strategy namespace provides order creation, cancellation, and real-time P&L tracking. Use with `@script.strategy()` decorator to enable position management.
+
+## Quick Example
+
+```python
+from pynecore.lib import (
+    close, high, low, strategy, ta, bar_index, script
+)
+from pynecore.types import Persistent
+
+@script.strategy(title="Simple Strategy", initial_capital=10000)
+def main():
+    sma20: Persistent[float] = ta.sma(close, 20)
+    
+    if bar_index == 20:
+        strategy.entry("long", strategy.long, qty=1)
+    
+    if ta.crossunder(close, sma20):
+        strategy.close("long", comment="Exit on cross below")
+    
+    # Check performance
+    pnl: float = strategy.netprofit
+    position: float = strategy.position_size
+```
+
+## Functions
+
+### strategy.entry()
+
+Create a new order to open or add to a position. Modifies existing unfilled orders with the same id.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| id | str | Order identifier |
+| direction | int | Trade direction: `strategy.long` or `strategy.short` |
+| qty | float \| None | Quantity in units (optional, uses strategy default if None) |
+| limit | float \| None | Limit price for entry (optional) |
+| stop | float \| None | Stop price for entry (optional) |
+| oca_name | str \| None | One-Cancels-All group identifier (optional) |
+| oca_type | int | OCA behavior type (optional) |
+| comment | str \| None | Order comment (optional) |
+| alert_message | str \| None | Alert message text (optional) |
+| disable_alert | bool | Suppress alerts if True (optional) |
+
+Returns: `None`
+
+```python
+strategy.entry("long_1", strategy.long, qty=2.5)
+strategy.entry("entry_limit", strategy.long, qty=1, limit=100.5)
+```
+
+### strategy.exit()
+
+Create price-based exit orders (take-profit, stop-loss, or trailing stop). Modifies existing unfilled orders with the same id.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| id | str | Exit order identifier |
+| from_entry | str \| None | Entry id to exit (optional, exits from any entry if None) |
+| qty | float \| None | Exit quantity (optional) |
+| qty_percent | float \| None | Exit as % of position (optional) |
+| profit | float \| None | Take-profit distance in ticks (optional) |
+| limit | float \| None | Limit price for take-profit (optional) |
+| loss | float \| None | Stop-loss distance in ticks (optional) |
+| stop | float \| None | Stop price for stop-loss (optional) |
+| trail_price | float \| None | Trailing-stop activation price (optional) |
+| trail_points | float \| None | Trailing-stop activation distance in ticks (optional) |
+| trail_offset | float \| None | Trailing-stop offset in ticks (optional) |
+| oca_name | str \| None | OCA group identifier (optional) |
+| comment | str \| None | Order comment (optional) |
+| comment_profit | str \| None | TP comment (optional) |
+| comment_loss | str \| None | SL comment (optional) |
+| comment_trailing | str \| None | Trailing stop comment (optional) |
+| alert_message | str \| None | Alert text (optional) |
+| alert_profit | str \| None | TP alert (optional) |
+| alert_loss | str \| None | SL alert (optional) |
+| alert_trailing | str \| None | Trailing alert (optional) |
+| disable_alert | bool | Suppress alerts if True (optional) |
+
+Returns: `None`
+
+```python
+strategy.exit("tp_sl", qty_percent=100, profit=500, loss=200)
+strategy.exit("trail", trail_points=50, comment="Trailing stop")
+```
+
+### strategy.close()
+
+Exit a position opened by entries with a specific id. Closes the position immediately at market price.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| id | str | Entry id to close |
+| comment | str \| None | Order comment (optional) |
+| qty | float \| None | Partial close quantity (optional) |
+| qty_percent | float \| None | Partial close as % of position (optional) |
+| alert_message | str \| None | Alert text (optional) |
+| immediately | bool | Close at market immediately (optional) |
+| disable_alert | bool | Suppress alerts if True (optional) |
+
+Returns: `None`
+
+```python
+strategy.close("long_1", comment="Exit signal")
+strategy.close("entry_a", qty_percent=50)
+```
+
+#### Several closes of one id on a bar
+
+By default every `strategy.close()` statement places its own order, as in Pine v6, so
+closes from different statements on the same bar all fill: a 10-unit position closed with
+`qty=4`, `qty=3` and `qty=3` on one bar sheds all 10. The same statement running again on
+the bar, in a loop for example, modifies its own order instead of adding another one.
+
+Pine v4 and v5 key that order by the entry id alone. A strategy asks for this behavior
+with `close_by_id=True` on its decorator, and PyneComp emits it for every v4/v5 source:
+
+```python
+@script.strategy("Scale out", close_by_id=True)
+```
+
+With it every `strategy.close()` of one id on a bar modifies the same pending order, so
+the last call wins:
+
+- Each call is sized against what the id's pending close leaves open, and then replaces
+  that order. A call with nothing left to close does nothing.
+- Closes of different ids keep separate orders and all fill.
+- An `immediately=True` close that a later call of the same id replaced does not fill.
+
+What a 10-unit position sheds on the bar with `close_by_id=True`:
+
+| Calls on one bar                     | Closed |
+|--------------------------------------|--------|
+| `qty=4`, `qty=3`, `qty=3`            | 3      |
+| `qty=3`, then a full close           | 7      |
+| a full close, then `qty=3`           | 10     |
+| `qty=8`, `qty=5`, `qty=1`            | 1      |
+
+The switch only changes the backtest simulator.
+
+### strategy.close_all()
+
+Close the entire open position immediately at market price, regardless of entry ids.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| comment | str \| None | Order comment (optional) |
+| alert_message | str \| None | Alert text (optional) |
+| immediately | bool | Close immediately (optional) |
+| disable_alert | bool | Suppress alerts if True (optional) |
+
+Returns: `None`
+
+```python
+strategy.close_all(comment="Exit all positions")
+```
+
+### strategy.order()
+
+Create a new order to open, add to, or exit a position. Modifies existing unfilled orders with the same id.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| id | str | Order identifier |
+| direction | int | Trade direction: `strategy.long` or `strategy.short` |
+| qty | float \| None | Quantity in units (optional) |
+| limit | float \| None | Limit price (optional) |
+| stop | float \| None | Stop price (optional) |
+| oca_name | str \| None | OCA group identifier (optional) |
+| oca_type | int | OCA behavior type (optional) |
+| comment | str \| None | Order comment (optional) |
+| alert_message | str \| None | Alert text (optional) |
+| disable_alert | bool | Suppress alerts if True (optional) |
+
+Returns: `None`
+
+```python
+strategy.order("hedge", strategy.short, qty=1, limit=99.5)
+```
+
+### strategy.cancel()
+
+Cancel a pending or unfilled order by id. Cancels all orders sharing the same id.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| id | str | Order identifier to cancel |
+
+Returns: `None`
+
+```python
+strategy.cancel("limit_order")
+```
+
+### strategy.cancel_all()
+
+Cancel all pending or unfilled orders regardless of id.
+
+Returns: `None`
+
+```python
+strategy.cancel_all()
+```
+
+`disable_alert` is accepted for Pine compatibility. PyneCore currently records alert messages on
+orders but does not dispatch order-fill alerts, so the parameter has no additional runtime effect.
+
+### strategy.default_entry_qty()
+
+Quantity a default-sized `strategy.entry()` / `strategy.order()` would buy at a given fill price,
+derived from `default_qty_type` and `default_qty_value`.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| fill_price | float | Fill price to evaluate |
+
+Returns: `float`
+
+The price is snapped onto the tick grid before the size is computed, and the size is then floored
+onto the lot grid. With `strategy.fixed` sizing the price is ignored entirely; with money-based
+sizing a price of `na` — or one that snaps to zero — gives `0`. An open position is not considered,
+so a reversing order reports its own quantity, not the amount needed to flip the position.
+
+```python
+qty = strategy.default_entry_qty(close)
+```
+
+## Variables
+
+| Name | Type | Description |
+|------|------|-------------|
+| position_size | float | Current position size (> 0 = long, < 0 = short, 0 = flat). |
+| position_avg_price | float | Average entry price of current position. Returns `NaN` if flat. |
+| position_entry_name | string | Entry id of the position's first open trade. Empty string if flat. |
+| opentrades | int | Count of currently open (filled, not yet closed) trades. Pending orders are not counted. |
+| openprofit | float | Current unrealized P&L for all open positions in currency units. |
+| openprofit_percent | float | Unrealized P&L as % of the initial capital. |
+| closedtrades | int | Total count of closed trades for the entire trading range. |
+| wintrades | int | Count of winning trades. |
+| losstrades | int | Count of losing trades. |
+| eventrades | int | Count of breakeven trades. |
+| netprofit | float | Total realized P&L for all closed trades in currency units. |
+| netprofit_percent | float | Realized P&L as % of the initial capital. |
+| grossprofit | float | Total P&L from winning trades in currency units. |
+| grossprofit_percent | float | Gross profit as % of the initial capital. |
+| grossloss | float | Total P&L from losing trades in currency units. |
+| grossloss_percent | float | Gross loss as % of the initial capital. Open commission counts toward it, so a position that is still open already shows a loss percent. |
+| avg_trade | float | Average P&L of the closed trades in currency units. |
+| avg_trade_percent | float | Mean of the closed trades' own profit percentages. Each trade's percent divides by that trade's entry cost — position value plus the fee paid to open it — so this is not `netprofit_percent / closedtrades`. |
+| avg_winning_trade | float | Average P&L of the winning trades in currency units. |
+| avg_winning_trade_percent | float | Mean of the winning trades' own profit percentages. |
+| avg_losing_trade | float | Average loss per losing trade, as a POSITIVE amount — the same sign as `grossloss`, and it counts the open commission the same way. |
+| avg_losing_trade_percent | float | Mean of the losing trades' own profit percentages. Negative, unlike the currency average above. |
+| equity | float | Current equity = initial_capital + netprofit + openprofit. |
+| max_drawdown | float | Maximum equity drawdown from peak in currency units. |
+| max_drawdown_percent | float | Maximum drawdown as % of the equity peak it fell from. Tracked on its own, so it can be set on a different bar than `max_drawdown`. |
+| max_runup | float | Maximum equity run-up from trough in currency units. |
+| max_runup_percent | float | Maximum run-up as % of the equity top it rose to. Tracked on its own, like `max_drawdown_percent`. |
+| max_contracts_held_all | float | Largest position size held, either direction. |
+| max_contracts_held_long | float | Largest long position size held. |
+| max_contracts_held_short | float | Largest short position size held, as a positive number. |
+| margin_liquidation_price | float | Price at which the margin call liquidates the position. `NaN` when no margin is set or the position is flat. |
+| initial_capital | float | Initial capital set in strategy properties. |
+| account_currency | string | Account currency of the strategy. |
+
+## Constants
+
+| Name | Type | Description |
+|------|------|-------------|
+| long | int | Direction constant for `strategy.entry()` and `strategy.order()`. Creates a buy/long position. |
+| short | int | Direction constant for `strategy.entry()` and `strategy.order()`. Creates a sell/short position. |
+| fixed | QtyType | Quantity type for strategy properties. Fixed number of units per entry. |
+| cash | QtyType | Quantity type for strategy properties. Fixed currency amount per entry. |
+| percent_of_equity | QtyType | Quantity type for strategy properties. Percentage of equity per entry. |
+
+## Compatibility
+
+**Order sizing:**
+- Only a positive, finite `qty` is placed. A quantity that cannot be sized — `na` or infinite — is
+  dropped like a non-positive one. This also covers a default-sized order whose size resolves to
+  `na`, for example `default_qty_value=na` with `strategy.percent_of_equity` sizing. Pine Script
+  rejects an `na` `default_qty_value` at compile time, so this only concerns hand-written Pyne code.

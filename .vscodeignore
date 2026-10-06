@@ -3,6 +3,7 @@
 .vscode/**
 work/**
 src/**
+scripts/**
 test/**
 node_modules/**
 esbuild.mjs

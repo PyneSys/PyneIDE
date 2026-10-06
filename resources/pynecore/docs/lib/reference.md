@@ -1,0 +1,223 @@
+<!--
+---
+weight: 501
+title: "Library Reference"
+description: "PyneCore library modules, types, and usage patterns"
+icon: "menu_book"
+date: "2025-03-31"
+lastmod: "2026-09-26"
+draft: false
+toc: true
+categories: ["API Reference", "Library"]
+tags: ["api", "library", "functions", "modules", "indicators", "technical-analysis"]
+---
+-->
+
+# Library Reference
+
+The PyneCore library is a complete Python implementation of the Pine Script API, providing compatibility with Pine
+Script functions and modules. This library enables easy porting of Pine Script code to Python while taking advantage of
+all the benefits of the Python language.
+
+## Usage
+
+To use the PyneCore library, simply import the required modules or functions from the `pynecore.lib` package:
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import ta, math, array, close, high, low
+
+# Import specific functions from a module
+from pynecore.lib.ta import sma, ema, macd
+```
+
+## Global Properties
+
+The global variables familiar from Pine Script (such as `open`, `high`, `low`, `close`, `hl2`, etc.) are available in
+PyneCore from the `pynecore.lib` package:
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import open, high, low, close
+from pynecore.lib import hl2, hlc3, ohlc4, hlcc4
+from pynecore.lib import volume, bar_index
+```
+
+These variables are automatically managed by the system, always filled with the current bar data during execution.
+
+## Module System
+
+The complete module system of the Pine Script API is available in PyneCore. The module names are almost identical to
+Pine Script names, with only one exception:
+
+| Pine | PyneCore | Note                                                                |
+|------|----------|---------------------------------------------------------------------|
+| str  | string   | `str` is a built-in Python type name, so it's available as `string` |
+
+### Main Modules
+
+The most important modules of the PyneCore library:
+
+- **ta**: Technical indicators and analysis functions
+- **math**: Mathematical functions
+- **array**: Array operation functions
+- **string**: Text handling functions
+- **timeframe**: Timeframe handling functions
+- **color**: Color definitions and manipulation functions
+- **session**: Session handling functions
+- **strategy**: Strategy functions and definitions
+- **request**: Cross-symbol/timeframe data and currency conversion
+
+## Combining Pine Script and Python Styles
+
+PyneCore allows both Pine Script functional and native Python styles. This flexibility lets you choose the most
+comfortable and efficient approach for a given task:
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import array, map
+
+# Pine Script-style array module usage
+a = array.new_float(5)
+array.set(a, 0, 1.0)
+array.push(a, 2.0)
+
+# Or use the same with native Python list operations
+a[0] = 1.0
+a.append(2.0)
+
+# Pine Script-style map module usage
+m = map.new()
+map.put(m, "key", 42)
+
+# Or use the same with native Python dict operations
+m["key"] = 42
+```
+
+All functional Pine modules (array, map, etc.) in the PyneCore library work completely, but Python's native solutions
+can also be used, keeping code readability and personal preferences in mind.
+
+## Pine Script Compatibility
+
+The PyneCore library implements the Pine Script API while leveraging Python's strengths. PyneCore is validated against
+TradingView on <!--wild:scripts_total-->1,000<!--/wild--> published TradingView scripts (Pine Script v4–v6, converted to
+Pyne code with [PyneComp](https://pynesys.io)): all <!--wild:tv_verified-->1,353<!--/wild--> comparable outputs
+match, <!--wild:bars_exact_pct-->99.771<!--/wild-->% of <!--wild:bars_compared_millions-->132<!--/wild--> million
+plotted values are bit-identical, and <!--wild:strategy_trades-->353,577<!--/wild--> strategy trades match
+TradingView's timing (snapshot <!--wild:generated_at-->2026-10-02<!--/wild-->, [Pyne in the
+Wild](https://wild.pynesys.io/)). See [Compatibility](/docs/overview/compatibility/) for details.
+
+### Documentation
+
+PyneCore has its own complete reference documentation covering all library functions, variables,
+and constants with PyneCore-specific examples and compatibility notes.
+
+- [PyneCore Reference](/docs/reference/) - Complete reference for all namespaces
+- [PyneCore Reference — Library](/docs/reference/lib/) - Function reference by namespace
+
+## Usage Examples
+
+### Technical Indicators
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import script, ta, close, plot
+
+
+@script.indicator(title="SMA and EMA Comparison")
+def main():
+    sma_val = ta.sma(close, 20)
+    ema_val = ta.ema(close, 20)
+
+    plot(sma_val, "SMA 20")
+    plot(ema_val, "EMA 20")
+```
+
+### Mathematical Functions
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import script, math, close, plot
+
+
+@script.indicator(title="Correlation Example")
+def main():
+    val1 = math.abs(close - close[1])
+    result = math.log(val1) if val1 > 0 else 0
+
+    plot(result, "Log of Abs Change")
+```
+
+### Strategy Example
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import script, ta, close, high, low
+from pynecore.lib import strategy
+
+
+@script.strategy("Simple Crossover Strategy")
+def main():
+    fast_ma = ta.sma(close, 9)
+    slow_ma = ta.sma(close, 21)
+
+    if ta.crossover(fast_ma, slow_ma):
+        strategy.entry("Long", strategy.long)
+
+    if ta.crossunder(fast_ma, slow_ma):
+        strategy.entry("Short", strategy.short)
+```
+
+## Python Advantages
+
+While PyneCore provides full compatibility with the Pine Script API, you can also take advantage of Python language
+features. For more detailed differences, see the [Differences from Pine Script](/docs/overview/differences/) page.
+
+### NA Handling
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import na
+from pynecore.types.na import NA
+
+# Creating NA values
+a = NA()  # or na()
+
+# Typed NA values
+f = NA(float)  # or na(float)
+
+# Checking for NA
+if isinstance(value, NA) or na(value):
+    print("Value is NA")
+```
+
+## More Complex Modules
+
+The PyneCore library also includes more complex modules, such as the `strategy` module for strategy development, or
+various display options. These are typically accessible in a submodule structure:
+
+```python
+"""
+@pyne
+"""
+from pynecore.lib import plot, plot_style
+from pynecore.lib.strategy import direction
+
+# Using different style elements
+plot(series, title="Line Type", style=plot_style.style_line)
+plot(series, title="Column Type", style=plot_style.style_columns)
+```

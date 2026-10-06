@@ -1,0 +1,28 @@
+<!--
+---
+weight: 300
+title: "Command Line Interface"
+description: "PyneCore Command Line Interface (CLI) overview and usage"
+icon: "terminal"
+date: "2025-04-03"
+lastmod: "2026-09-28"
+draft: false
+toc: true
+categories: ["Usage", "CLI"]
+tags: ["cli", "command-line", "tools", "utilities"]
+---
+-->
+
+# Command Line Interface
+
+PyneCore Command Line Interface (CLI) overview and usage
+
+## In this section
+
+- [Basics](./basics.md) - Basic CLI usage and getting started
+- [Run](./run.md) - Running scripts with the CLI
+- [Compile](./compile.md) - Converting Pine Script to Pyne code with PyneComp (PyneSys API key required)
+- [Data](./data.md) - Data management commands
+- [Symbol Browser TUI](./symbol-browser.md) - Interactive symbol picker for `pyne data download`
+
+Other built-in commands: `pyne benchmark`, `pyne debug ast` and `pyne plugin list|info` (see `--help`).

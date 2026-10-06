@@ -1237,6 +1237,8 @@
     ]
   },
   "scripts": {
+    "docs:check": "node scripts/pynecore-docs.mjs",
+    "docs:sync": "node scripts/pynecore-docs.mjs --sync",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",

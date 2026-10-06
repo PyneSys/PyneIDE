@@ -92,6 +92,18 @@ difference; a clean CI install dies immediately.
 `SETUP_DOWNLOAD_MB` in the same file is hand-measured, not computed — if you
 bump a pin, re-measure it.
 
+The extension also ships the matching PyneCore documentation under
+`resources/pynecore/`. After changing the pin, copy the docs from that release's
+tag in a local PyneCore checkout:
+
+```bash
+npm run docs:sync -- /path/to/pynecore
+```
+
+The sync uses `v<PYNECORE_VERSION>`, preserves the documentation and its license
+files verbatim, and records the source commit and file checksums. Builds verify
+the snapshot offline and fail if its version or contents no longer match.
+
 ## Code style
 
 Match the surrounding code. The project uses TypeScript with `strict` on, and
