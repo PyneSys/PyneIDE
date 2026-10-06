@@ -66,7 +66,10 @@ function matches(row: PluginRow): boolean {
 function badges(row: PluginRow): string {
   const items: string[] = [];
   if (row.builtin) items.push('<span class="badge">built-in</span>');
-  else if (row.tier) items.push(`<span class="badge ${row.tier}">${row.tier}</span>`);
+  else if (row.tier) {
+    const tier = escapeHtml(row.tier);
+    items.push(`<span class="badge ${tier}">${tier}</span>`);
+  }
   if (row.installed) {
     items.push(
       `<span class="badge installed">installed${row.installedVersion ? ` ${escapeHtml(row.installedVersion)}` : ''}</span>`
@@ -204,7 +207,7 @@ function detailHtml(row: PluginRow): string {
         'Downloads (30d)',
         row.downloads30d === null || row.downloads30d === undefined
           ? '—'
-          : String(row.downloads30d)
+          : escapeHtml(String(row.downloads30d))
       )
     );
   }

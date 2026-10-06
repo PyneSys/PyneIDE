@@ -2470,7 +2470,7 @@ function renderTrades(): string {
       const selected = i === selectedTradeIndex;
       return (
         `<tr class="clickable${selected ? ' selected' : ''}" data-trade-index="${i}" ` +
-        `data-ts="${t.entryTime}"${selected ? ' aria-selected="true"' : ''}>` +
+        `data-ts="${esc(String(t.entryTime))}"${selected ? ' aria-selected="true"' : ''}>` +
         `<td>${i + 1} ${long ? '▲' : '▼'} ${esc(t.entryId ?? '')}</td>` +
         `<td>${fmtTime(t.entryTime)}</td><td>${fmt(t.entryPrice, d)}</td>` +
         `<td>${fmtTime(t.exitTime)}</td><td>${fmt(t.exitPrice, d)}</td>` +
