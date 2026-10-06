@@ -117,6 +117,14 @@ the generated file hashes, so reinitialization can refresh unchanged generated
 files while preserving user-authored or edited files. Run `npm run test:agent-skills`
 after changing the templates or generator.
 
+The project-root `AGENTS.md` routes work to these skills, and `CLAUDE.md` imports
+it. Their marked PyneIDE sections are refreshed independently of existing user
+instructions; an edited section is preserved. `AGENT_RULES.md` belongs to the
+user and is never refreshed from a template. **Edit Agent Rules…** opens it even
+while the agent files are hidden. `pyneide.showAgentFiles` is a resource-scoped,
+default-off Explorer visibility setting; its changes affect initialized Pyne
+projects only and retain unrelated exclusions.
+
 ## Code style
 
 Match the surrounding code. The project uses TypeScript with `strict` on, and

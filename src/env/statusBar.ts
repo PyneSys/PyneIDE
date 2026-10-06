@@ -8,6 +8,7 @@ import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
 import type { PluginService } from '../plugins/service';
 import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { agentProjectFolder } from '../workspace/agentPreferences';
 import type { EnvManager, EnvState } from './manager';
 import { resolvePyneIdeWorkdir } from './workdirConfig';
 
@@ -322,6 +323,17 @@ export class EnvStatusBar {
           : 'Readable output (surgical renames only)',
         action: () => void vscode.commands.executeCommand('pyneide.toggleStrictCompile'),
       });
+
+      if (agentProjectFolder()) {
+        items.push(
+          { label: 'Development Preferences', kind: vscode.QuickPickItemKind.Separator },
+          {
+            label: '$(edit) Edit Agent Rules…',
+            description: 'Describe how you want to develop Pine and Pyne code',
+            action: () => void vscode.commands.executeCommand('pyneide.editAgentRules'),
+          }
+        );
+      }
 
       items.push(
         { label: 'Environment', kind: vscode.QuickPickItemKind.Separator },

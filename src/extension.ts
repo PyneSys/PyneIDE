@@ -54,6 +54,7 @@ import { PYLANCE_EXTENSION, PyrightService, routeAnalysisToPyne } from './typing
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import type { InputsTab } from './workspace/inputsMessages';
 import { ensureProjectAgentSkills } from './workspace/agentSkills';
+import { registerAgentPreferences } from './workspace/agentPreferences';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
@@ -81,6 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Environment'));
   const manager = new EnvManager(context.globalStorageUri.fsPath, output);
   context.subscriptions.push(output, manager);
+  registerAgentPreferences(context, (message) => output.appendLine(message));
 
   const compileOutput = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Compiler'));
   const auth = new AuthService(context, compileOutput);
@@ -108,6 +110,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.setup()),
     vscode.commands.registerCommand('pyneide.showEnvironmentLog', () => output.show()),
+    vscode.commands.registerCommand('pyneide.openSettings', () =>
+      vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
+    ),
     vscode.commands.registerCommand('pyneide.createWorkspace', () =>
       initProjectCommand(context, manager, output)
     ),
@@ -697,7 +702,11 @@ async function initProjectCommand(
         // workdir/ subfolder layout needs it there too.
         ensurePyrightConfig(folder.uri.fsPath);
       }
-      hideGeneratedFiles(folder.uri.fsPath);
+      const visibility = vscode.workspace.getConfiguration('pyneide', folder.uri);
+      const explicitVisibility = visibility.inspect<boolean>('showAgentFiles');
+      const showAgentFiles = explicitVisibility?.workspaceFolderValue ??
+        explicitVisibility?.workspaceValue ?? explicitVisibility?.globalValue;
+      hideGeneratedFiles(folder.uri.fsPath, showAgentFiles);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       writeAgentSkills(folder.uri.fsPath, result.workdir);
       updateTerminalEnv(context, manager);

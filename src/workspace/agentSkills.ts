@@ -13,6 +13,7 @@ interface GeneratedManifest {
   generator: typeof GENERATOR;
   format: 1;
   files: Record<string, string>;
+  sections?: Record<string, string>;
 }
 
 interface DocsManifest {
@@ -40,6 +41,76 @@ export interface AgentSkillsResult {
 
 function hash(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+export const AGENT_RULES_FILE = 'AGENT_RULES.md';
+
+/** The preferences file belongs to the user from its first creation. */
+export function ensureAgentRulesFile(projectRoot: string, extensionPath: string): boolean {
+  const target = path.join(projectRoot, AGENT_RULES_FILE);
+  try {
+    fs.lstatSync(target);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const source = path.join(extensionPath, 'resources/agent-project/preferences.md');
+  fs.writeFileSync(target, fs.readFileSync(source, 'utf8'), { flag: 'wx' });
+  return true;
+}
+
+function writeProjectGuide(
+  root: string,
+  file: string,
+  content: string,
+  previous: GeneratedManifest,
+  sections: Record<string, string>,
+  result: AgentSkillsResult,
+  log: Logger
+): void {
+  const target = path.join(root, file);
+  const start = '<!-- pyneide-project:start -->';
+  const end = '<!-- pyneide-project:end -->';
+  const block = `${start}\n${content.trimEnd()}\n${end}`;
+  let existing: string | undefined;
+  try {
+    if (!fs.lstatSync(target).isFile()) {
+      result.preserved++;
+      log(`Agent guide: preserved ${file} (not a regular file)`);
+      return;
+    }
+    existing = fs.readFileSync(target, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let next: string;
+  const startIndex = existing?.indexOf(start) ?? -1;
+  const endIndex = existing?.indexOf(end) ?? -1;
+  if (existing !== undefined && (startIndex >= 0 || endIndex >= 0)) {
+    if (startIndex < 0 || endIndex < startIndex ||
+        existing.indexOf(start, startIndex + start.length) >= 0 ||
+        existing.indexOf(end, endIndex + end.length) >= 0) {
+      result.preserved++;
+      log(`Agent guide: preserved ${file} (ambiguous project section)`);
+      return;
+    }
+    const oldBlock = existing.slice(startIndex, endIndex + end.length);
+    if (oldBlock !== block && hash(oldBlock) !== previous.sections?.[file]) {
+      result.preserved++;
+      log(`Agent guide: preserved edited project section in ${file}`);
+      return;
+    }
+    next = existing.slice(0, startIndex) + block + existing.slice(endIndex + end.length);
+  } else {
+    const separator = !existing || existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+    next = (existing ?? '') + separator + block + '\n';
+  }
+  if (next !== existing) {
+    fs.writeFileSync(target, next, { flag: existing === undefined ? 'wx' : 'w' });
+    if (existing === undefined) result.created++;
+    else result.updated++;
+  }
+  sections[file] = hash(block);
 }
 
 function readManifest(projectRoot: string): GeneratedManifest {
@@ -122,6 +193,7 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
     pynecoreDocs: docsRoot,
     documentationVersion: docs.pynecoreVersion,
     documentationSourceCommit: docs.sourceCommit,
+    userRules: path.join(root, AGENT_RULES_FILE),
   }, null, 2) + '\n';
 
   const templates = new Map<string, string>();
@@ -139,7 +211,14 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
   }
 
   const files = { ...previous.files };
-  const result: AgentSkillsResult = { created: 0, updated: 0, preserved: 0 };
+  const sections = { ...previous.sections };
+  const result: AgentSkillsResult = {
+    created: ensureAgentRulesFile(root, options.extensionPath) ? 1 : 0, updated: 0, preserved: 0,
+  };
+  for (const [file, template] of [['AGENTS.md', 'project.md'], ['CLAUDE.md', 'claude.md']]) {
+    const content = fs.readFileSync(path.join(options.extensionPath, 'resources/agent-project', template), 'utf8');
+    writeProjectGuide(root, file, content, previous, sections, result, options.log);
+  }
   for (const skillRoot of SKILL_ROOTS) {
     for (const [relative, content] of templates) {
       const relativePath = `${skillRoot}/${relative}`;
@@ -169,7 +248,7 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
       files[relativePath] = hash(content);
     }
   }
-  const manifest: GeneratedManifest = { generator: GENERATOR, format: 1, files };
+  const manifest: GeneratedManifest = { generator: GENERATOR, format: 1, files, sections };
   fs.writeFileSync(path.join(root, MANIFEST_PATH), JSON.stringify(manifest, null, 2) + '\n');
   options.log(`Agent skills: ${result.created} created, ${result.updated} updated, ` +
     `${result.preserved} user files preserved`);

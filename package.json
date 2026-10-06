@@ -85,9 +85,21 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.editAgentRules",
+        "title": "Edit Agent Rules…",
+        "category": "PyneIDE",
+        "enablement": "pyneide.hasWorkdir"
+      },
+      {
         "command": "pyneide.openWalkthrough",
         "title": "Get Started",
         "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.openSettings",
+        "title": "Open Settings",
+        "category": "PyneIDE",
+        "icon": "$(settings-gear)"
       },
       {
         "command": "pyneide.removeEnvironment",
@@ -586,6 +598,11 @@
           "group": "navigation@1"
         },
         {
+          "command": "pyneide.openSettings",
+          "when": "view == pyneide.workspace",
+          "group": "navigation@2"
+        },
+        {
           "command": "pyneide.openWalkthrough",
           "when": "view == pyneide.workspace",
           "group": "pyneide.help@1"
@@ -594,6 +611,11 @@
           "command": "pyneide.openDocs",
           "when": "view == pyneide.workspace",
           "group": "pyneide.help@2"
+        },
+        {
+          "command": "pyneide.editAgentRules",
+          "when": "view == pyneide.workspace && pyneide.hasWorkdir",
+          "group": "pyneide.preferences@1"
         }
       ],
       "view/item/context": [
@@ -972,6 +994,20 @@
       }
     ],
     "configuration": [
+      {
+        "id": "pyneide.agents",
+        "title": "Agent Assistance",
+        "order": 4,
+        "properties": {
+          "pyneide.showAgentFiles": {
+            "type": "boolean",
+            "default": false,
+            "scope": "resource",
+            "order": 1,
+            "markdownDescription": "Show agent instruction files and skill folders in the Explorer for initialized Pyne projects. They are hidden by default. To edit your development preferences while keeping them hidden, run **PyneIDE: Edit Agent Rules…**."
+          }
+        }
+      },
       {
         "id": "pyneide.general",
         "title": "General",

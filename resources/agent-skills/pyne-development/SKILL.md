@@ -25,7 +25,8 @@ is in `references/documentation.md`. Read only the pages relevant to the task.
 - Pyne is Python syntax with bar execution and state transformations. Put `@pyne` in the
   initial module docstring so the runtime recognizes it.
 - A runnable indicator or strategy has a decorated `main()` using `@script.indicator`
-  or `@script.strategy`. Configure inputs as `input.*` defaults on its parameters.
+  or `@script.strategy`. Configure inputs as `input.*` defaults on its parameters. A library has
+  `@script.library` decorator.
 - Import runtime namespaces from `pynecore.lib` and annotations from `pynecore.types`.
 - `Series[T]` stores bar history. The current value participates in ordinary expressions;
   `[1]` selects the previous bar. Explicitly annotate user variables whose history is needed.

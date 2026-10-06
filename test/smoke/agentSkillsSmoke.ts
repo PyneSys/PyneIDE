@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { PYNECORE_VERSION } from '../../src/env/constants';
-import { scaffoldWorkdirWithCli } from '../../src/env/workdir';
+import { agentFileExcludes, hideGeneratedFiles, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { ensureProjectAgentSkills, type AgentSkillsOptions } from '../../src/workspace/agentSkills';
 
 const extensionPath = path.resolve(__dirname, '..');
@@ -35,7 +35,12 @@ async function main(): Promise<void> {
       const workdir = subfolder ? path.join(root, 'workdir') : root;
       const opts = options(root, workdir);
       const generated = ensureProjectAgentSkills(opts);
-      assert.equal(generated.created, 24);
+      assert.equal(generated.created, 27);
+      const guide = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+      for (const name of names) assert.ok(guide.includes(name));
+      assert.ok(guide.includes('AGENT_RULES.md'));
+      assert.ok(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8').includes('@AGENTS.md'));
+      assert.ok(fs.existsSync(path.join(root, 'AGENT_RULES.md')));
       for (const skillRoot of roots) {
         for (const name of names) {
           const skill = path.join(root, skillRoot, name, 'SKILL.md');
@@ -65,6 +70,13 @@ async function main(): Promise<void> {
       for (const file of paths) assert.ok(fs.existsSync(path.join(docs, file)), file);
       assert.deepEqual(ensureProjectAgentSkills(opts), { created: 0, updated: 0, preserved: 0 });
 
+      const rules = path.join(root, 'AGENT_RULES.md');
+      const preferences = '# My preferences\n\nExplain edits in Hungarian.\n';
+      fs.writeFileSync(rules, preferences);
+      const agents = path.join(root, 'AGENTS.md');
+      const customGuide = 'My existing project instructions.\n\n' + guide;
+      fs.writeFileSync(agents, customGuide);
+
       const edited = path.join(root, roots[1], 'pine-development/SKILL.md');
       fs.appendFileSync(edited, '\nProject-specific Pine guidance.\n');
       const userText = fs.readFileSync(edited, 'utf8');
@@ -76,6 +88,20 @@ async function main(): Promise<void> {
       assert.equal(fs.readFileSync(edited, 'utf8'), userText);
       assert.equal(readProject(root).runtimeVersion, '99.0.0');
       assert.equal(readProject(root).documentationVersion, PYNECORE_VERSION);
+      assert.equal(fs.readFileSync(rules, 'utf8'), preferences);
+      assert.equal(fs.readFileSync(agents, 'utf8'), customGuide);
+      hideGeneratedFiles(root);
+      let settings = JSON.parse(fs.readFileSync(path.join(root, '.vscode/settings.json'), 'utf8'));
+      for (const file of ['.agents', '.claude', '.cursor', 'AGENTS.md', 'CLAUDE.md', 'AGENT_RULES.md']) {
+        assert.equal(settings['files.exclude'][file], true);
+      }
+      hideGeneratedFiles(root, true);
+      settings = JSON.parse(fs.readFileSync(path.join(root, '.vscode/settings.json'), 'utf8'));
+      assert.equal(settings['files.exclude']['AGENT_RULES.md'], false);
+      assert.equal(settings['files.exclude']['.vscode'], true);
+      hideGeneratedFiles(root, false);
+      settings = JSON.parse(fs.readFileSync(path.join(root, '.vscode/settings.json'), 'utf8'));
+      assert.equal(settings['files.exclude']['AGENT_RULES.md'], true);
     }
 
     const root = path.join(temp, 'user-authored project');
@@ -83,9 +109,30 @@ async function main(): Promise<void> {
     const skill = path.join(root, roots[0], 'pyne-development/SKILL.md');
     fs.mkdirSync(path.dirname(skill), { recursive: true });
     fs.writeFileSync(skill, 'User-authored skill\n');
+    fs.writeFileSync(path.join(root, 'AGENTS.md'), 'Existing agent guidance without a final newline');
+    fs.writeFileSync(path.join(root, 'CLAUDE.md'), '# Existing Claude rules\n\nKeep functions short.\n');
+    fs.writeFileSync(path.join(root, 'AGENT_RULES.md'), '# Existing preferences\n');
     assert.equal(ensureProjectAgentSkills(opts).preserved, 1);
+    const firstGuide = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    assert.ok(firstGuide.startsWith('Existing agent guidance without a final newline\n\n'));
+    assert.ok(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8').startsWith('# Existing Claude rules\n\nKeep functions short.\n'));
+    assert.equal(fs.readFileSync(path.join(root, 'AGENT_RULES.md'), 'utf8'), '# Existing preferences\n');
     assert.equal(fs.readFileSync(skill, 'utf8'), 'User-authored skill\n');
     assert.equal(ensureProjectAgentSkills(opts).preserved, 1);
+    assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), firstGuide);
+    const editedGuide = firstGuide.replace('This is a Pine Script', 'This is my customized Pine Script');
+    fs.writeFileSync(path.join(root, 'AGENTS.md'), editedGuide);
+    assert.equal(ensureProjectAgentSkills(opts).preserved, 2);
+    assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), editedGuide);
+
+    const manualExclude = { '.agents': false, 'custom-folder': true };
+    const hidden = agentFileExcludes(manualExclude, manualExclude, false, false);
+    assert.equal(hidden['.agents'], false);
+    assert.equal(hidden['AGENTS.md'], true);
+    const shown = agentFileExcludes(hidden, hidden, true, true);
+    assert.equal(shown['AGENTS.md'], false);
+    assert.equal(shown['custom-folder'], true);
+    assert.equal(agentFileExcludes(shown, shown, false, true)['.agents'], true);
 
     const packaged = path.join(temp, 'packaged extension');
     fs.mkdirSync(packaged);
@@ -97,6 +144,18 @@ async function main(): Promise<void> {
     assert.equal(path.basename(packagedMetadata.extensionReadme), 'readme.md');
     assert.ok(fs.existsSync(packagedMetadata.extensionReadme));
     assert.ok(packagedMetadata.pynecoreDocs.startsWith(packaged + path.sep));
+
+    const packagedAgents = path.join(packagedProject, 'AGENTS.md');
+    const originalPackagedGuide = fs.readFileSync(packagedAgents, 'utf8');
+    fs.writeFileSync(packagedAgents, 'Custom instructions before the IDE guide.\n\n' + originalPackagedGuide);
+    const packagedRules = path.join(packagedProject, 'AGENT_RULES.md');
+    fs.writeFileSync(packagedRules, 'My own development rules.\n');
+    fs.appendFileSync(path.join(packaged, 'resources/agent-project/project.md'), '\nUse the project data files for checks.\n');
+    const changedGuide = ensureProjectAgentSkills({ ...options(packagedProject), extensionPath: packaged });
+    assert.equal(changedGuide.updated, 1);
+    assert.ok(fs.readFileSync(packagedAgents, 'utf8').startsWith('Custom instructions before the IDE guide.\n\n'));
+    assert.ok(fs.readFileSync(packagedAgents, 'utf8').includes('Use the project data files for checks.'));
+    assert.equal(fs.readFileSync(packagedRules, 'utf8'), 'My own development rules.\n');
 
     const unknown = path.join(temp, 'unknown manifest');
     const unknownOptions = options(unknown);

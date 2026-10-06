@@ -428,15 +428,35 @@ export function markProjectAsWorkdir(projectDir: string, takeOverAnalysis: boole
  * `files.exclude`, so the files stay in place and keep working — they are just
  * not shown. The settings UI still opens .vscode/settings.json as JSON.
  */
-const HIDDEN_FILE_PATTERNS = ['**/__pycache__', '**/pyrightconfig.json', '.vscode', '.pyne'];
+const HIDDEN_FILE_PATTERNS = [
+  '**/__pycache__', '**/pyrightconfig.json', '.vscode', '.pyne',
+];
+
+export const AGENT_FILE_PATTERNS = [
+  '.agents', '.claude', '.cursor', 'AGENTS.md', 'CLAUDE.md', 'AGENT_RULES.md',
+] as const;
+
+export function agentFileExcludes(
+  current: Record<string, unknown>,
+  effective: Record<string, unknown>,
+  visible: boolean,
+  explicit: boolean
+): Record<string, unknown> {
+  const next = { ...current };
+  for (const pattern of AGENT_FILE_PATTERNS) {
+    if (explicit || effective[pattern] === undefined) next[pattern] = !visible;
+  }
+  return next;
+}
 
 /**
  * Merge the scaffolding-hiding patterns into `files.exclude` of
- * `<projectDir>/.vscode/settings.json`. Only missing keys are added — a user
- * who deliberately set a pattern to `false` (unhid it) is respected. Returns
- * false when an existing settings.json could not be parsed (left untouched).
+ * `<projectDir>/.vscode/settings.json`. Existing scaffolding exclusions are
+ * respected. An explicit Show Agent Files choice controls agent exclusions;
+ * otherwise individually unhidden agent files stay visible. Returns false
+ * when an existing settings.json could not be parsed (left untouched).
  */
-export function hideGeneratedFiles(projectDir: string): boolean {
+export function hideGeneratedFiles(projectDir: string, showAgentFiles?: boolean): boolean {
   const vscodeDir = path.join(projectDir, '.vscode');
   const settingsPath = path.join(vscodeDir, 'settings.json');
   let settings: Record<string, unknown> = {};
@@ -448,8 +468,10 @@ export function hideGeneratedFiles(projectDir: string): boolean {
     }
   }
   const current = settings['files.exclude'];
-  const exclude: Record<string, unknown> =
+  const baseExclude: Record<string, unknown> =
     current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+  const show = showAgentFiles ?? settings['pyneide.showAgentFiles'];
+  const exclude = agentFileExcludes(baseExclude, baseExclude, show === true, typeof show === 'boolean');
   let changed = false;
   for (const pattern of HIDDEN_FILE_PATTERNS) {
     if (!(pattern in exclude)) {
@@ -457,6 +479,7 @@ export function hideGeneratedFiles(projectDir: string): boolean {
       changed = true;
     }
   }
+  changed ||= JSON.stringify(exclude) !== JSON.stringify(baseExclude);
   if (!changed) return false;
   settings['files.exclude'] = exclude;
   fs.mkdirSync(vscodeDir, { recursive: true });
