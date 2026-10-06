@@ -86,8 +86,20 @@ Abbreviated filenames in a row share the first filename's directory.
 ## Validate the change
 
 Use `pyneBin` and `workdir` from `references/project.json`; do not assume the agent's terminal
-has the IDE environment activated. Existing `.pine` files remain the source of truth for
-converted scripts. For CLI details, read `cli/run.md` and inspect that CLI's `run --help`.
+has the IDE environment activated. For CLI details, read `cli/run.md` and inspect that CLI's
+`run --help`.
+
+Identify the target script by its directory and filename stem. If `name.pine` exists, either
+alone or beside `name.py`, use the Pine workflow and edit only `name.pine`. If only `name.py`
+exists without a matching `name.pine`, use the Pyne workflow and edit that Python source
+normally. Other Pine files with different names do not affect this choice.
+
+**For the Pine workflow, do not edit the generated `.py` or `.py.map` beside the `.pine` file.**
+Fix only the Pine source and let PyneIDE regenerate its outputs through Compile, Run or Debug.
+Do not manually synchronize the Python companion: its changed output hash makes the next Pine
+compilation warn about manual edits and ask whether to overwrite it. Reading it for diagnosis
+is fine. This restriction does not apply to Pyne source without a matching Pine file, or to an explicit user
+request to change a generated output separately.
 
 Run on representative local data, inspect runtime errors and requested outputs, and use
 the IDE's chart/debug workflow when the task requires visual or bar-by-bar evidence.

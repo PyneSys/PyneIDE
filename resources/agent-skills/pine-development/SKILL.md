@@ -6,9 +6,26 @@ description: Write, debug, review or migrate Pine Script indicators, strategies 
 # Pine Script development
 
 Read `references/project.json` for this project's workdir and execution environment.
-Edit the `.pine` source when it exists; its sibling `.py` and `.py.map` are compiler outputs.
 Use the existing script version when repairing code. Start new scripts with `//@version=6`;
 handle a requested v4/v5 migration explicitly rather than silently changing semantics.
+
+## Pine source and generated files
+
+Check the same directory and filename stem for the target script. A lone `name.pine`, or a
+`name.pine` plus `name.py` pair, means the Pine workflow. A lone `name.py` without `name.pine`
+means the Pyne workflow: edit that Python source normally. Unrelated Pine files elsewhere or
+with other names do not make a Python file generated output.
+
+**Edit only the `.pine` source for a Pine task. Do not also edit its generated Python.**
+Its compiler-generated `.py` and `.py.map` companions are read-only for this workflow:
+do not patch, synchronize, delete or regenerate them yourself, even to make both files agree.
+Read them if needed for diagnosis, then fix the Pine source. Let PyneIDE write the matching
+outputs through its Compile, Run or Debug commands.
+
+Editing the generated `.py` changes the output hash that PyneIDE tracks. The next Pine
+compilation then warns about manual Python edits and asks whether to overwrite the file.
+Leaving the generated files untouched avoids this unwanted confirmation during normal runs.
+Only an explicit user request to change generated outputs is an exception.
 
 ## Language basics
 

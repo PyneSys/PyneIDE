@@ -25,7 +25,18 @@ tools are unavailable or the task is a code/runtime check. Instructions do not s
 | `config/`                          | API, plugin and symbol mapping configuration       |
 | `output/`                          | Run outputs                                        |
 
-When a `.pine` file and its compiled `.py` coexist, modify the `.pine` source for a Pine task.
+Select the workflow for the target script using the same directory and filename stem:
+`name.pine` alone, or `name.pine` together with `name.py`, means the Pine workflow.
+`name.py` alone without a matching `name.pine` means the Pyne workflow, where the Python
+source can be edited. Pine files with other names do not change that classification.
+
+**When working on Pine, modify only the `.pine` source.** Do not edit, synchronize, delete or
+recreate its generated `.py` or `.py.map` companions. Let PyneIDE write them through Compile,
+Run or Debug. Manual Python edits change the tracked output hash and cause the next Pine
+compilation to warn about manual edits and ask whether to overwrite the file, interrupting
+the normal run workflow. Reading generated code is fine; make fixes in Pine. Pyne source
+without a matching Pine file remains editable; generated outputs may be changed on an explicit user request.
+
 Use the reported environment instead of a system Python. External environments selected via
 `pyneide.venvPath` or `pyneide.pythonPath` are verified by the IDE and remain user-managed.
 
