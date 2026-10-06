@@ -1261,6 +1261,7 @@
     "test:symbol-map": "node esbuild.mjs --smoke-symbol-map && node dist/symbol-map-smoke.js",
     "test:report": "node esbuild.mjs --smoke-report && node dist/report-smoke.js",
     "test:plugins": "node esbuild.mjs --smoke-plugins && node dist/plugins-smoke.js",
+    "test:agent-skills": "node esbuild.mjs --smoke-agent-skills && node dist/agent-skills-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/"

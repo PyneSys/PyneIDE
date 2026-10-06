@@ -104,6 +104,19 @@ The sync uses `v<PYNECORE_VERSION>`, preserves the documentation and its license
 files verbatim, and records the source commit and file checksums. Builds verify
 the snapshot offline and fail if its version or contents no longer match.
 
+Project initialization generates `pine-development`, `pyne-development` and
+`pyneide-workflow` skills from `resources/agent-skills/` into `.agents/skills/`,
+`.claude/skills/` and `.cursor/skills/`. These are internal agent references;
+the Documentation menu keeps its public links. Pine guidance is authored here
+and includes a topic index into external documentation; no TradingView text is
+bundled. Pyne guidance reads the pinned Markdown snapshot inside the extension.
+
+Each generated skill receives `references/project.json` with the actual workdir,
+interpreter, CLI and documentation locations. `.agents/pyneide-skills.json` tracks
+the generated file hashes, so reinitialization can refresh unchanged generated
+files while preserving user-authored or edited files. Run `npm run test:agent-skills`
+after changing the templates or generator.
+
 ## Code style
 
 Match the surrounding code. The project uses TypeScript with `strict` on, and

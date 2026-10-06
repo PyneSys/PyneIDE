@@ -53,6 +53,7 @@ import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService, routeAnalysisToPyne } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import type { InputsTab } from './workspace/inputsMessages';
+import { ensureProjectAgentSkills } from './workspace/agentSkills';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
@@ -649,6 +650,20 @@ async function initProjectCommand(
   const pyneBin = await ensurePyneCli(manager);
   if (!pyneBin) return;
   const log = (msg: string): void => output.appendLine(msg);
+  const environment = manager.state;
+  if (environment.kind !== 'ready') return;
+  const writeAgentSkills = (projectRoot: string, workdir: string): void => {
+    ensureProjectAgentSkills({
+      projectRoot,
+      workdir,
+      extensionPath: context.extensionPath,
+      extensionVersion: context.extension.packageJSON.version as string,
+      pythonBin: environment.pythonBin,
+      pyneBin,
+      runtimeVersion: environment.verify.pynecoreVersion,
+      log,
+    });
+  };
 
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
@@ -684,13 +699,14 @@ async function initProjectCommand(
       }
       hideGeneratedFiles(folder.uri.fsPath);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
+      writeAgentSkills(folder.uri.fsPath, result.workdir);
       updateTerminalEnv(context, manager);
       const pylanceOff = await takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
       await vscode.window.showTextDocument(doc);
       const done = result.created
         ? `PyneIDE: Pyne project initialized at ${result.workdir}.`
-        : `PyneIDE: existing workdir completed at ${result.workdir} (nothing was overwritten).`;
+        : `PyneIDE: existing project completed at ${result.workdir} (user-edited files were preserved).`;
       void vscode.window.showInformationMessage(
         pylanceOff
           ? `${done} Pylance is turned off in this workspace only, so PyneIDE can provide ` +
@@ -717,7 +733,7 @@ async function initProjectCommand(
   if (!baseDir) return;
 
   try {
-    await scaffoldWorkdirWithCli(pyneBin, baseDir, log);
+    const result = await scaffoldWorkdirWithCli(pyneBin, baseDir, log);
     const pylance = vscode.extensions.getExtension(PYLANCE_EXTENSION) !== undefined;
     if (!markProjectAsWorkdir(baseDir, pylance)) {
       void vscode.window.showWarningMessage(
@@ -727,6 +743,7 @@ async function initProjectCommand(
     }
     hideGeneratedFiles(baseDir);
     ensurePyneSnippets(baseDir, context.extensionPath);
+    writeAgentSkills(baseDir, result.workdir);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {
     void vscode.window.showErrorMessage(
