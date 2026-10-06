@@ -28,6 +28,8 @@ Do not open a public issue. See [SECURITY.md](SECURITY.md).
 
 ## Development setup
 
+Use Node.js 22 or newer for the build and VSIX packaging tools.
+
 ```bash
 npm install
 npm run watch        # esbuild in watch mode
