@@ -501,6 +501,14 @@ async function main(): Promise<void> {
     const strategy = await runBridge(pythonBin, ws.workdir, 'equity_demo');
     if (strategy.exitCode !== 0) fail(`bridge exit code ${strategy.exitCode} (strategy)`);
     assertNativeEquityFile(ws.workdir, 'equity_demo');
+    const metadata = await execProcess(
+      pythonBin,
+      [path.join(__dirname, '..', 'test', 'smoke', 'bridgePlotMetaSmoke.py'),
+        path.join(__dirname, '..', 'python')],
+      log,
+      { timeoutMs: 30000 }
+    );
+    if (metadata.code !== 0) fail(`metadata feed smoke failed: ${metadata.stderr}`);
   }
 
   log('BRIDGE VIZ SMOKE OK');

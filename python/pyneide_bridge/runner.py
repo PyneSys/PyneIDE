@@ -72,10 +72,9 @@ class _VizTap:
     ``active`` is False when the running pynecore predates the viz layer
     (released 6.5.x): every hook degrades to a no-op and the protocol keeps
     its v1 shape. The tap must copy per-bar state inside the run_iter loop —
-    ``run_iter`` clears ``_plot_meta_new``/``_viz_dyn`` after each yield.
-    pynecore's own VizWriter drains the pending-meta list before ``run_iter``
-    yields. The bridge therefore observes the persistent ``_plot_meta``
-    registry and emits a meta whenever its serialized form changes.
+    dynamic color channels are cleared after each yield. Recent Core versions
+    provide a revisioned metadata feed shared with the native writer. Earlier
+    versions use a serialized-value comparison of the persistent registry.
     """
 
     def __init__(self, lib: Any) -> None:
@@ -84,6 +83,8 @@ class _VizTap:
         self._lib = lib
         self._metas: dict[str, dict[str, Any]] = {}
         self._last_metas: dict[str, dict[str, Any]] = {}
+        self._meta_cursor = 0
+        self._meta_changes = None
         self._colors: list[list[Any]] = []
         self._last: dict[str, Any] = {}
         self._shadow: dict[Any, Any] = {}
@@ -98,6 +99,7 @@ class _VizTap:
                 or not hasattr(viz, "_encode_color_channel"):
             return
         self._serialize_meta = viz.serialize_meta
+        self._meta_changes = getattr(viz, "collect_meta_changes", None)
         self._encode = viz._encode_color_channel
         self.active = True
         # Drawing journal (line/label/box/table/polyline/linefill). The
@@ -109,13 +111,20 @@ class _VizTap:
             self.journal = True
 
     def drain_metas(self) -> None:
-        """Copy new or changed plot metas from the persistent registry.
+        """Collect metadata updates with a cursor independent of the native writer.
 
-        The native VizWriter consumes ``_plot_meta_new`` before the generator
-        yields, so that queue cannot be shared with the live IDE stream. A
-        serialized-value comparison preserves the same upsert semantics,
-        including the later ``dynamic=True`` re-emission.
+        Older Core versions consume their pending queue before yielding, so
+        their persistent registry remains the compatibility source. Both paths
+        keep wire-value upsert semantics, including dynamic-color transitions.
         """
+        if self._meta_changes is not None:
+            self._meta_cursor, records = self._meta_changes(self._meta_cursor)
+            for serialized in records:
+                mid = serialized["id"]
+                if self._last_metas.get(mid) != serialized:
+                    self._last_metas[mid] = serialized
+                    self._metas[mid] = serialized
+            return
         for meta in self._lib._plot_meta.values():
             serialized = self._serialize_meta(meta)
             if self._last_metas.get(meta.id) != serialized:
