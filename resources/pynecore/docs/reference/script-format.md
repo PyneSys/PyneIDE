@@ -156,6 +156,18 @@ def main():
     ...
 ```
 
+Exported functions may reference library constants, but must not capture non-constant
+variables from the module or library `main()` scope. The AST validator also checks helpers
+and default arguments reached by an export. Create per-call state and drawings inside the
+exported function, or pass them as parameters. This check applies to handwritten Pyne and
+to libraries run directly as the main script.
+
+When a library is imported, drawing constructors and copies called by its `main()` (including
+its helper calls) return typed `na` handles without allocating or registering drawings.
+Setters and deletion on those handles have no effect. The same library draws normally when
+run as the main script, and an exported function called by the importing script can create
+normal drawings. This suppression is separate from the `request.security` execution context.
+
 ## 4. The main() Function
 
 The `main()` function is called **once per bar** during execution. It receives input parameters
@@ -191,6 +203,15 @@ def main():
 ```
 
 Alternatively, use `plot()` calls within the function body. Both approaches can be combined.
+
+## 5. Reserved Names
+
+The transform adds names of its own to the script, so two kinds of identifier are reserved and rejected with a `SyntaxError` at load time:
+
+- any identifier containing a middle dot (`·`);
+- the plain double-underscore names the transform emits, such as `__state__`, `__bool1__`, `__cmp3__` or any `__pyne_<name>__`.
+
+Other double-underscore names, including the ones PyneComp writes into compiled scripts (`__block_result__`, `__input_1__`, ...), are allowed. Strings and comments are not checked. See [AST Transformations](../advanced/ast-transformations.md#reserved-identifier-namespace) for the complete list.
 
 ## Complete Example
 
