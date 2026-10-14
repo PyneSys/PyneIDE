@@ -483,7 +483,8 @@ export class ChartPanel {
   }
   #plots-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
-    min-width: 140px; max-width: 320px; max-height: 60%; overflow: auto;
+    min-width: min(140px, calc(100vw - 12px)); max-width: min(320px, calc(100vw - 12px));
+    max-height: 60%; overflow: auto; box-sizing: border-box;
     padding: 4px; font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
@@ -492,11 +493,12 @@ export class ChartPanel {
   #plots-popup[hidden] { display: none; }
   #plots-popup .plot-row {
     display: flex; align-items: center; gap: 6px; padding: 2px 6px;
+    width: 100%; border: 0; background: transparent; text-align: left; font: inherit;
     cursor: pointer; border-radius: 3px;
   }
   #plots-popup .plot-row:hover { background: var(--vscode-list-hoverBackground, #333); }
   #plots-popup .plot-swatch { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 2px; }
-  #plots-popup .plot-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #plots-popup .plot-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #plots-popup .plot-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
   #plots-popup .plot-section {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;

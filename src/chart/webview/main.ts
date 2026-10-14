@@ -28,7 +28,7 @@ import {
   type VisibleRange,
 } from 'klinecharts';
 
-import type { BarRow, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
+import type { BarRow, DrawingFamily, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
 import {
   CANDLE_STYLE_OPTIONS,
   DEFAULT_CANDLE_STYLE,
@@ -383,6 +383,8 @@ let breakpointPointerGesture:
 /** Chart-wide, not per-run: a run rebuilds the chart from scratch, and having
  * the legend come back every time would defeat the toggle. */
 let legendVisible = true;
+let compactLegend = false;
+const COMPACT_LEGEND_WIDTH = 720;
 
 /** The Layers toggles are chart-wide for the same reason: a plot switched off
  * must stay off across re-runs of the same script. Held as the live set the
@@ -391,6 +393,8 @@ let legendVisible = true;
  * defaults again. A plot id that disappears from the script just stops
  * matching; a stale entry cannot hide a different plot. */
 const hiddenPlots = new Set<string>();
+const hiddenDrawings = new Set<DrawingFamily>();
+let tradeMarkersVisible = true;
 
 /** Mirrors `RunState.showVolume` across runs (see `hiddenPlots`). */
 let volumeVisible = false;
@@ -502,9 +506,23 @@ function legendStyles(): DeepPartial<Styles> {
   const text = cssVar('--vscode-editor-foreground', isDark() ? '#ccc' : '#333');
   const showRule = legendVisible ? 'always' : 'none';
   return {
-    candle: { tooltip: { showRule, legend: { color: text } } },
-    indicator: { tooltip: { showRule, legend: { color: text } } },
+    candle: { tooltip: {
+      showRule, showType: compactLegend ? 'rect' : 'standard', legend: { color: text },
+      rect: {
+        color: cssVar('--vscode-editorWidget-background', isDark() ? '#252526' : '#f3f3f3'),
+        borderColor: cssVar('--vscode-editorWidget-border', isDark() ? '#454545' : '#c8c8c8'),
+      },
+    } },
+    indicator: { tooltip: { showRule, showType: compactLegend ? 'rect' : 'standard', legend: { color: text } } },
   };
+}
+
+function refreshLegendLayout(st: RunState): void {
+  const width = st.chart.getSize('candle_pane', 'main')?.width ?? container.clientWidth;
+  const compact = width < COMPACT_LEGEND_WIDTH;
+  if (compact === compactLegend) return;
+  compactLegend = compact;
+  st.chart.setStyles(legendStyles());
 }
 
 /** KLineChart's own line/area styling, captured from a pristine chart before
@@ -861,6 +879,7 @@ function startRun(start: StartEvent): void {
   if (!chart) return;
 
   captureCandleDefaults(chart);
+  compactLegend = container.clientWidth < COMPACT_LEGEND_WIDTH;
   chart.setStyles(chartStyles());
   // The crosshair date label also shows the bar_index — a big help while
   // developing a script, since log/debug output is indexed by it.
@@ -889,7 +908,7 @@ function startRun(start: StartEvent): void {
     plotMeta: new Map(),
     colorTrack: new ColorTrack(),
     tsToIndex: new Map(),
-    drawings: new DrawingStore(),
+    drawings: new DrawingStore(hiddenDrawings),
     renderedTableVersion: -1,
     renderedTableLayout: '',
     trades: [],
@@ -927,6 +946,9 @@ function startRun(start: StartEvent): void {
     volumePrecision: 2,
   });
   chart.setPeriod(parsePeriod(start.syminfo.period));
+  requestAnimationFrame(() => {
+    if (state?.chart === chart) refreshLegendLayout(state);
+  });
   chart.subscribeAction('onVisibleRangeChange', (data) =>
     updateRealtimeButton(data as VisibleRange)
   );
@@ -1570,7 +1592,7 @@ function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
  * marker cap is needed.
  */
 function ensureTradeMarkerIndicator(st: RunState): void {
-  const want = st.start.scriptType === 'strategy' && st.trades.length > 0;
+  const want = tradeMarkersVisible && st.start.scriptType === 'strategy' && st.trades.length > 0;
   if (want && !st.tradeMarkerIndicatorId) {
     registerIndicator({
       name: TRADE_MARKER_INDICATOR_NAME,
@@ -1631,6 +1653,7 @@ function renderDrawingTables(st: RunState): void {
   st.renderedTableVersion = st.drawings.tableVersion;
   st.renderedTableLayout = layout;
   tablesEl.innerHTML = '';
+  if (hiddenDrawings.has('table')) return;
   for (const table of st.drawings.tables.values()) {
     const paneId = table.force_overlay || st.start.overlay ? 'candle_pane' : PLOTS_PANE_ID;
     const pane = st.chart.getSize(paneId, 'main') ?? st.chart.getSize('candle_pane', 'main');
@@ -1764,8 +1787,11 @@ function applyVisibility(st: RunState): void {
  * when `off`. */
 function makeLayerRow(
   label: string, kind: string, off: boolean, color: string | undefined, onToggle: () => void,
-): HTMLDivElement {
-  const row = document.createElement('div');
+): HTMLButtonElement {
+  const row = document.createElement('button');
+  row.type = 'button';
+  row.setAttribute('aria-label', `${label} (${kind})`);
+  row.setAttribute('aria-pressed', String(!off));
   row.className = 'plot-row';
   row.style.opacity = off ? '0.4' : '1';
   const swatch = document.createElement('span');
@@ -1785,7 +1811,13 @@ function makeLayerRow(
   // re-render detaches this row before that handler runs its containment check.
   row.addEventListener('click', (e) => {
     e.stopPropagation();
+    const restoreFocus = document.activeElement === row;
     onToggle();
+    if (restoreFocus) {
+      const replacement = Array.from(plotsPopupEl?.querySelectorAll<HTMLButtonElement>('.plot-row') ?? [])
+        .find((button) => button.getAttribute('aria-label') === row.getAttribute('aria-label'));
+      replacement?.focus();
+    }
   });
   return row;
 }
@@ -1806,6 +1838,33 @@ function renderPlotList(st: RunState): void {
       renderPlotList(st);
     }));
   }
+  const drawings: Array<[DrawingFamily, string, number]> = [
+    ['label', 'Labels', st.drawings.labels.size],
+    ['table', 'Tables', st.drawings.tables.size],
+    ['line', 'Lines', st.drawings.lines.size],
+    ['box', 'Boxes', st.drawings.boxes.size],
+    ['polyline', 'Polylines', st.drawings.polylines.size],
+    ['linefill', 'Line fills', st.drawings.linefills.size],
+  ];
+  if (drawings.some(([, , count]) => count > 0)) {
+    const section = document.createElement('div');
+    section.className = 'plot-section';
+    section.textContent = 'Drawings';
+    plotsPopupEl.appendChild(section);
+    for (const [family, label, count] of drawings) {
+      if (!count) continue;
+      plotsPopupEl.appendChild(makeLayerRow(label, 'drawing', hiddenDrawings.has(family), undefined, () => {
+        if (hiddenDrawings.has(family)) hiddenDrawings.delete(family);
+        else hiddenDrawings.add(family);
+        ensureDrawingIndicators(st);
+        st.renderedTableVersion = -1;
+        renderDrawingTables(st);
+        // Repaint the retained drawing state without resetting the viewport.
+        st.chart.setStyles({});
+        renderPlotList(st);
+      }));
+    }
+  }
   if (entries.length > 0) {
     const sep = document.createElement('div');
     sep.className = 'plot-sep';
@@ -1819,17 +1878,25 @@ function renderPlotList(st: RunState): void {
     applyVolume(st, !st.showVolume);
     renderPlotList(st);
   }));
+  if (st.start.scriptType === 'strategy') {
+    plotsPopupEl.appendChild(makeLayerRow('Trade markers', 'built-in', !tradeMarkersVisible, undefined, () => {
+      tradeMarkersVisible = !tradeMarkersVisible;
+      ensureTradeMarkerIndicator(st);
+      renderPlotList(st);
+    }));
+  }
 }
 
 /** Anchor the popup just below the "Layers" toolbar button. */
 function positionPlotsPopup(): void {
   if (!plotsPopupEl || !tbLayersEl) return;
   const r = tbLayersEl.getBoundingClientRect();
-  plotsPopupEl.style.left = `${Math.round(r.left)}px`;
+  plotsPopupEl.style.maxHeight = `${Math.max(40, Math.min(window.innerHeight * 0.6, window.innerHeight - r.bottom - 10))}px`;
+  plotsPopupEl.style.left = `${Math.round(Math.max(6, Math.min(r.left, window.innerWidth - plotsPopupEl.offsetWidth - 6)))}px`;
   plotsPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
 }
 
-function openPlotsPopup(): void {
+function openPlotsPopup(focusRows = false): void {
   if (!plotsPopupEl || !state) return;
   closeBreakpointsPopup();
   renderPlotList(state);
@@ -1837,6 +1904,7 @@ function openPlotsPopup(): void {
   positionPlotsPopup();
   tbLayersEl?.classList.add('active');
   tbLayersEl?.setAttribute('aria-pressed', 'true');
+  if (focusRows) plotsPopupEl.querySelector<HTMLButtonElement>('.plot-row')?.focus();
 }
 
 function closePlotsPopup(): void {
@@ -1845,10 +1913,18 @@ function closePlotsPopup(): void {
   tbLayersEl?.setAttribute('aria-pressed', 'false');
 }
 
-function togglePlotsPopup(): void {
+function togglePlotsPopup(focusRows = false): void {
   if (plotsPopupEl && !plotsPopupEl.hidden) closePlotsPopup();
-  else openPlotsPopup();
+  else openPlotsPopup(focusRows);
 }
+
+plotsPopupEl?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopPropagation();
+  closePlotsPopup();
+  tbLayersEl?.focus();
+});
 
 // --- Chart style popup: how price itself is drawn --------------------------
 // The same dropdown pattern as Layers, but single-choice. The pick is a
@@ -2407,7 +2483,10 @@ function resizeChartAndPerformance(): void {
     state?.chart.resize();
     drawPerformance();
     requestAnimationFrame(() => {
-      if (state && !isFrozen()) renderDrawingTables(state);
+      if (state && !isFrozen()) {
+        refreshLegendLayout(state);
+        renderDrawingTables(state);
+      }
     });
   });
 }
@@ -2804,7 +2883,7 @@ tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   closeCandlePopup();
-  togglePlotsPopup();
+  togglePlotsPopup(e.detail === 0);
 });
 
 tbCandleEl?.addEventListener('click', (e) => {

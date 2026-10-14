@@ -9,6 +9,7 @@
  * carrying a monotonic reqId, so a stale reply for a row the cursor already left
  * is dropped.
  */
+import { defaultBroker } from '../brokerDefaults';
 import type {
   BrokerInfo,
   ProviderInfo,
@@ -232,9 +233,7 @@ function onBrokers(provider: string, supported: boolean, brokers: BrokerInfo[], 
     opt.textContent = b.name && b.name !== b.id ? `${b.id} — ${b.name}` : b.id;
     brokerSel.appendChild(opt);
   }
-  const wanted = pendingBrokerDefault && brokers.some((b) => b.id === pendingBrokerDefault)
-    ? pendingBrokerDefault
-    : brokers[0]?.id;
+  const wanted = defaultBroker(provider, brokers, pendingBrokerDefault);
   pendingBrokerDefault = undefined;
   if (wanted) {
     brokerSel.value = wanted;

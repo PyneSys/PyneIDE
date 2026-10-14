@@ -13,7 +13,7 @@
  * KLineChart's xAxis.convertToPixel is a pure linear formula, so future bar
  * indices map to valid pixels).
  */
-import type { DrawingEventRecord } from '../../run/bridgeClient';
+import type { DrawingEventRecord, DrawingFamily } from '../../run/bridgeClient';
 import type { MarkerDrawEnv } from './plotStyles';
 
 // --- serialized state shapes (pynecore core/viz.py _*_dict) -----------------
@@ -137,6 +137,7 @@ export interface LinefillState {
  * the HTML table layer knows when to re-render.
  */
 export class DrawingStore {
+  constructor(readonly hidden: Set<DrawingFamily> = new Set()) {}
   readonly lines = new Map<number, LineState>();
   readonly labels = new Map<number, LabelState>();
   readonly boxes = new Map<number, BoxState>();
@@ -188,12 +189,17 @@ export class DrawingStore {
   hasCanvasFor(overlay: boolean, scriptOverlay: boolean): boolean {
     const match = (fo: boolean | undefined): boolean =>
       ((fo ?? false) || scriptOverlay) === overlay;
-    for (const l of this.lines.values()) if (match(l.force_overlay)) return true;
-    for (const l of this.labels.values()) if (match(l.force_overlay)) return true;
-    for (const b of this.boxes.values()) if (match(b.force_overlay)) return true;
-    for (const p of this.polylines.values()) if (match(p.force_overlay)) return true;
-    for (const lf of this.linefills.values()) {
-      if (match(lf.line1_state?.force_overlay)) return true;
+    const any = (family: DrawingFamily, objects: Iterable<{ force_overlay?: boolean }>): boolean => {
+      if (this.hidden.has(family)) return false;
+      for (const object of objects) if (match(object.force_overlay)) return true;
+      return false;
+    };
+    if (any('line', this.lines.values()) || any('label', this.labels.values()) ||
+        any('box', this.boxes.values()) || any('polyline', this.polylines.values())) return true;
+    if (!this.hidden.has('linefill')) {
+      for (const lf of this.linefills.values()) {
+        if (match(lf.line1_state?.force_overlay)) return true;
+      }
     }
     return false;
   }
@@ -781,12 +787,22 @@ export function drawDrawings(
   ctx.beginPath();
   ctx.rect(0, 0, env.bounding.width, env.bounding.height);
   ctx.clip();
-  for (const lf of store.linefills.values()) {
-    if (mine(lf.line1_state?.force_overlay)) drawLinefill(env, xres, lf);
+  if (!store.hidden.has('linefill')) {
+    for (const lf of store.linefills.values()) {
+      if (mine(lf.line1_state?.force_overlay)) drawLinefill(env, xres, lf);
+    }
   }
-  for (const b of store.boxes.values()) if (mine(b.force_overlay)) drawBox(env, xres, b);
-  for (const l of store.lines.values()) if (mine(l.force_overlay)) drawLine(env, xres, l);
-  for (const p of store.polylines.values()) if (mine(p.force_overlay)) drawPolyline(env, xres, p);
-  for (const la of store.labels.values()) if (mine(la.force_overlay)) drawLabel(env, xres, la);
+  if (!store.hidden.has('box')) {
+    for (const b of store.boxes.values()) if (mine(b.force_overlay)) drawBox(env, xres, b);
+  }
+  if (!store.hidden.has('line')) {
+    for (const l of store.lines.values()) if (mine(l.force_overlay)) drawLine(env, xres, l);
+  }
+  if (!store.hidden.has('polyline')) {
+    for (const p of store.polylines.values()) if (mine(p.force_overlay)) drawPolyline(env, xres, p);
+  }
+  if (!store.hidden.has('label')) {
+    for (const la of store.labels.values()) if (mine(la.force_overlay)) drawLabel(env, xres, la);
+  }
   ctx.restore();
 }
