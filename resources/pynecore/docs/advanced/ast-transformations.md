@@ -87,7 +87,7 @@ A new emitted name must be added to `PIPELINE_NAME` in the same change: `tests/t
 
 The pipeline is declared in two halves, `ANALYSIS` and `LOWERING`, and the loader runs them with `_analyse_tree` and `_lower_tree`:
 
-- **Analysis** normalizes the tree into the form the Pine type pass reads and stamps the types onto it. It emits none of the state plumbing (no state parameters, no slots, no call-site anchors). It ends with the type pass (`PineType`) and the security slicing (`SecuritySlice`).
+- **Analysis** normalizes the tree into the form the Pine type pass reads and stamps the types onto it. It emits none of the state plumbing (no state parameters, no slots, no call-site anchors). It ends with the type pass (`PineType`), the implicit conversions the type pass marks (`ImplicitConversion`) and the security slicing (`SecuritySlice`).
 - **Lowering** turns the analysed tree into the state-plumbed form the runtime executes, allocates the module's slot layout and fixes up the synthetic locations.
 
 The split is where a module publishes its interface, and where a dependency transformed for another module's lookup stops when it reaches back into a module still under analysis (see [Caching and Invalidation](#caching-and-invalidation)). A module that calls into another Pyne module is typed against the interface that module publishes.
@@ -171,6 +171,7 @@ The tables list the steps in exactly the order `pipeline.py` runs them. "User co
 | `TaVariableHoist`       | Evaluate stateful `ta` builtin variables once per bar at top of main  | no             | After ModuleProperty; before Series, Persistent and FunctionIsolation            |
 | `ClosureArguments`      | Turn closure variables of nested functions into parameters            | no             | Before PineType and FunctionIsolation                                            |
 | `PineType`              | Infer the Pine types and stamp them on the nodes                      | no             | Last point where the tree still looks like Pine (see its section)                |
+| `ImplicitConversion`    | Convert ints into float containers, typeless na into string na        | yes            | After PineType (reads its marks), before SecuritySlice (clones the converted)    |
 | `SecuritySlice`         | Emit a backward slice of `main()` per security context                | no             | Last of this half: the clones must see every earlier step                        |
 <!-- /pipeline:analysis -->
 
@@ -193,7 +194,7 @@ A row named `Expression/<Rule>` is a rule of the fused phase `Expression`; the `
 | `Input`                     | Add `_id` to input calls, rebind source inputs                  | no             | Before the Expression phase (SafeConvert must see the rebinding)         |
 | `Expression`                | Expression-level rewrites in one post-order traversal (phase)   | -              | See "Fused Phases and the Sequential Mode"                               |
 | `Expression/SafeConvert`    | Lower `float()` / `int()` and truncate Python-native indexes    | no             | After Input (its binding scan must see the rebinding)                    |
-| `Expression/SafeDivision`   | Give `/` Pine's division-by-zero and na semantics               | no             | Before FloatTolerance (wrapped operands are bound once)                  |
+| `Expression/SafeDivision`   | Give `/` and `%` Pine's zero-divisor and na semantics           | no             | Before FloatTolerance (wrapped operands are bound once)                  |
 | `Expression/FloatTolerance` | Give comparisons TradingView's tolerant float semantics         | yes            | After SafeDivision                                                       |
 | `FinalizeCloneDefaults`     | Make the defaults of the security clones inert                  | no             | After the input lowering                                                 |
 | `ApplyLayout`               | Emit the slot layout, state parameters and attach statements    | no             | After every step that allocates slots; skipped when `emit_layout` is off |
@@ -451,7 +452,7 @@ c = lib.close * 2.0 + 3.141592653589793
 
 Key aspects:
 - Constants propagate through single names in straight-line order; control flow conservatively kills the names it assigns. A `Persistent` that is stored more than once never counts as constant
-- The folded surface is `+`, `-`, `*`, `/`, the `lib.math` constants (`pi`, `e`, `phi`, `rphi`), fdlibm `sin`/`cos`/`exp`/`asin`/`acos`/`atan` and the exact `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `avg`, `sign`, `round`, `todegrees`, `toradians`. Anything else (`pow`, `log`, `tan`, `random`, ...) stays in the code and evaluates at runtime
+- The folded surface is `+`, `-`, `*`, `/`, `%` (Pine's truncated remainder, `safe_convert.safe_mod`), the `lib.math` constants (`pi`, `e`, `phi`, `rphi`), fdlibm `sin`/`cos`/`tan`/`exp`/`log`/`pow`/`asin`/`acos`/`atan`, `log10` as fdlibm `log(x) / log(10)` (measured: that is the parser's `log10`, not `StrictMath.log10`), and the exact `sqrt`, `abs`, `floor`, `ceil`, `min`, `max`, `avg`, `sign`, `round`, `todegrees`, `toradians`. Anything else (`random`, `sum`, `round_to_mintick`, ...) stays in the code and evaluates at runtime
 - Each maximal constant subtree is replaced by its quantized literal (`quantize_embed`); the cap applies once, where the value is embedded
 - A numeric module-level binding that is never rebound or written through `global` / `nonlocal` also folds inside functions; parameters and local bindings shadow it
 - The pass needs the `lib.math.*` chains from `ImportNormalizer`, and it skips pynecore's own lib modules, which must keep their raw expressions
@@ -696,6 +697,21 @@ Key aspects:
 - It decides the machine of every window call (`ta.highest` and its kin) from the Pine qualifier of the length. That happens in user code only, not in pynecore's own lib modules, whose machines *are* those calls (`PineTypeTransformer(qualify_windows=ctx.user_code)`)
 - Later steps read the stamped types: `SecurityDefault`, `FunctionIsolation` (overload pins and per-instance vectors), `SafeConvert` and `SafeDivision`
 - For `@pyne edge` modules the diagnostics of the table are merged with the edge gate's findings after the analysis half; they are errors under `PYNE_EDGE_STRICT=1`
+- An array or matrix argument of an overload group pins its element type when the element is a scalar (`PIN_CONTAINERS`), so the static element type decides the implementation rather than the runtime head element
+- It marks every int value that goes into a float-element container and every typeless `na` that goes where a string goes (`WIDEN_ATTR`), for `ImplicitConversion`. A constructor whose element type comes from its values (`array.new`, `matrix.new`, `array.from`) takes the element type of the container the value is declared, assigned or stored as
+
+### ImplicitConversion
+
+Pine converts an int that goes into an `array<float>`, `matrix<float>` or `map<K, float>`, so the element reads back as a float. A Python list stores what it is handed, and an int literal stays a Python int, which would print as `1` instead of `1.0` in `str.format` and match an `array<int>` overload. This step converts every value the type pass marked:
+
+- One element (`array.push`/`set`/`insert`/`unshift`/`fill`, `map.put`, `matrix.set`/`fill`, the initial value of `array.new`/`matrix.new`, the items of `array.from`): an int literal becomes a float literal, any other value is wrapped in `float(...)`, which `SafeConvert` turns into the na-safe `safe_float`
+- The elements of an int array or matrix copied in (`array.concat`, `matrix.add_row`/`add_col`, `matrix.concat` and its arithmetic kin): the operand is wrapped in `safe_convert.safe_float_items`/`safe_float_matrix`, a converted copy
+
+A context that puts a float into the float container has no say, since converting a float changes nothing: a generic `array.push(a, v)` into a float array converts `v` whether it is reached with an int or with a float. A generic body that puts its value into a float container in one call-site context and into an int container in another has no single conversion that is right for both, so the conversion becomes per-instance data, the way an overload pin that differs per context does. The type pass prepares the call `safe_convert.implicit_convert(value, None)` for the value, records the conversion each context needs on it (`'f'`, `'a'`, `'m'`, `'s'`, or `None` for none), and makes it one of the definition's instance-varying sites. This step wraps the value in that call, and `FunctionIsolation` replaces the `None` with the instance's own vector entry, `__state__[k][j]`, so each instance converts as its caller's context requires. The type pass reports a `context-dependent-widen` diagnostic only where an instance cannot be handed its entry: a site outside any definition's varying sites (an overload implementation, a shadowed definition), or an instance that needs a conversion and is created by a call site that passes no vector, such as a `method_call` whose method is found by name on the receiver's class. A method passed to `method_call` as a function does get its vector: the call site's dispatch entry receives it through `__pyne_bind__(pin, vector)` and writes it into the method's instance.
+
+A typeless `na` literal that goes where a string goes (a string declaration or field, a reassigned string variable, a string parameter or its default, a ternary arm next to a string, an element of a string array, matrix or map) is the string na. TradingView does not tell a na string from `""`: it prints empty, concatenates as nothing, and `na("")` is true. So the literal becomes `''`, the same value `NA(str)` builds at run time. A string parameter of a lib function takes it the same way (`label.new(x, y, na)`, `array.join(a, na)`, `ticker.new(na, na)`), except where the registry types a parameter as a string that Pine does not (`NOT_PINE_STRINGS`). The compile-time text of the study is different (`NA_TEXT_PARAMS`: plot, hline, bgcolor, barcolor and fill titles, the `plotchar` char and text, the `plotshape` text, the `alertcondition` title and message). There TradingView writes the `na` out as the text `na`, so the literal becomes `'na'`. Only Pine's own `na` is replaced, never a typeless parameter or the dynamic-default marker.
+
+The step runs right after the type pass so the security slices clone the converted values.
 
 ### SecuritySlice
 
@@ -1005,6 +1021,9 @@ Key aspects:
 - Inside a function body, a division of numeric-typed operands (per the type pass) is written out as an expression that runs the plain division first and calls `safe_div` only when that cannot be its result: a quotient that equals itself is exactly what `safe_div` returns, and a zero divisor is swapped for `zero_divisor`, whose reflected division answers `nan` and so lands in the fallback
 - Operands are evaluated once and in source order; module level, class bodies, lambdas, comprehensions, decorators and default arguments keep the plain `safe_div` call
 - A literal divided by a nonzero literal stays a plain division (in user code `ConstFold` has folded it already); a literal zero divisor keeps the call
+- A zero divisor keeps its sign: a runtime `1 / -0.0` is `-inf` (measured), as `-6.0 % 3` gives that `-0.0`
+- In user code `a % b` becomes `safe_convert.safe_mod(a, b)`: Pine's remainder is truncated (C's `fmod`, the sign of the dividend: `-7 % 3` is `-1`) where Python's is floored, and a zero divisor or a na operand gives na. A string left operand is Python's formatting and stays. pynecore's own lib modules keep Python's `%`, which their ring buffers index with
+- An augmented `x /= y` or (in user code) `x %= y` is written out as `x = safe_convert.safe_div(x, y)` / `safe_mod(x, y)` when its target (a name, or an attribute or a name- or literal-indexed subscript of a name) can be read again
 - Only adds the import when a division was actually transformed
 
 #### FloatTolerance
