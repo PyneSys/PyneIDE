@@ -33,6 +33,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import type { ChartDebugPosition } from '../chart/messages';
 import { pureChartBreakpointTimestamps } from './chartBreakpointCondition';
 import { demangleVariables } from './demangle';
 import type { PineSourceMapper } from './sourceMapper';
@@ -140,7 +141,9 @@ interface FastBreakpointResponse {
 
 export interface PyneDapProxyHooks {
   /** Debugger execution state: stopped (with thread + stop reason) or resumed. */
-  onExecState(stopped: boolean, threadId?: number, reason?: string): void;
+  onExecState(
+    stopped: boolean, threadId?: number, reason?: string, position?: ChartDebugPosition
+  ): void;
   /** Pure chart-breakpoint timestamps the bridge can schedule without tracing. */
   onFastChartBreakpointsChanged(timestamps: number[]): void;
 }
@@ -237,6 +240,8 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
   private readonly pendingScopes = new Map<number, number>(); // seq -> frameId
   private readonly pendingLocals = new Map<number, number>(); // seq -> frameId
   private readonly pendingResumes = new Set<number>();
+  private readonly pendingClipboard = new Set<number>();
+  private stoppedThreadId: number | undefined;
   // setBreakpoints requests translated from a .pine source: how to rebuild the
   // client-facing response (original per-breakpoint order, dropped entries
   // re-inserted unverified; the debuggee only saw the mappable ones).
@@ -388,6 +393,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       if (msg.command === 'evaluate') {
         const args = msg.arguments ?? {};
         const context = args.context;
+        if (context === 'clipboard') this.pendingClipboard.add(msg.seq);
         if (
           typeof args.expression === 'string' &&
           typeof args.frameId === 'number' &&
@@ -640,6 +646,19 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       return; // never forwarded to the client
     }
 
+    if (msg.type === 'response' && msg.command === 'evaluate' && !msg.success &&
+        typeof msg.message === 'string') {
+      msg.message = msg.message.replace(/^HistoryUnavailableError: (?=History for ')/, '');
+    }
+
+    if (msg.type === 'response' && msg.command === 'threads' && Array.isArray(msg.body?.threads)) {
+      msg.body.threads = (msg.body.threads as { id: number; name: string }[]).filter(
+        (thread) => thread.id === this.stoppedThreadId ||
+          (thread.name !== 'pyneide-control' && thread.name !== '_worker_thread' &&
+            !/^Thread-\d+ \(_worker_thread\)$/.test(thread.name))
+      );
+    }
+
     // Pine-style NA presentation on everything headed for the client: the
     // parametrized repr moves into the type column, the value reads `na`, the
     // node is not expandable (its children would be CPython internals).
@@ -664,12 +683,13 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         }
         normalizeNaVariables(msg.body.variables as Record<string, unknown>[]);
       } else if (msg.command === 'evaluate') {
-        normalizeNaEvaluate(msg.body);
+        if (!this.pendingClipboard.has(msg.request_seq!)) normalizeNaEvaluate(msg.body);
       }
     }
 
     if (msg.type === 'response' && typeof msg.request_seq === 'number') {
       const seq = msg.request_seq;
+      this.pendingClipboard.delete(seq);
       const stackMeta = this.pendingStackTrace.get(seq);
       if (stackMeta !== undefined) {
         this.pendingStackTrace.delete(seq);
@@ -785,13 +805,14 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
               this.globalsScopeRefs.set(scope.variablesReference, scopesFrame);
             }
           }
-          // Lead with a synthetic Pyne scope (the current-bar runtime dashboard):
-          // bar_index + OHLCV + derived sources + time, answered in-session.
+          // VS Code auto-expands the first inexpensive scope at every stop.
+          // Lead with Locals so the bar dashboard does not displace script state.
           const pyneRef = this.syntheticRef++;
           this.pyneScopeRefs.set(pyneRef, scopesFrame);
           msg.body.scopes = [
+            ...scopes.filter((scope) => scope.presentationHint === 'locals' || scope.name === 'Locals'),
             { name: 'Pyne', variablesReference: pyneRef, expensive: false },
-            ...scopes,
+            ...scopes.filter((scope) => scope.presentationHint !== 'locals' && scope.name !== 'Locals'),
           ];
         }
       }
@@ -818,7 +839,8 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
         // arrives on. handleStopped emits the stopped event itself when it lands.
         void this.handleStopped(msg, threadId, reason);
         return;
-      } else if (msg.event === 'continued') {
+      } else if (msg.event === 'continued' || msg.event === 'terminated' || msg.event === 'exited') {
+        this.stoppedThreadId = undefined;
         this.hooks.onExecState(false);
       } else if (msg.event === 'breakpoint') {
         if (this.isSyntheticBreakpointEvent(msg)) {
@@ -1009,20 +1031,22 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
     // lib.close instead of a NameError (the transform rewrote all bare source
     // references to lib.* and dropped the import). Best-effort; refreshed here
     // every stop.
+    let position: ChartDebugPosition | undefined;
     if (threadId !== undefined) {
       try {
-        await this.bindSources(threadId);
+        position = await this.bindSources(threadId);
       } catch {
         // watch source-name binding is a convenience; a failure just leaves
         // bare `close` unresolved, exactly as before.
       }
     }
-    this.hooks.onExecState(true, threadId, reason);
+    this.stoppedThreadId = threadId;
+    this.hooks.onExecState(true, threadId, reason, position);
     this.emit(msg);
   }
 
   /** Bind imported source names into the module globals (see debug_inspect). */
-  private async bindSources(threadId: number): Promise<void> {
+  private async bindSources(threadId: number): Promise<ChartDebugPosition | undefined> {
     const stack = await this.request('stackTrace', { threadId, levels: 1 });
     const frames = stack.stackFrames as { id: number }[] | undefined;
     const frameId = frames?.[0]?.id;
@@ -1031,6 +1055,12 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       '__import__("pyneide_bridge.debug_inspect", fromlist=["bind_sources"]).bind_sources(globals())',
       frameId
     );
+    const entries = await this.evalEntries(PINE_BAR_EXPR, frameId);
+    const barIndex = Number(entries.find((entry) => entry.name === 'bar_index')?.value);
+    const timestamp = Number(entries.find((entry) => entry.name === 'time')?.value);
+    return Number.isInteger(barIndex) && Number.isFinite(timestamp)
+      ? { barIndex, timestamp }
+      : undefined;
   }
 
   /** Top stack frame of a suspended thread (own-seq; raw .py terms). */
@@ -1087,6 +1117,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
       type: e.type,
       variablesReference: 0,
       presentationHint: { kind: 'data' },
+      ...(e.name === 'datetime' ? {} : { evaluateName: wrapWatch(e.name) }),
     }));
     normalizeNaVariables(variables);
     this.emit({
@@ -1183,7 +1214,7 @@ export class PyneDapProxy implements vscode.DebugAdapter, DebugBreakpointControl
             slot,
             variable: {
               name: slot.name,
-              value: isNa ? 'na' : String(body.result ?? ''),
+              value: isNa ? 'na' : formatScalar(String(body.result ?? ''), body.type),
               type: slot.type,
               variablesReference:
                 !isNa && typeof body.variablesReference === 'number'
@@ -1546,14 +1577,13 @@ const ISOLATION_TEMP = /^(__st__|__b__|__i__|__cnt_\d+__|__chl_\d+__)$/;
  * away, no Python identifier has one). Everything else stays, including
  * PyneComp's own dunder-named locals (`__block_result__`, `__switch__`,
  * `__eval__`, ...) which are meaningful script variables, not plumbing.
- * `__lib·close` is the hidden buffer a builtin source grows for `close[1]`
- * history — its live value already shows in the Pyne scope, so drop it here.
+ * PyneCore reserves every middle-dot identifier for injected state and helpers
+ * (`__st·__`, `__lib·close`, ...); none can be a user-authored script variable.
  */
 function isJunkLocal(name: string): boolean {
   return (
     name === '__state__' ||
-    name.startsWith('__state·') ||
-    name.startsWith('__lib·') ||
+    name.includes('·') ||
     ISOLATION_TEMP.test(name) ||
     name.includes(' ')
   );
@@ -1581,6 +1611,8 @@ function normalizeNaVariables(variables: Record<string, unknown>[]): void {
       v.variablesReference = 0;
       delete v.namedVariables;
       delete v.indexedVariables;
+    } else if (typeof v.value === 'string') {
+      v.value = formatScalar(v.value, v.type);
     }
   }
 }
@@ -1593,5 +1625,16 @@ function normalizeNaEvaluate(body: Record<string, unknown>): void {
     body.variablesReference = 0;
     delete body.namedVariables;
     delete body.indexedVariables;
+  } else if (typeof body.result === 'string') {
+    body.result = formatScalar(body.result, body.type);
   }
+}
+
+/** Compact display only; clipboard evaluates still return debugpy's full repr. */
+function formatScalar(value: string, type: unknown): string {
+  if (type !== 'float') return value;
+  if (value === 'nan') return 'na';
+  const number = Number(value);
+  if (!Number.isFinite(number) || value.trim() === '') return value;
+  return String(Number(number.toPrecision(15)));
 }

@@ -23,6 +23,11 @@ export interface ChartBreakpointTarget {
   count: number;
 }
 
+export interface ChartDebugPosition {
+  barIndex: number;
+  timestamp: number;
+}
+
 export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }
   | { type: 'bars'; rows: BarRow[] }
@@ -33,6 +38,7 @@ export type ChartInMessage =
   | { type: 'trades'; trades: TradeRecord[] }
   | { type: 'openTrades'; trades: TradeRecord[] }
   | { type: 'stats'; stats: Record<string, number | null> }
+  | { type: 'debugPosition'; position?: ChartDebugPosition }
   | { type: 'breakpoints'; targets: ChartBreakpointTarget[] }
   | { type: 'breakpointSelection'; label?: string }
   /** Persisted candle style pushed from the host: on webview load and on every

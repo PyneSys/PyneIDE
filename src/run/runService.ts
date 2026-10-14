@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { canonicalChartKey } from '../chart/chartKey';
+import type { ChartDebugPosition } from '../chart/messages';
 import type { ChartManager } from '../chart/chartPanel';
 import type { CompileService } from '../compile/service';
 import { mapTracebackFrames } from '../compile/sourcemap';
@@ -961,8 +962,11 @@ export class RunService {
 
   /** Debugger execution state, reported by the DAP proxy (real stops only —
    * intermediate run-to-bar stops are swallowed in the proxy). */
-  onDebugExecState(stopped: boolean, threadId?: number): void {
+  onDebugExecState(stopped: boolean, threadId?: number, position?: ChartDebugPosition): void {
     this.debugStopped = stopped;
+    if (this.activeChartKey) {
+      this.chartManager?.setDebugPosition(this.activeChartKey, stopped ? position : undefined);
+    }
     if (threadId !== undefined) this.debugThreadId = threadId;
   }
 
@@ -1374,6 +1378,7 @@ export class RunService {
 
     const code = await run.exited;
     this.activeRun = undefined;
+    this.chartManager?.setDebugPosition(chartKey, undefined);
     this.activeChartKey = undefined;
     this.activeRunIsDebug = false;
     this.debugControl?.setRunToBarTarget(undefined);

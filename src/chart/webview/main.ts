@@ -44,7 +44,7 @@ import {
   type ChartPalette,
   type ColorSchemeId,
 } from '../colorScheme';
-import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
+import type { ChartDebugPosition, ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
 import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../priceScale';
 import { ColorTrack } from './colorTrack';
 import {
@@ -102,6 +102,7 @@ const vscode = acquireVsCodeApi();
 const UI_TICK_MS = 400;
 const MEASURE_OVERLAY_NAME = 'PyneMeasure';
 const BREAKPOINT_OVERLAY_NAME = 'PyneBreakpoint';
+const DEBUG_OVERLAY_NAME = 'PyneDebugPosition';
 const TRADE_MARKER_INDICATOR_NAME = 'PyneTradeMarkers';
 const BREAKPOINT_CLICK_DRAG_THRESHOLD_PX = 4;
 
@@ -232,6 +233,24 @@ registerOverlay({
         },
         ignoreEvent: true,
       },
+    ];
+  },
+});
+
+registerOverlay<ChartDebugPosition>({
+  name: DEBUG_OVERLAY_NAME,
+  totalStep: 2,
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
+    const point = coordinates[0];
+    if (!point) return [];
+    const color = cssVar('--vscode-editorWarning-foreground', '#cca700');
+    return [
+      { type: 'line', attrs: { coordinates: [{ x: point.x, y: 0 }, { x: point.x, y: bounding.height }] },
+        styles: { color, size: 2, style: 'dashed', dashedValue: [6, 3] } },
+      { type: 'text', attrs: { x: point.x, y: 25, text: `Paused · bar ${overlay.extendData.barIndex}`,
+        align: 'center', baseline: 'top' },
+        styles: { color, size: 11, backgroundColor: cssVar('--vscode-editor-background', '#1e1e1e'),
+          paddingLeft: 4, paddingRight: 4, paddingTop: 2, paddingBottom: 2 } },
     ];
   },
 });
@@ -375,6 +394,8 @@ interface ViewAnchor {
 }
 
 let state: RunState | undefined;
+let debugPosition: ChartDebugPosition | undefined;
+let debugOverlayId: string | undefined;
 let chartBreakpointTargets: ChartBreakpointTarget[] = [];
 let breakpointSelectionLabel: string | undefined;
 let breakpointPointerGesture:
@@ -962,9 +983,26 @@ function startRun(start: StartEvent): void {
   // one — re-apply the persisted scale or every re-run would drop back to
   // linear.
   applyPriceScale();
+  debugOverlayId = undefined;
+  syncDebugPosition(state);
   syncBreakpointOverlays(state);
   syncToolbar();
   updateRealtimeButton();
+}
+
+function syncDebugPosition(st: RunState): void {
+  if (debugOverlayId) st.chart.removeOverlay({ id: debugOverlayId });
+  debugOverlayId = undefined;
+  if (!debugPosition) return;
+  const id = st.chart.createOverlay({
+    name: DEBUG_OVERLAY_NAME,
+    paneId: 'candle_pane',
+    points: [{ timestamp: debugPosition.timestamp, dataIndex: debugPosition.barIndex }],
+    extendData: debugPosition,
+    lock: true,
+    zLevel: 101,
+  });
+  if (typeof id === 'string') debugOverlayId = id;
 }
 
 function syncBreakpointOverlays(st: RunState): void {
@@ -3141,6 +3179,17 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'stats':
       if (state) state.stats = msg.stats;
       break;
+    case 'debugPosition': {
+      debugPosition = msg.position;
+      const badge = document.getElementById('debug-position');
+      if (badge) {
+        badge.hidden = !debugPosition;
+        badge.textContent = debugPosition ? `Paused · bar ${debugPosition.barIndex}` : '';
+        badge.title = debugPosition ? fmtTime(debugPosition.timestamp) : '';
+      }
+      if (state) syncDebugPosition(state);
+      break;
+    }
     case 'breakpoints':
       chartBreakpointTargets = msg.targets;
       if (state) syncBreakpointOverlays(state);

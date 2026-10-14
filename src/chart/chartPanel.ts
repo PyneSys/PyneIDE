@@ -31,7 +31,7 @@ import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
 import { toColorSchemeId, type ColorSchemeId } from './colorScheme';
 import { toPriceScaleId, type PriceScaleId } from './priceScale';
-import type { ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
+import type { ChartDebugPosition, ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
 
 /** Chart appearance is a persisted user preference, not per-panel state: every
  * chart in every window follows this one setting. */
@@ -97,6 +97,7 @@ interface ChartSnapshot {
 export class ChartPanel {
   private panel: vscode.WebviewPanel | undefined;
   private ready = false;
+  private debugPosition: ChartDebugPosition | undefined;
   private breakpointTargets: ChartBreakpointTarget[] = [];
   private breakpointSelectionLabel: string | undefined;
   /** Host-side stream snapshot; survives the webview being closed so reopening
@@ -136,6 +137,11 @@ export class ChartPanel {
 
   setColorScheme(scheme: ColorSchemeId): void {
     this.post({ type: 'colorScheme', scheme });
+  }
+
+  setDebugPosition(position: ChartDebugPosition | undefined): void {
+    this.debugPosition = position;
+    this.post({ type: 'debugPosition', position });
   }
 
   setBreakpointTargets(targets: ChartBreakpointTarget[]): void {
@@ -300,6 +306,7 @@ export class ChartPanel {
         this.post({ type: 'colorScheme', scheme: readColorScheme() });
         this.replayFromSnapshot();
         this.post({ type: 'breakpoints', targets: this.breakpointTargets });
+        this.post({ type: 'debugPosition', position: this.debugPosition });
         if (this.breakpointSelectionLabel) {
           this.post({ type: 'breakpointSelection', label: this.breakpointSelectionLabel });
         }
@@ -428,6 +435,7 @@ export class ChartPanel {
     flex: 0 0 auto; color: var(--vscode-descriptionForeground);
     font-size: 11px; font-variant-numeric: tabular-nums;
   }
+  #debug-position { color: var(--vscode-editorWarning-foreground, #cca700); white-space: nowrap; }
   #toolbar .icon-button {
     position: relative; display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; padding: 0; border-radius: 5px;
@@ -804,6 +812,7 @@ export class ChartPanel {
       <span id="tb-breakpoints-count" class="count-badge"></span>
     </button>
   </div>
+  <span id="debug-position" hidden></span>
   <span class="spacer"></span>
   <span class="sep"></span>
   <div class="toolbar-group">
@@ -928,6 +937,10 @@ export class ChartManager implements RunListener {
   /** Whether this script's chart tab is currently open. */
   hasOpenChart(chartKey: string): boolean {
     return this.panels.get(chartKey)?.isOpen() === true;
+  }
+
+  setDebugPosition(chartKey: string, position: ChartDebugPosition | undefined): void {
+    this.panels.get(chartKey)?.setDebugPosition(position);
   }
 
   refreshBreakpointTargets(): void {

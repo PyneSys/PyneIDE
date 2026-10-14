@@ -603,6 +603,22 @@ def _collect_state(frame_locals: dict[str, Any], ns: dict[str, Any],
                     ns.setdefault(base, state[i])
 
 
+class HistoryUnavailableError(RuntimeError):
+    """The stopped scope has no history buffer for a scalar watch value."""
+
+
+class _UnavailableHistory:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __getitem__(self, index: Any) -> Any:
+        raise HistoryUnavailableError(
+            f"History for '{self.name}' is unavailable in this scope. "
+            "PyneCore creates a history buffer only when the script uses history "
+            "for that value; declaring it as series does not create a buffer."
+        )
+
+
 class _SeriesSubscript(ast.NodeTransformer):
     """Redirect ``name[...]`` onto the frame's series buffer for ``name``.
 
@@ -610,7 +626,9 @@ class _SeriesSubscript(ast.NodeTransformer):
     Pine's ``basis`` == ``basis[0]``); only a subscript is rewritten to index the
     ``SeriesImpl`` history. Each buffer is injected under a fresh ``__pyne_series_N__``
     global so the compiled expression stays a plain subscript pydevd renders with
-    full detail (type + expandable children via the pydevd series plugin).
+    full detail (type + expandable children via the pydevd series plugin). A
+    numeric scalar with no buffer gets a runtime diagnostic only if that access
+    executes, preserving short-circuit expressions and ordinary collection indexing.
     """
 
     def __init__(self, series: dict[str, Any], ns: dict[str, Any]) -> None:
@@ -621,10 +639,17 @@ class _SeriesSubscript(ast.NodeTransformer):
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
         value = node.value
-        if isinstance(value, ast.Name) and value.id in self._series:
+        if isinstance(value, ast.Name):
+            name = value.id
+            if name in self._series:
+                buffer = self._series[name]
+            elif isinstance(self._ns.get(name), (float, int, bool)):
+                buffer = _UnavailableHistory(name)
+            else:
+                return node
             key = f"__pyne_series_{self._count}__"
             self._count += 1
-            self._ns[key] = self._series[value.id]
+            self._ns[key] = buffer
             node.value = ast.copy_location(ast.Name(id=key, ctx=ast.Load()), value)
         return node
 
@@ -677,7 +702,6 @@ def watch(expr: str, frame_globals: dict[str, Any],
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:
         return eval(expr, ns, ns)  # noqa: S307 — surface the real error
-    if series:
-        _SeriesSubscript(series, ns).visit(tree)
-        ast.fix_missing_locations(tree)
+    _SeriesSubscript(series, ns).visit(tree)
+    ast.fix_missing_locations(tree)
     return eval(compile(tree, "<pyne-watch>", "eval"), ns, ns)  # noqa: S307
