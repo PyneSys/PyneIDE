@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import assert from 'node:assert/strict';
 
 import { execProcess } from '../../src/env/exec';
 import {
@@ -340,7 +341,7 @@ function assertNativeVizFile(workdir: string, stem: string): void {
   log(`Native viz file OK: ${records.length} NDJSON records`);
 }
 
-function assertNativeEquityFile(workdir: string, stem: string): void {
+function assertNativeEquityFile(workdir: string, stem: string, liveEvents: BridgeEvent[]): void {
   const file = path.join(workdir, 'output', `${stem}_viz.ndjson`);
   const records = fs
     .readFileSync(file, 'utf8')
@@ -367,6 +368,44 @@ function assertNativeEquityFile(workdir: string, stem: string): void {
     fail(`strategy equity replay mismatch: ${replayed.length}/${persisted.length}`);
   }
   log(`Native strategy equity OK: ${persisted.length} bars`);
+  const trades = (events: BridgeEvent[], kind: 'trades' | 'openTrades') =>
+    events.flatMap((event) => event.e === kind ? event.d : []);
+  const liveClosed = trades(liveEvents, 'trades');
+  const liveOpen = trades(liveEvents, 'openTrades');
+  assert.ok(liveClosed.length > 0, 'strategy must exercise closed trades');
+  assert.ok(liveOpen.length > 0, 'strategy must exercise open trades');
+  assert.deepEqual(trades(preview.events, 'trades'), liveClosed, 'closed trade replay differs from live');
+  assert.deepEqual(trades(preview.events, 'openTrades'), liveOpen, 'open trade replay differs from live');
+  assert.ok(start.outputs.trades && fs.existsSync(start.outputs.trades), 'trade CSV link missing');
+  assert.ok(start.outputs.strat && fs.existsSync(start.outputs.strat), 'statistics CSV link missing');
+
+  // Reproduce the format written before full trade records were persisted.
+  const original = fs.readFileSync(file, 'utf8');
+  try {
+    fs.writeFileSync(file, original.split('\n').map((line) => {
+      if (!line) return line;
+      const record = JSON.parse(line);
+      delete record.trades;
+      delete record.openTrades;
+      return JSON.stringify(record);
+    }).join('\n'));
+    const legacy = buildOutputPreview(pair);
+    assert.equal(legacy.warnings.length, 0, 'legacy trade replay warnings');
+    const legacyClosed = trades(legacy.events, 'trades');
+    assert.equal(legacyClosed.length, liveClosed.length);
+    assert.equal(trades(legacy.events, 'openTrades').length, liveOpen.length);
+    legacyClosed.forEach((trade, i) => {
+      assert.equal(trade.entryBar, liveClosed[i].entryBar);
+      assert.equal(trade.exitBar, liveClosed[i].exitBar);
+      assert.equal(trade.entryTime, liveClosed[i].entryTime);
+      assert.equal(trade.exitTime, liveClosed[i].exitTime);
+      assert.equal(trade.size, liveClosed[i].size);
+      assert.equal(trade.profit, liveClosed[i].profit);
+    });
+  } finally {
+    fs.writeFileSync(file, original);
+  }
+  log(`Trade replay OK: ${liveClosed.length} closed, ${liveOpen.length} open, native + legacy CSV`);
 }
 
 /**
@@ -499,8 +538,11 @@ async function main(): Promise<void> {
     assertDrawStream(draw.events);
 
     const strategy = await runBridge(pythonBin, ws.workdir, 'equity_demo');
-    if (strategy.exitCode !== 0) fail(`bridge exit code ${strategy.exitCode} (strategy)`);
-    assertNativeEquityFile(ws.workdir, 'equity_demo');
+    if (strategy.exitCode !== 0) {
+      const errors = strategy.events.filter((event) => event.e === 'error');
+      fail(`bridge exit code ${strategy.exitCode} (strategy): ${JSON.stringify(errors)}`);
+    }
+    assertNativeEquityFile(ws.workdir, 'equity_demo', strategy.events);
     const metadata = await execProcess(
       pythonBin,
       [path.join(__dirname, '..', 'test', 'smoke', 'bridgePlotMetaSmoke.py'),

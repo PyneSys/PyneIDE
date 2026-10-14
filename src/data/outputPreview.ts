@@ -21,6 +21,7 @@ import type {
   DrawingEventRecord,
   PlotMetaRecord,
   StartEvent,
+  TradeRecord,
 } from '../run/bridgeClient';
 
 interface NativeRecord {
@@ -46,6 +47,8 @@ interface NativeRecord {
 export interface OutputPair {
   plot: string;
   viz: string;
+  trades?: string;
+  strat?: string;
 }
 
 export interface OutputPreview {
@@ -78,7 +81,16 @@ export function resolveOutputPair(filePath: string): OutputPair | undefined {
   } else {
     return undefined;
   }
-  return fs.existsSync(plot) && fs.existsSync(viz) ? { plot, viz } : undefined;
+  if (!fs.existsSync(plot) || !fs.existsSync(viz)) return undefined;
+  const stem = plot.replace(/\.csv$/i, '');
+  const trades = `${stem}_trade.csv`;
+  const strat = `${stem}_strat.csv`;
+  return {
+    plot,
+    viz,
+    trades: fs.existsSync(trades) ? trades : undefined,
+    strat: fs.existsSync(strat) ? strat : undefined,
+  };
 }
 
 /** RFC-4180-style CSV reader sufficient for pynecore's LF writer, including
@@ -149,6 +161,50 @@ function primitiveRecord(value: Record<string, unknown> | undefined): StartEvent
   return result;
 }
 
+/** Older native outputs keep trades only in the two-leg CSV. Fields absent
+ * from that format (comments and commission) remain unknown. */
+function readTradeCsv(file: string, warnings: string[]): { closed: TradeRecord[]; open: TradeRecord[] } {
+  const rows = parseCsv(fs.readFileSync(file, 'utf8'));
+  const header = rows.shift();
+  const closed: TradeRecord[] = [];
+  const open: TradeRecord[] = [];
+  if (header?.[0] !== 'Trade #' || header[2] !== 'Type' || header[4] !== 'Date/Time') {
+    warnings.push('trade CSV has no valid trade header');
+    return { closed, open };
+  }
+  const entries = new Map<string, string[]>();
+  for (const row of rows) {
+    if (/^Entry (long|short)$/.test(row[2])) {
+      entries.set(row[0], row);
+      continue;
+    }
+    if (!/^Exit (long|short)$/.test(row[2])) continue;
+    const entry = entries.get(row[0]);
+    const entryTime = parseTime(entry?.[4]);
+    const exitTime = parseTime(row[4]);
+    const entryBar = numberOrNull(entry?.[1]);
+    const exitBar = numberOrNull(row[1]);
+    if (!entry || entryTime === undefined || exitTime === undefined ||
+        entryBar === null || exitBar === null) {
+      warnings.push(`ignored trade ${row[0]} with missing or invalid entry/exit`);
+      continue;
+    }
+    entries.delete(row[0]);
+    const isOpen = row[3] === 'Open';
+    const contracts = numberOrNull(entry[6]);
+    const trade: TradeRecord = {
+      entryId: entry[3], entryBar, entryTime, entryPrice: numberOrNull(entry[5]),
+      entryComment: null, exitId: isOpen ? null : row[3], exitBar, exitTime,
+      exitPrice: numberOrNull(row[5]), exitComment: null,
+      size: contracts === null ? null : Math.abs(contracts) * (entry[2] === 'Entry short' ? -1 : 1),
+      commission: null, profit: numberOrNull(row[7]), profitPct: numberOrNull(row[8]),
+      cumProfit: numberOrNull(row[9]), cumProfitPct: numberOrNull(row[10]),
+    };
+    (isOpen ? open : closed).push(trade);
+  }
+  return { closed, open };
+}
+
 function drawingEvents(record: NativeRecord | undefined): DrawingEventRecord[] {
   if (!record) return [];
   const groups: Array<[DrawingFamily, Array<Record<string, unknown>> | undefined]> = [
@@ -211,6 +267,7 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   const equityByTime = new Map<number, number>();
   let drawings: NativeRecord | undefined;
   let complete = false;
+  let savedTrades: { closed: TradeRecord[]; open: TradeRecord[] } | undefined;
   for (const record of records) {
     if (record.t === 'meta' && typeof record.id === 'string' && typeof record.kind === 'string') {
       const { t: _t, ...meta } = record;
@@ -224,6 +281,9 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
       drawings = record;
     } else if (record.t === 'end') {
       complete = true;
+      if (Array.isArray(record.trades) && Array.isArray(record.openTrades)) {
+        savedTrades = { closed: record.trades as TradeRecord[], open: record.openTrades as TradeRecord[] };
+      }
     }
   }
   for (const bar of bars) {
@@ -255,8 +315,8 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
     range: { from, to, bars: bars.length },
     outputs: {
       plot: pair.plot,
-      strat: null,
-      trades: null,
+      strat: pair.strat ?? null,
+      trades: pair.trades ?? null,
       viz: pair.viz,
     },
   };
@@ -268,6 +328,11 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   if (colors.length) events.push({ e: 'colors', d: colors });
   const drawingList = drawingEvents(drawings);
   if (drawingList.length) events.push({ e: 'drawings', d: drawingList });
+  if (start.scriptType === 'strategy') {
+    const trades = savedTrades ?? (pair.trades ? readTradeCsv(pair.trades, warnings) : undefined);
+    if (trades?.closed.length) events.push({ e: 'trades', d: trades.closed });
+    if (trades?.open.length) events.push({ e: 'openTrades', d: trades.open });
+  }
   events.push({ e: 'end', bars: bars.length, cancelled: !complete });
   return { events, warnings };
 }

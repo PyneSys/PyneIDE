@@ -83,6 +83,8 @@ function promptForApiKey(initialValue: string): Promise<string | undefined> {
 }
 
 export class AuthService {
+  private signInPrompt: Promise<void> | undefined;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel
@@ -228,24 +230,32 @@ export class AuthService {
     void vscode.window.showInformationMessage('PyneIDE: signed out, API key removed.');
   }
 
-  /** Get a client, prompting for sign-in when there is no stored key. */
+  /** A missing key aborts this request; sign-in actions never retain a run slot. */
   async requireClient(): Promise<PyneApiClient | undefined> {
     const existing = await this.client();
     if (existing) return existing;
-    const choice = await vscode.window.showInformationMessage(
-      'PyneIDE: compiling Pine Script requires a PyneSys API key. Pyne scripts run ' +
-        'locally without one.',
-      'Sign In',
-      'Create API Key'
-    );
-    if (choice === 'Create API Key') {
-      // The key page opens, then the input box waits (ignoreFocusOut) for the
-      // key the user is about to create.
-      await vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
-    } else if (choice !== 'Sign In') {
-      return undefined;
+    if (this.signInPrompt) return undefined;
+    this.signInPrompt = this.offerSignIn().finally(() => { this.signInPrompt = undefined; });
+    return undefined;
+  }
+
+  private async offerSignIn(): Promise<void> {
+    try {
+      const choice = await vscode.window.showInformationMessage(
+        'PyneIDE: compiling Pine Script requires a PyneSys API key. Pyne scripts run ' +
+          'locally without one. Sign in, then run the command again.',
+        'Sign In',
+        'Create API Key'
+      );
+      if (choice === 'Create API Key') {
+        await vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
+      } else if (choice !== 'Sign In') {
+        return;
+      }
+      await this.signIn();
+    } catch (error) {
+      this.log(`Sign-in failed: ${flattenErrorMessage(error)}`);
+      void vscode.window.showErrorMessage(`PyneIDE: sign-in failed: ${flattenErrorMessage(error)}`);
     }
-    if (!(await this.signIn())) return undefined;
-    return this.client();
   }
 }

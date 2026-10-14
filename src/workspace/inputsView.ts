@@ -373,6 +373,7 @@ export class InputsViewManager {
     font-size: 10px; line-height: 1; }
   .numeric-stepper > button:hover { background: var(--vscode-toolbar-hoverBackground, #444); }
   #empty { color: var(--vscode-descriptionForeground); padding: 24px 0; }
+  #save-status { padding-top: 8px; overflow-wrap: anywhere; }
   .property-field > .control { flex-wrap: wrap; gap: 6px 8px; }
   .property-field input[type=number] { flex: 1 1 5rem; min-width: min(5rem, 100%); }
   .property-field input[type=checkbox] { margin-top: 3px; }
@@ -412,6 +413,7 @@ export class InputsViewManager {
       <button id="tab-inputs" type="button" role="tab" aria-selected="true">Inputs</button>
       <button id="tab-properties" type="button" role="tab" aria-selected="false">Properties</button>
     </div>
+    <div id="save-status" role="status" hidden></div>
   </div>
   <div id="warning" hidden></div>
   <div id="inputs-pane" role="tabpanel">

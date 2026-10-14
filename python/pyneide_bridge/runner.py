@@ -35,6 +35,8 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
     from pynecore.core.viz import VizWriter
 
     class _DataPathVizWriter(VizWriter):
+        trades: list[dict[str, Any]]
+
         def _emit(self, obj: dict) -> None:
             if obj.get("t") == "hdr":
                 initial_capital = getattr(runner.script, "initial_capital", None)
@@ -49,9 +51,16 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
                     equity = float(position.equity) if position.equity \
                         else float(runner.script.initial_capital)
                     obj = {**obj, "equity": num_or_none(equity)}
+            elif obj.get("t") == "end":
+                position = getattr(runner.script, "position", None)
+                if position is not None:
+                    obj = {**obj, "trades": self.trades,
+                           "openTrades": [_serialize_trade(t) for t in position.open_trades]}
             super()._emit(obj)
 
-    return _DataPathVizWriter(path)
+    writer = _DataPathVizWriter(path)
+    writer.trades = []
+    return writer
 
 
 def _scrub_nonfinite(obj: Any) -> Any:
@@ -304,8 +313,8 @@ def _resolve_data(workdir: Path, data_arg: str) -> Path:
 
 def _serialize_input(name: str, data: Any, current: Any = _MISSING) -> dict[str, Any]:
     """Serialize one pynecore ``InputData`` to a JSON-safe dict for the IDE's
-    input form. ``defval``/``options`` are coerced through ``sanitize`` (Color
-    and enum members become their string form); the ``__global__`` suffix the
+    input form. ``defval``/``options`` are coerced through ``sanitize`` (colors
+    become RGBA hex strings); the ``__global__`` suffix the
     strict-mode registry appends is stripped from the name. ``current`` is the
     value read back from the sibling ``.toml`` by pynecore's canonical loader
     (``_MISSING`` when the toml has no entry) — the form shows it, falling back
@@ -902,7 +911,10 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 row.append(num_or_none(equity))
                 if len(item) > 2 and item[2]:
                     for trade in item[2]:
-                        trade_batch.append(_serialize_trade(trade))
+                        serialized = _serialize_trade(trade)
+                        trade_batch.append(serialized)
+                        if getattr(runner, "viz_writer", None) is not None:
+                            runner.viz_writer.trades.append(serialized)
 
             batch.append(row)
             if viz_tap.active:

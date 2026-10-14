@@ -288,7 +288,7 @@ function displayedValue(
   if (src < 0 || src >= total) return null;
   const v = env.bars[src].plots?.[plotIndex];
   if (v === null || v === undefined || !Number.isFinite(v)) return null;
-  if (meta.show_last !== undefined && barIndex < total - meta.show_last) return null;
+  if (meta.show_last !== undefined && src < total - meta.show_last) return null;
   return v;
 }
 
@@ -312,7 +312,7 @@ export interface PlotDrawItem {
  */
 export function drawSteplines(env: MarkerDrawEnv, items: PlotDrawItem[]): void {
   const { ctx } = env;
-  const total = env.bars.length;
+  const total = env.bars.length + Math.max(0, ...items.map((item) => item.meta.offset ?? 0));
   const from = Math.max(0, env.visibleFrom);
   const to = Math.min(total, env.visibleTo);
   // The canvas may carry a dash pattern from whatever painted before the
@@ -390,7 +390,7 @@ function areaFillColor(color: string): string {
  */
 export function drawAreas(env: MarkerDrawEnv, items: PlotDrawItem[]): void {
   const { ctx } = env;
-  const total = env.bars.length;
+  const total = env.bars.length + Math.max(0, ...items.map((item) => item.meta.offset ?? 0));
   // One bar beyond the visible range on both sides, so partially visible
   // polygons reach the pane edge instead of popping in.
   const from = Math.max(0, env.visibleFrom - 1);
@@ -815,8 +815,9 @@ export function drawFills(env: MarkerDrawEnv, items: FillItem[]): void {
   const { ctx } = env;
   const total = env.bars.length;
   const from = Math.max(0, env.visibleFrom - 1);
-  const to = Math.min(total, env.visibleTo + 1);
   for (const item of items) {
+    const futureBars = Math.max(0, item.a.plotMeta?.offset ?? 0, item.b.plotMeta?.offset ?? 0);
+    const to = Math.min(total + futureBars, env.visibleTo + 1);
     const { meta } = item;
     let topPts: Array<{ x: number; y: number }> = [];
     let botPts: Array<{ x: number; y: number }> = [];

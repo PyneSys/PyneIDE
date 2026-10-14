@@ -319,6 +319,7 @@ interface RunState {
   drawings: DrawingStore;
   /** store.tableVersion last rendered into the HTML table layer. */
   renderedTableVersion: number;
+  renderedTableLayout: string;
   trades: TradeRecord[];
   stats: Record<string, number | null> | undefined;
   dirty: boolean;
@@ -890,6 +891,7 @@ function startRun(start: StartEvent): void {
     tsToIndex: new Map(),
     drawings: new DrawingStore(),
     renderedTableVersion: -1,
+    renderedTableLayout: '',
     trades: [],
     stats: undefined,
     dirty: false,
@@ -928,6 +930,11 @@ function startRun(start: StartEvent): void {
   chart.subscribeAction('onVisibleRangeChange', (data) =>
     updateRealtimeButton(data as VisibleRange)
   );
+  chart.subscribeAction('onPaneDrag', () => {
+    requestAnimationFrame(() => {
+      if (state?.chart === chart && !isFrozen()) renderDrawingTables(state);
+    });
+  });
   applyVolume(state, volumeVisible);
   // The y-axis template belongs to the chart instance, and a run builds a new
   // one — re-apply the persisted scale or every re-run would drop back to
@@ -1093,8 +1100,8 @@ function drawEnv(st: RunState, params: IndicatorDrawParams, overlay: boolean): M
     bounding: params.bounding,
     xAxis: params.xAxis,
     yAxis: params.yAxis,
-    visibleFrom: range.from,
-    visibleTo: range.to,
+    visibleFrom: range.realFrom,
+    visibleTo: range.realTo,
     overlay,
     gapBar: params.chart.getBarSpace().gapBar,
     bars: st.bars,
@@ -1255,13 +1262,14 @@ function rebuildPlotIndicators(st: RunState): void {
       ...candleIdx.map((i) => ({ key: figureKey(i), type: 'none', styles: () => ({}) }))
     );
     const valueIdx = [...lineIdx, ...candleIdx];
+    const futureBars = Math.max(0, ...valueIdx.map((i) => metaForKey(st, st.plotKeys[i])?.offset ?? 0));
     return {
       name,
       shortName: 'Plots',
       precision,
       figures,
       calc: (dataList: PyneBar[]) =>
-        dataList.map((_d, barIndex) => {
+        Array.from({ length: dataList.length + futureBars }, (_d, barIndex) => {
           const out: PlotDatum = {};
           for (const i of valueIdx) {
             const meta = metaForKey(st, st.plotKeys[i]);
@@ -1269,7 +1277,7 @@ function rebuildPlotIndicators(st: RunState): void {
             // show_last blanks everything before the last N bars.
             const src = barIndex - (meta?.offset ?? 0);
             let v = src >= 0 && src < dataList.length ? dataList[src].plots?.[i] ?? null : null;
-            if (meta?.show_last !== undefined && barIndex < dataList.length - meta.show_last) {
+            if (meta?.show_last !== undefined && src < dataList.length - meta.show_last) {
               v = null;
             }
             out[figureKey(i)] = v;
@@ -1616,8 +1624,12 @@ function tableAnchorCss(position: string | null | undefined): string {
 
 function renderDrawingTables(st: RunState): void {
   if (!tablesEl) return;
-  if (st.drawings.tableVersion === st.renderedTableVersion) return;
+  const layout = JSON.stringify([
+    st.chart.getSize('candle_pane', 'main'), st.chart.getSize(PLOTS_PANE_ID, 'main'),
+  ]);
+  if (st.drawings.tableVersion === st.renderedTableVersion && layout === st.renderedTableLayout) return;
   st.renderedTableVersion = st.drawings.tableVersion;
+  st.renderedTableLayout = layout;
   tablesEl.innerHTML = '';
   for (const table of st.drawings.tables.values()) {
     const paneId = table.force_overlay || st.start.overlay ? 'candle_pane' : PLOTS_PANE_ID;
@@ -2394,6 +2406,9 @@ function resizeChartAndPerformance(): void {
     panelResizeFrame = undefined;
     state?.chart.resize();
     drawPerformance();
+    requestAnimationFrame(() => {
+      if (state && !isFrozen()) renderDrawingTables(state);
+    });
   });
 }
 
@@ -3100,6 +3115,8 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       break;
   }
 });
+
+new ResizeObserver(resizeChartAndPerformance).observe(container);
 
 window.addEventListener('resize', () => {
   unfreezeIfResized();

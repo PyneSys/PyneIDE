@@ -27,6 +27,7 @@ const warningEl = document.getElementById('warning') as HTMLDivElement;
 const fieldsEl = document.getElementById('fields') as HTMLDivElement;
 const emptyEl = document.getElementById('empty') as HTMLDivElement;
 const saveBtn = document.getElementById('save') as HTMLButtonElement;
+const saveStatusEl = document.getElementById('save-status') as HTMLDivElement;
 const resetBtn = document.getElementById('reset') as HTMLButtonElement;
 const tabsEl = document.getElementById('tabs') as HTMLDivElement;
 const tabInputsBtn = document.getElementById('tab-inputs') as HTMLButtonElement;
@@ -175,13 +176,17 @@ window.addEventListener('message', (ev: MessageEvent<InputsInMessage>) => {
   } else if (msg.type === 'showTab') {
     showTab(msg.tab);
   } else if (msg.type === 'saved') {
+    saveStatusEl.hidden = true;
     flashSave('Saved');
   } else if (msg.type === 'error') {
-    flashSave(`Error: ${msg.message}`);
+    saveStatusEl.textContent = `Could not save: ${msg.message}`;
+    saveStatusEl.style.color = 'var(--vscode-errorForeground)';
+    saveStatusEl.hidden = false;
   }
 });
 
 saveBtn.addEventListener('click', () => {
+  saveStatusEl.hidden = true;
   const out: Record<string, InputValue> = {};
   for (const [k, v] of values) out[k] = v;
   if (properties) {

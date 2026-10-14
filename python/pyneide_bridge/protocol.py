@@ -21,6 +21,9 @@ def sanitize(value: Any) -> Any:
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else None
+    from pynecore.types import Color
+    if isinstance(value, Color):
+        return f"#{value.value:08X}"
     return str(value)
 
 
