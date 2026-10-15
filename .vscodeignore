@@ -1,5 +1,6 @@
 .github/**
 .claude/**
+.agents/**
 .vscode/**
 work/**
 build/**

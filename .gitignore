@@ -87,6 +87,7 @@ htmlcov/
 
 # --- AI assistants / tooling (do not commit) ---
 .claude/
+.agents/skills/release-ide/
 CLAUDE.md
 CLAUDE.local.md
 AGENTS.md
