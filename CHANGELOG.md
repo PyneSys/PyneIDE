@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-15
+
+Preview release for testing ahead of 1.0.0.
+
 ### Added
 
+- **Strategy Properties tab** for editing backtest settings alongside script inputs.
+- **Bundled PyneCore documentation**, available through the Documentation menu.
+- **GitHub release workflow** with version checks, cross-platform environment
+  tests and a downloadable VSIX attached to a draft release.
 - **Remove Environment.** The status bar menu (and the `PyneIDE: Remove
   Environment` command) now deletes what PyneIDE downloaded — the Python
   environment with its installed plugins, and optionally the Pine language
@@ -19,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **PyneCore pin 6.7.0 → 6.10.6.** The managed environment installs the newer
+- **PyneCore pin 6.7.0 → 6.10.10.** The managed environment installs the newer
   release, and an own install older than it is no longer accepted: 6.7.x wrote
   the v2 OHLCV format through POSIX-only `os.pread`/`os.pwrite`, so every data
   download and the demo data generator failed on Windows. The debugger follows
@@ -37,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Debugger inspection and paused charts.** Clearer series-history errors,
+  filtered internal variables, Pine call stacks, value formatting and Locals
+  ordering, plus a marker showing the paused bar on the chart.
+- **Run preparation and chart state.** Fixes for settings saves, persisted plot
+  rendering, chart legends, layer controls and initial data selection.
 - **No type errors for a float in an int slot.** A Pine `int` is a double at
   runtime, and Pine types `int / int` as an int while Python types it as a
   float, so valid Pyne code such as `ta.wma(src, length / 2)`, `count: int =

@@ -2,6 +2,7 @@
 .claude/**
 .vscode/**
 work/**
+build/**
 src/**
 scripts/**
 test/**
@@ -12,6 +13,7 @@ PLAN.md
 TODO.md
 MEMORY.md
 CONTRIBUTING.md
+RELEASING.md
 CLA.md
 .gitignore
 **/*.map

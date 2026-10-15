@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check tag, versions and release notes
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$GITHUB_REF_TYPE" = tag
+          node scripts/release.mjs "$RELEASE_TAG"
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  draft:
+    needs: [validate, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/release.mjs "$RELEASE_TAG"
+      - uses: actions/download-artifact@v4
+        with:
+          name: pyneide-vsix
+          path: build
+      - name: Prepare versioned VSIX and checksum
+        working-directory: build
+        run: |
+          mv pyneide.vsix "pyneide-$RELEASE_VERSION.vsix"
+          sha256sum "pyneide-$RELEASE_VERSION.vsix" > SHA256SUMS
+      - name: Create or refresh draft release
+        run: |
+          assets=("build/pyneide-$RELEASE_VERSION.vsix" build/SHA256SUMS)
+          title="PyneIDE $RELEASE_VERSION"
+          if [ "$RELEASE_PRERELEASE" = true ]; then
+            title="$title (Preview)"
+          fi
+          if gh release view "$RELEASE_TAG" --json isDraft > build/existing-release.json; then
+            node -e 'if (!require("./build/existing-release.json").isDraft) { console.error("Refusing to change a published release"); process.exit(1); }'
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --title "$title" \
+              --notes-file build/release-notes.md --prerelease="$RELEASE_PRERELEASE"
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --draft \
+              --title "$title" --notes-file build/release-notes.md \
+              --prerelease="$RELEASE_PRERELEASE"
+          fi

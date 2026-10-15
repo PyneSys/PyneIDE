@@ -127,6 +127,11 @@ while the agent files are hidden. `pyneide.showAgentFiles` is a resource-scoped,
 default-off Explorer visibility setting; its changes affect initialized Pyne
 projects only and retain unrelated exclusions.
 
+## Releases
+
+See [RELEASING.md](RELEASING.md) for versioning, preparing a preview or stable
+release, and publishing the VSIX through GitHub Releases.
+
 ## Code style
 
 Match the surrounding code. The project uses TypeScript with `strict` on, and
