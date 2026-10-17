@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Wait for a cancelled download's file stream to close before deleting its
+  partial archive, preventing leftover files during environment setup.
 - Pyne files use their own language mode, keeping Python's Run/Debug menu out
   of the editor. Separate Run and Debug buttons use PyneIDE's runner while
   retaining Python syntax highlighting and Pyne code intelligence.

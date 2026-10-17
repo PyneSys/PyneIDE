@@ -58,16 +58,29 @@ export function downloadFile(
       settled = true;
       cancelSub?.dispose();
       activeRequest?.destroy();
-      file?.destroy();
-      fs.rmSync(dest, { force: true });
-      reject(err);
+      const removePartial = (): void => {
+        fs.rm(dest, { force: true }, (cleanupError) => reject(cleanupError ?? err));
+      };
+      if (file && !file.closed) {
+        // Opening the file is asynchronous. Its close event also waits for a
+        // pending open, so unlinking now could otherwise precede file creation.
+        file.once('close', removePartial);
+        file.destroy();
+      } else {
+        removePartial();
+      }
     };
 
     const request = (target: string, redirectsLeft: number): void => {
+      if (settled) return;
       const req = https.get(
         target,
         { headers: { 'User-Agent': 'PyneIDE' }, timeout: DOWNLOAD_IDLE_TIMEOUT_MS },
         (res) => {
+          if (settled) {
+            res.destroy();
+            return;
+          }
           const status = res.statusCode ?? 0;
           if (status >= 300 && status < 400 && res.headers.location) {
             res.resume();
@@ -89,6 +102,7 @@ export function downloadFile(
           let lastReport = 0;
           if (options.onProgress) {
             res.on('data', (chunk: Buffer) => {
+              if (settled) return;
               received += chunk.length;
               const now = Date.now();
               if (now - lastReport >= PROGRESS_INTERVAL_MS) {
@@ -101,6 +115,7 @@ export function downloadFile(
           res.pipe(file);
           file.on('finish', () =>
             file?.close(() => {
+              if (settled) return;
               options.onProgress?.(received, total);
               succeed();
             })
