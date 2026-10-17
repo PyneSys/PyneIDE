@@ -1275,6 +1275,7 @@
   "scripts": {
     "release:check": "node scripts/release.mjs",
     "test:release": "node --test test/release.test.mjs",
+    "test:create-script": "node --test test/createScript.test.mjs",
     "docs:check": "node scripts/pynecore-docs.mjs",
     "docs:sync": "node scripts/pynecore-docs.mjs --sync",
     "build": "node esbuild.mjs",

@@ -133,7 +133,10 @@ export async function createNewScript(context: vscode.ExtensionContext): Promise
       preview: false,
       preserveFocus: false,
     });
-    const inserted = await editor.insertSnippet(new vscode.SnippetString(snippet));
+    const inserted = await editor.insertSnippet(
+      new vscode.SnippetString(snippet),
+      new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length))
+    );
     if (!inserted) {
       throw new Error('the editor rejected the script template');
     }
@@ -297,8 +300,9 @@ function scriptStemTaken(target: string): boolean {
   const stem = target.replace(/\.(?:pine|py)$/i, '');
   const candidates = new Set([`${stem}.pine`, `${stem}.py`]);
   if ([...candidates].some((candidate) => fs.existsSync(candidate))) return true;
+  // VS Code can retain clean document models after deletion and tab closure.
   return vscode.workspace.textDocuments.some(
-    (document) => candidates.has(document.uri.fsPath)
+    (document) => document.isDirty && candidates.has(document.uri.fsPath)
   );
 }
 
