@@ -675,6 +675,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         emitter.emit({
             "e": "start",
             "script": str(script),
+            "scriptTitle": getattr(runner.script, "title", "") or "",
+            "scriptShortTitle": getattr(runner.script, "shorttitle", "") or "",
             "scriptType": _script_type_name(runner.script),
             "overlay": bool(getattr(runner.script, "overlay", False)),
             "initialCapital": num_or_none(runner.script.initial_capital)

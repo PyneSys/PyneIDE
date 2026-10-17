@@ -435,6 +435,17 @@ let priceScaleId: PriceScaleId = DEFAULT_PRICE_SCALE;
 let colorSchemeId: ColorSchemeId = DEFAULT_COLOR_SCHEME;
 
 const container = document.getElementById('chart') as HTMLDivElement;
+const scriptLegendEl = document.getElementById('script-legend');
+
+function syncScriptLegend(start: StartEvent): void {
+  if (!scriptLegendEl) return;
+  const filename = start.script.split(/[\\/]/).pop() ?? '';
+  const title = start.scriptTitle?.trim();
+  const name = start.scriptShortTitle?.trim() || title || filename.replace(/\.[^.]+$/, '');
+  scriptLegendEl.textContent = name;
+  scriptLegendEl.title = [title || name, start.script].filter(Boolean).join('\n');
+  scriptLegendEl.hidden = !legendVisible || !!start.dataOnly || !name;
+}
 
 function cssVar(name: string, fallback: string): string {
   const v = getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -880,6 +891,7 @@ function unfreezeAfterPaint(): void {
 }
 
 function startRun(start: StartEvent): void {
+  syncScriptLegend(start);
   selectedTradeIndex = undefined;
   performanceCrosshair?.reset();
   measureOverlayId = undefined;
@@ -2936,6 +2948,7 @@ tbCandleEl?.addEventListener('click', (e) => {
  * — that is the state worth signalling; a legend on screen speaks for itself. */
 function applyLegendVisibility(): void {
   state?.chart.setStyles(legendStyles());
+  if (state) syncScriptLegend(state.start);
   const label = legendVisible ? 'Hide the chart legend' : 'Show the chart legend';
   if (tbLegendEl) {
     tbLegendEl.classList.toggle('active', !legendVisible);

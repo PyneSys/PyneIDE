@@ -47,7 +47,7 @@ from pynecore.lib import (
 )
 
 
-@script.indicator("Viz Styles Demo", overlay=False)
+@script.indicator("Viz Styles Demo", shorttitle="VSD", overlay=False)
 def main():
     m = ta.sma(close, 5)
     plot(m, "sma", color=color.orange, linewidth=2)
@@ -332,6 +332,8 @@ function assertNativeVizFile(workdir: string, stem: string): void {
   if (preview.warnings.length) fail(`output preview warnings: ${preview.warnings.join('; ')}`);
   const start = preview.events[0];
   if (start.e !== 'start' || start.data !== dataPath) fail('preview source data path missing');
+  assert.equal(start.scriptTitle, 'Viz Styles Demo');
+  assert.equal(start.scriptShortTitle, 'VSD');
   if (!preview.events.some((event) => event.e === 'plotMeta')) fail('preview plot metadata missing');
   if (!preview.events.some((event) => event.e === 'colors')) fail('preview colors missing');
   const bars = preview.events.find((event) => event.e === 'bars');
@@ -526,6 +528,9 @@ async function main(): Promise<void> {
 
   const { events, exitCode } = await runBridge(pythonBin, ws.workdir, 'viz_styles_demo');
   if (exitCode !== 0) fail(`bridge exit code ${exitCode}`);
+  const start = events.find((event) => event.e === 'start');
+  assert.equal(start?.scriptTitle, 'Viz Styles Demo');
+  assert.equal(start?.scriptShortTitle, 'VSD');
   if (capable) {
     assertVizStream(events);
     assertNativeVizFile(ws.workdir, 'viz_styles_demo');

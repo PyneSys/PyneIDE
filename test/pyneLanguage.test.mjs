@@ -142,6 +142,7 @@ test('Pyne grammar retains Python token scopes and highlights the Pyne marker', 
     'source.python': 'test/grammar/vendor/MagicPython.tmLanguage.json',
     'source.python.pyne': 'syntaxes/pyne.tmLanguage.json',
     'pyne.injection': 'syntaxes/pyne.injection.json',
+    'pyne.variables.injection': 'syntaxes/pyne.variables.injection.json',
   };
   const registry = new Registry({
     onigLib: Promise.resolve({
@@ -151,7 +152,8 @@ test('Pyne grammar retains Python token scopes and highlights the Pyne marker', 
     loadGrammar: async (scope) => grammars[scope]
       ? parseRawGrammar(fs.readFileSync(path.join(root, grammars[scope]), 'utf8'), grammars[scope])
       : null,
-    getInjections: (scope) => scope === 'source.python.pyne' ? ['pyne.injection'] : [],
+    getInjections: (scope) => scope === 'source.python.pyne'
+      ? ['pyne.injection', 'pyne.variables.injection'] : [],
   });
   try {
     const grammar = await registry.loadGrammar('source.python.pyne');
@@ -159,6 +161,36 @@ test('Pyne grammar retains Python token scopes and highlights the Pyne marker', 
     assert.ok(head.tokens.some((token) => token.scopes.includes('keyword.other.annotation.pyne')));
     const code = grammar.tokenizeLine('def main():', head.ruleStack);
     assert.ok(code.tokens.some((token) => token.scopes.includes('entity.name.function.python')));
+    for (const line of [
+      'from pynecore.lib import close, color, open, plot, script',
+      'plot(open)',
+      'previous = open[1]',
+      'difference = close - open',
+    ]) {
+      const offset = line.indexOf('open');
+      const token = grammar.tokenizeLine(line).tokens.find(
+        (token) => token.startIndex <= offset && token.endIndex > offset,
+      );
+      assert.ok(token.scopes.includes('variable.other.readwrite.python'), line);
+      assert.ok(!token.scopes.includes('support.function.builtin.python'), line);
+    }
+    for (const [line, scope] of [
+      ['open("data.csv")', 'support.function.builtin.python'],
+      ['print(open)', 'support.function.builtin.python'],
+      ['label = "open"', 'string.quoted.single.python'],
+      ['# open', 'comment.line.number-sign.python'],
+    ]) {
+      assert.ok(grammar.tokenizeLine(line).tokens.some((token) => token.scopes.includes(scope)), line);
+    }
+    for (const line of ['open("data.csv")', 'label = "open"', '# open']) {
+      assert.ok(!grammar.tokenizeLine(line).tokens.some(
+        (token) => token.scopes.includes('variable.other.readwrite.python'),
+      ), line);
+    }
+    const python = await registry.loadGrammar('source.python');
+    assert.ok(python.tokenizeLine('value = open').tokens.some(
+      (token) => token.scopes.includes('support.function.builtin.python'),
+    ));
   } finally {
     registry.dispose();
   }

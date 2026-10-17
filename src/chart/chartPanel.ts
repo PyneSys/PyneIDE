@@ -189,9 +189,14 @@ export class ChartPanel {
    */
   handleEvent(event: BridgeEvent): void {
     switch (event.e) {
-      case 'start':
+      case 'start': {
+        // Use the editor source for the legend, including Pine scripts whose
+        // bridge runs the compiled Python sibling and persisted output previews.
+        const start = isChartablePath(this.chartKey)
+          ? { ...event, script: this.chartKey }
+          : event;
         this.snap = {
-          start: event,
+          start,
           bars: [],
           plotKeys: [],
           plotMeta: new Map(),
@@ -203,8 +208,9 @@ export class ChartPanel {
           ended: undefined,
         };
         this.reveal();
-        this.post({ type: 'reset', start: event });
+        this.post({ type: 'reset', start });
         break;
+      }
       case 'bars':
         if (this.snap) for (const row of event.d) this.snap.bars.push(row);
         this.post({ type: 'bars', rows: event.d });
@@ -596,6 +602,12 @@ export class ChartPanel {
   #breakpoints-popup .breakpoint-delete:hover {
     background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
   }
+  #script-legend {
+    flex: 0 0 auto; padding: 4px 8px 0; min-width: 0;
+    font-size: 12px; line-height: 18px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #script-legend[hidden] { display: none; }
   #chart-area { flex: 1; min-height: 0; position: relative; }
   #chart { position: absolute; inset: 0; }
   #breakpoint-pick {
@@ -832,6 +844,7 @@ export class ChartPanel {
     </button>
   </div>
 </div>
+<div id="script-legend" hidden></div>
 <div id="chart-area">
   <div id="chart"></div>
   <div id="chart-busy" role="progressbar" aria-label="Recomputing the chart" hidden></div>

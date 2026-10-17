@@ -91,6 +91,7 @@ try {
   }
 
   const chart = await setup(
+    '<div id="script-legend" hidden></div><button id="tb-legend"></button>' +
     '<div id="chart" style="width:800px;height:400px"></div><div id="bottom">' +
     '<button id="tab-trades"></button><button id="tab-stats"></button><div id="tab-body"></div></div>',
     'chart-webview.js'
@@ -104,6 +105,26 @@ try {
     entryId: 'Buy & hold', entryTime: 1700000000000, exitTime: 1700000060000,
     entryPrice: 100.25, exitPrice: 101.25, size: 1, profit: 1, profitPct: 1, cumProfit: 1,
   };
+  const legend = chart.locator('#script-legend');
+  for (const [metadata, name, tooltip] of [
+    [{ scriptTitle: 'My Price Line', scriptShortTitle: 'MPL' }, 'MPL', 'My Price Line\ndemo.py'],
+    [{ scriptTitle: 'My Price Line' }, 'My Price Line', 'My Price Line\ndemo.py'],
+    [{ scriptTitle: '  ', scriptShortTitle: '' }, 'demo', 'demo\ndemo.py'],
+    [{ script: 'C:\\scripts\\windows.py' }, 'windows', 'windows\nC:\\scripts\\windows.py'],
+  ]) {
+    await send(chart, { type: 'reset', start: { ...start, ...metadata } });
+    assert.equal(await legend.textContent(), name);
+    assert.equal(await legend.getAttribute('title'), tooltip);
+    assert.equal(await legend.isVisible(), true);
+  }
+  await chart.locator('#tb-legend').click();
+  assert.equal(await legend.isVisible(), false);
+  await send(chart, { type: 'reset', start });
+  assert.equal(await legend.isVisible(), false, 'rerun must retain hidden legend');
+  await chart.locator('#tb-legend').click();
+  assert.equal(await legend.isVisible(), true);
+  await send(chart, { type: 'reset', start: { ...start, dataOnly: true } });
+  assert.equal(await legend.isVisible(), false, 'raw data has no script legend');
   await send(chart, { type: 'reset', start });
   await send(chart, { type: 'trades', trades: [trade] });
   await chart.locator('#tab-trades').click();
@@ -111,7 +132,9 @@ try {
   assert.ok((await chart.locator('#tab-body').textContent()).includes(trade.entryId));
   await chart.locator('tr[data-ts]').click();
   for (const payload of payloads) {
-    await send(chart, { type: 'reset', start });
+    await send(chart, { type: 'reset', start: { ...start, scriptTitle: payload, scriptShortTitle: payload } });
+    assert.equal(await legend.textContent(), payload);
+    await assertSafe(chart, 'script legend');
     await send(chart, { type: 'openTrades', trades: [{ ...trade, entryTime: payload, entryId: payload }] });
     await chart.locator('#tab-trades').click();
     await assertSafe(chart, 'trade timestamp and id');
@@ -121,7 +144,7 @@ try {
     await chart.locator('#tab-stats').click();
     await assertSafe(chart, 'stats');
   }
-  console.log('Webview XSS smoke passed: plugin list/details, trades/stats, and legitimate controls.');
+  console.log('Webview smoke passed: script legend names/tooltips/visibility, plugin list/details, trades/stats, and XSS safety.');
 } finally {
   await browser.close();
 }

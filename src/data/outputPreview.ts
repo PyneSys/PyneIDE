@@ -301,6 +301,8 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   const start: StartEvent = {
     e: 'start',
     script: pair.plot,
+    scriptTitle: typeof script.title === 'string' ? script.title : undefined,
+    scriptShortTitle: typeof script.shorttitle === 'string' ? script.shorttitle : undefined,
     scriptType: script.type === 'strategy' ? 'strategy' : 'indicator',
     overlay: script.overlay === true,
     initialCapital:

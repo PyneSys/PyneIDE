@@ -1,0 +1,11 @@
+{
+  "name": "Pyne variables",
+  "scopeName": "pyne.variables.injection",
+  "injectionSelector": "L:source.python.pyne - string - comment",
+  "patterns": [
+    {
+      "name": "variable.other.readwrite.python",
+      "match": "\\bopen\\b(?!\\s*\\()"
+    }
+  ]
+}

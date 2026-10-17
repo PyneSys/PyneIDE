@@ -1272,6 +1272,11 @@
         ]
       },
       {
+        "scopeName": "pyne.variables.injection",
+        "path": "./syntaxes/pyne.variables.injection.json",
+        "injectTo": ["source.python.pyne"]
+      },
+      {
         "language": "pyne",
         "scopeName": "source.python.pyne",
         "path": "./syntaxes/pyne.tmLanguage.json"
