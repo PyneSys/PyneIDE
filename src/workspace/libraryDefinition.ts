@@ -17,7 +17,11 @@ export interface WorkspaceLibraryReference {
 export function registerLibraryDefinition(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(
-      [{ language: 'pine', scheme: 'file' }, { language: 'python', scheme: 'file' }],
+      [
+        { language: 'pine', scheme: 'file' },
+        { language: 'python', scheme: 'file' },
+        { language: 'pyne', scheme: 'file' },
+      ],
       new LibraryDefinitionProvider()
     )
   );

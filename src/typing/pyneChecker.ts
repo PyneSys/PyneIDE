@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import type { PyneProblem, SeriesAnalyzer } from './seriesAnalyzer';
 
 /** Debounce between an edit and the analysis it triggers, in milliseconds. */
@@ -74,7 +74,7 @@ export class PyneCheckerService {
   /** Only Python documents whose head marks them as `@pyne` are checked. */
   private isPyneDocument(doc: vscode.TextDocument): boolean {
     return (
-      doc.languageId === 'python' &&
+      isPythonSyntax(doc.languageId) &&
       detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined
     );
   }

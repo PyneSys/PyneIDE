@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
-import { DETECT_HEAD_BYTES, detectPyne } from '../pyneDetect';
+import { DETECT_HEAD_BYTES, detectPyne, isPythonSyntax } from '../pyneDetect';
 import {
   activeLibraryCall,
   collectWorkspaceLibraryImports,
@@ -23,6 +23,7 @@ export function registerLibraryHelp(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [
     { language: 'pine', scheme: 'file' },
     { language: 'python', scheme: 'file' },
+    { language: 'pyne', scheme: 'file' },
   ];
   context.subscriptions.push(
     vscode.languages.registerHoverProvider(selector, new LibraryHoverProvider()),
@@ -104,7 +105,7 @@ class LibrarySignatureHelpProvider implements vscode.SignatureHelpProvider {
 function librarySyntax(document: vscode.TextDocument): LibraryImportSyntax | undefined {
   if (document.languageId === 'pine') return 'pine';
   if (
-    document.languageId === 'python' &&
+    isPythonSyntax(document.languageId) &&
     detectPyne(document.getText().slice(0, DETECT_HEAD_BYTES))
   ) {
     return 'pyne';

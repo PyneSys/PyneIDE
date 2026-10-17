@@ -18,7 +18,7 @@ export class EdgeQuickFixProvider implements vscode.CodeActionProvider {
   register(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.languages.registerCodeActionsProvider(
-        { language: 'python' },
+        [{ language: 'python' }, { language: 'pyne' }],
         this,
         EdgeQuickFixProvider.metadata
       )

@@ -37,6 +37,7 @@ import { PluginService } from './plugins/service';
 import { registerReportCommand } from './report/command';
 import { logHub } from './report/logTee';
 import { PyneDecorationProvider } from './pyneDecorations';
+import { registerPyneLanguage } from './pyneLanguage';
 import {
   downloadData,
   downloadOtherTimeframe,
@@ -74,6 +75,7 @@ function pinnedTargetTag(): string {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  registerPyneLanguage(context);
   new PyneDecorationProvider().register(context);
 
   const ohlcvEditors = new OhlcvEditorProvider(context);

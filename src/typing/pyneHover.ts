@@ -29,7 +29,10 @@ export class PyneHoverProvider implements vscode.HoverProvider {
 
   register(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.languages.registerHoverProvider({ scheme: 'file', language: 'python' }, this)
+      vscode.languages.registerHoverProvider(
+        [{ scheme: 'file', language: 'python' }, { scheme: 'file', language: 'pyne' }],
+        this
+      )
     );
   }
 

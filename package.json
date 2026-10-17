@@ -47,7 +47,8 @@
     "onLanguage:python",
     "onLanguage:pine",
     "onDebugDynamicConfigurations:pyne",
-    "onCustomEditor:pyneide.ohlcvTable"
+    "onCustomEditor:pyneide.ohlcvTable",
+    "onLanguage:pyne"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -71,6 +72,10 @@
       },
       "workbench.editor.customLabels.patterns": {
         "**/scripts/lib/*/*/v*.{pine,py}": "${dirname}/${filename}.${extname}"
+      },
+      "[pyne]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
       }
     },
     "commands": [
@@ -525,34 +530,32 @@
           "group": "pyneide@5"
         }
       ],
-      "editor/title/run": [
+      "editor/title": [
         {
           "command": "pyneide.cancelRun",
-          "when": "(resourceLangId == pine || pyneide.isPyneScript) && pyneide.runActiveHere",
-          "group": "navigation@0"
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@-2"
         },
         {
           "command": "pyneide.runPineScript",
-          "when": "resourceLangId == pine && !pyneide.runActiveHere",
-          "group": "navigation@1"
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@-2"
         },
         {
           "command": "pyneide.runScript",
-          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere",
-          "group": "navigation@1"
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@-2"
         },
         {
           "command": "pyneide.debugPineScript",
-          "when": "resourceLangId == pine && !pyneide.runActiveHere",
-          "group": "navigation@2"
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@-1"
         },
         {
           "command": "pyneide.debugScript",
-          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere",
-          "group": "navigation@2"
-        }
-      ],
-      "editor/title": [
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@-1"
+        },
         {
           "command": "pyneide.openChart",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
@@ -924,6 +927,9 @@
       },
       {
         "language": "pine"
+      },
+      {
+        "language": "pyne"
       }
     ],
     "debuggers": [
@@ -931,7 +937,7 @@
         "type": "pyne",
         "label": "Pyne",
         "languages": [
-          "python",
+          "pyne",
           "pine"
         ],
         "configurationAttributes": {
@@ -1194,6 +1200,18 @@
     ],
     "languages": [
       {
+        "id": "pyne",
+        "aliases": [
+          "Pyne",
+          "pyne"
+        ],
+        "configuration": "./language-configuration-pyne.json",
+        "icon": {
+          "light": "./icons/pine-file.svg",
+          "dark": "./icons/pine-file.svg"
+        }
+      },
+      {
         "id": "pine",
         "aliases": [
           "Pine Script",
@@ -1249,8 +1267,14 @@
         "scopeName": "pyne.injection",
         "path": "./syntaxes/pyne.injection.json",
         "injectTo": [
-          "source.python"
+          "source.python",
+          "source.python.pyne"
         ]
+      },
+      {
+        "language": "pyne",
+        "scopeName": "source.python.pyne",
+        "path": "./syntaxes/pyne.tmLanguage.json"
       }
     ],
     "snippets": [
@@ -1303,7 +1327,8 @@
     "test:agent-skills": "node esbuild.mjs --smoke-agent-skills && node dist/agent-skills-smoke.js",
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
-    "package": "vsce package --out build/"
+    "package": "vsce package --out build/",
+    "test:pyne-language": "node --test test/pyneLanguage.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

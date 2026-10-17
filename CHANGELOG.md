@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pyne files use their own language mode, keeping Python's Run/Debug menu out
+  of the editor. Separate Run and Debug buttons use PyneIDE's runner while
+  retaining Python syntax highlighting and Pyne code intelligence.
+
 ## [0.9.0] - 2026-10-15
 
 Preview release for testing ahead of 1.0.0.

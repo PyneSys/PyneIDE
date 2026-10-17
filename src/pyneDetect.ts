@@ -29,6 +29,11 @@ const PYNE_EDGE_TOKEN_RE =
 
 export type PyneKind = 'pyne' | 'edge' | 'lib';
 
+/** Both editor modes use Python syntax; only `python` belongs to its runner. */
+export function isPythonSyntax(languageId: string | undefined): boolean {
+  return languageId === 'python' || languageId === 'pyne';
+}
+
 /**
  * Classify a Python source head. Only the first few kilobytes are needed;
  * callers may pass a truncated prefix of the file.

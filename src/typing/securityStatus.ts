@@ -32,7 +32,7 @@ import { canonicalChartKey } from '../chart/chartKey';
 import { loadSourcemapFor, pineLineFor } from '../compile/sourcemap';
 import { fileForMappedValue, readDataFiles } from '../data/symbolMapModel';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
-import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import { getRememberedData } from '../run/dataSelect';
 import type { SecurityCall, SeriesAnalyzer } from './seriesAnalyzer';
 
@@ -88,7 +88,7 @@ export class SecurityStatusService {
   private isPyneDocument(doc: vscode.TextDocument): boolean {
     if (doc.languageId === 'pine') return true;
     return (
-      doc.languageId === 'python' &&
+      isPythonSyntax(doc.languageId) &&
       detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined
     );
   }

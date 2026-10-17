@@ -28,7 +28,7 @@ import type { DebugBreakpointControl } from '../debug/dapProxy';
 import type { EnvManager } from '../env/manager';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPineVersion } from '../pineVersion';
-import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import { failures } from '../report/lastFailure';
 import { logHub } from '../report/logTee';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
@@ -155,7 +155,7 @@ export class RunService {
   }
 
   register(): void {
-    const selector = [{ language: 'python' }, { language: 'pine' }];
+    const selector = [{ language: 'python' }, { language: 'pyne' }, { language: 'pine' }];
     this.codeLensProvider = new RunCodeLensProvider(() =>
       this.activeRunIsDebug ? undefined : this.activeChartKey
     );
@@ -223,12 +223,12 @@ export class RunService {
     const doc = vscode.window.activeTextEditor?.document;
     const isPyne =
       doc?.languageId === 'pine' ||
-      (doc?.languageId === 'python' &&
+      (doc !== undefined && isPythonSyntax(doc.languageId) &&
         detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined);
     void vscode.commands.executeCommand('setContext', 'pyneide.isPyneScript', isPyne === true);
     // True only on the tab whose own (non-debug) run is streaming. This has to
     // be per-file, not the global runActive: the editor-title Run/Debug entries
-    // hide behind it so the split button's primary action becomes Stop — with a
+    // hide behind it so the Run button becomes Stop — with a
     // global key that would also strip the play button off every other script.
     const runningHere =
       doc !== undefined &&
@@ -280,7 +280,7 @@ export class RunService {
   ): Promise<{ doc: vscode.TextDocument; workdir: string; pythonBin: string } | undefined> {
     const doc = await this.resolveDocument(uri);
     if (!doc) return undefined;
-    if (doc.languageId !== 'pine' && doc.languageId !== 'python') {
+    if (doc.languageId !== 'pine' && !isPythonSyntax(doc.languageId)) {
       void vscode.window.showWarningMessage('PyneIDE: open a Pyne (.py) or Pine (.pine) script.');
       return undefined;
     }
@@ -335,7 +335,7 @@ export class RunService {
   async openChart(uri?: vscode.Uri): Promise<void> {
     const doc = await this.resolveDocument(uri);
     if (!doc) return;
-    if (doc.languageId !== 'pine' && doc.languageId !== 'python') {
+    if (doc.languageId !== 'pine' && !isPythonSyntax(doc.languageId)) {
       void vscode.window.showWarningMessage('PyneIDE: open a Pyne (.py) or Pine (.pine) script.');
       return;
     }
@@ -742,7 +742,7 @@ export class RunService {
         return undefined;
       }
       scriptPath = compiled;
-    } else if (doc.languageId === 'python') {
+    } else if (isPythonSyntax(doc.languageId)) {
       if (detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) === undefined) {
         void vscode.window.showWarningMessage(
           'PyneIDE: this is not a Pyne script (the module docstring must start with @pyne).'
@@ -857,7 +857,7 @@ export class RunService {
       }
       scriptPath = compiled;
     } else if (
-      doc.languageId !== 'python' ||
+      !isPythonSyntax(doc.languageId) ||
       detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) === undefined
     ) {
       void vscode.window.showWarningMessage(
@@ -1483,7 +1483,7 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
     if (doc.languageId === 'pine') {
       title = '$(play) Run Pine Script';
     } else if (
-      doc.languageId === 'python' &&
+      isPythonSyntax(doc.languageId) &&
       detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined
     ) {
       title = '$(play) Run Pyne code';

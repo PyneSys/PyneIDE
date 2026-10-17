@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
-import { DETECT_HEAD_BYTES, detectPyne } from '../pyneDetect';
+import { DETECT_HEAD_BYTES, detectPyne, isPythonSyntax } from '../pyneDetect';
 import {
   collectWorkspaceLibraryImports,
   parsePineLibraryExports,
@@ -163,7 +163,7 @@ function documentSyntax(
 ): LibraryImportSyntax | undefined {
   if (document.languageId === 'pine') return 'pine';
   if (
-    document.languageId === 'python' &&
+    isPythonSyntax(document.languageId) &&
     detectPyne(document.getText().slice(0, DETECT_HEAD_BYTES))
   ) {
     return 'pyne';

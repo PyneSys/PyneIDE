@@ -20,7 +20,7 @@ import {
   PYTHON_LANGUAGE_BLOCK,
 } from '../env/workdir';
 import { resolvePyneIdeWorkdir } from '../env/workdirConfig';
-import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import { pyneAliasAt } from './pyneAlias';
 import { isPineNumberReport } from './numberFilter';
 import { SeriesAnalyzer, type SeriesAnalysis } from './seriesAnalyzer';
@@ -31,9 +31,8 @@ export const PYLANCE_EXTENSION = 'ms-python.vscode-pylance';
 
 /**
  * Extensions that already run a pyright-family language server for Python.
- * Starting a second instance next to them would double every diagnostic, so
- * the bundled server defers to any of these (L5a's generated pyrightconfig
- * covers those setups instead). Pylance only counts while
+ * These own ordinary Python documents when present. The bundled server still
+ * serves the separate Pyne language mode. Pylance only counts while
  * `python.languageServer` actually routes to it — Pyne workspaces set the
  * value to "None" so the bundled server can take over (see extension.ts).
  */
@@ -44,9 +43,8 @@ const SUPERSEDING_EXTENSIONS = [
 ];
 
 /**
- * The Python extension without Pylance serves completion/hover via Jedi.
- * The bundled pyright then runs with language services disabled so only its
- * diagnostics remain (no duplicate completion lists).
+ * The Python extension can also serve ordinary Python via Jedi; those
+ * documents must then be excluded from the bundled client's selector.
  */
 const JEDI_HOST_EXTENSION = 'ms-python.python';
 
@@ -101,6 +99,7 @@ export class PyrightService {
   private syncing = false;
   private syncAgain = false;
   private lastPushedPython?: string;
+  private servesPython = false;
   private readonly analyzer: SeriesAnalyzer;
   /** Unfiltered diagnostics per document, for re-publishing after analysis. */
   private readonly rawDiagnostics = new Map<string, vscode.Diagnostic[]>();
@@ -112,9 +111,9 @@ export class PyrightService {
     private readonly output: vscode.OutputChannel,
     analyzer: SeriesAnalyzer
   ) {
-    this.statusItem = vscode.languages.createLanguageStatusItem('pyneide.pyright', {
-      language: 'python',
-    });
+    this.statusItem = vscode.languages.createLanguageStatusItem('pyneide.pyright', [
+      { language: 'python' }, { language: 'pyne' },
+    ]);
     this.statusItem.name = 'Pyne Typing';
     this.analyzer = analyzer;
   }
@@ -150,7 +149,7 @@ export class PyrightService {
       // A Pyne file opened outside a workdir-based workspace still turns the
       // server on (gating below); cheap no-op once running.
       vscode.workspace.onDidOpenTextDocument((doc) => {
-        if (doc.languageId === 'python' && !this.client) void this.sync();
+        if (isPythonSyntax(doc.languageId) && !this.client) void this.sync();
       }),
       this.env.onDidChangeState((state) => {
         if (state.kind === 'ready' || state.kind === 'error') {
@@ -224,7 +223,7 @@ export class PyrightService {
   private isPyneContext(): boolean {
     if (resolvePyneIdeWorkdir()) return true;
     return vscode.workspace.textDocuments.some(
-      (doc) => doc.languageId === 'python' && this.isPyneDocument(doc)
+      (doc) => isPythonSyntax(doc.languageId) && this.isPyneDocument(doc)
     );
   }
 
@@ -233,7 +232,7 @@ export class PyrightService {
       return { start: false, reason: 'disabled via pyneide.pyright.enabled' };
     }
     const superseding = this.supersededBy();
-    if (superseding) {
+    if (superseding && !vscode.workspace.textDocuments.some((doc) => doc.languageId === 'pyne')) {
       return {
         start: false,
         reason: `${superseding} provides Python analysis`,
@@ -270,6 +269,9 @@ export class PyrightService {
           this.setStatus({ kind: 'off', reason: decision.reason, pylance: decision.pylance });
         } else if (!this.client) {
           await this.startClient();
+        } else if (this.servesPython !== this.shouldServePython()) {
+          await this.stopClient();
+          await this.startClient();
         }
       } while (this.syncAgain);
     } finally {
@@ -302,8 +304,14 @@ export class PyrightService {
       run: { module: serverModule, transport: TransportKind.ipc },
       debug: { module: serverModule, transport: TransportKind.ipc },
     };
+    // Python tooling does not select the `pyne` mode. Always provide its full
+    // language services, while leaving ordinary Python to an installed checker.
+    this.servesPython = this.shouldServePython();
     const client = new LanguageClient('pyneTyping', 'Pyne Typing (pyright)', serverOptions, {
-      documentSelector: [{ scheme: 'file', language: 'python' }],
+      documentSelector: [
+        { scheme: 'file', language: 'pyne' },
+        ...(this.servesPython ? [{ scheme: 'file', language: 'python' }] : []),
+      ],
       outputChannel: this.output,
       revealOutputChannelOn: RevealOutputChannelOn.Never,
       middleware: {
@@ -368,6 +376,10 @@ export class PyrightService {
     return state.kind === 'ready' ? state.pythonBin : undefined;
   }
 
+  private shouldServePython(): boolean {
+    return !this.supersededBy() && !this.jediHostPresent();
+  }
+
   /**
    * Fill in what a Pylance-less install lacks: the interpreter for the
    * `python` section (pyright still honors python.pythonPath) and pyright's
@@ -403,9 +415,6 @@ export class PyrightService {
     if (section === 'pyright') {
       return {
         disableOrganizeImports: true,
-        // Keep diagnostics but leave completion/definition to Jedi when the
-        // Python extension is installed without Pylance.
-        ...(this.jediHostPresent() ? { disableLanguageServices: true } : {}),
         ...base,
       };
     }

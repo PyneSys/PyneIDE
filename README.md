@@ -106,6 +106,11 @@ Python unless you want to. Compiling Pine needs a PyneSys account and API key
 ([create one at app.pynesys.io](https://app.pynesys.io)); running **Pyne code** needs
 no account and runs entirely on your machine.
 
+Files marked with `@pyne` automatically use the **Pyne** language mode. The
+editor toolbar shows separate **Run Pyne code** and **Debug Pyne code** buttons,
+using the same runner as the PyneIDE Workspace view. Python's Run/Debug menu
+does not apply to these files. Ordinary Python files keep their Python mode.
+
 ![One click above line one compiles the Pine script and streams it onto a candlestick chart beside the code](media/run.gif)
 
 *One click above line one: compile, run, and the chart builds beside your code.*

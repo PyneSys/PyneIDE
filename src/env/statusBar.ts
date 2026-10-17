@@ -7,7 +7,7 @@ import type { Usage } from '../api/client';
 import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
 import type { PluginService } from '../plugins/service';
-import { detectPyne, DETECT_HEAD_BYTES } from '../pyneDetect';
+import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import { agentProjectFolder } from '../workspace/agentPreferences';
 import type { EnvManager, EnvState } from './manager';
 import { resolvePyneIdeWorkdir } from './workdirConfig';
@@ -174,7 +174,7 @@ export class EnvStatusBar {
     const open = vscode.workspace.textDocuments.some(
       (doc) =>
         doc.languageId === 'pine' ||
-        (doc.languageId === 'python' &&
+        (isPythonSyntax(doc.languageId) &&
           detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined)
     );
     return open || this.inFreshFolder();

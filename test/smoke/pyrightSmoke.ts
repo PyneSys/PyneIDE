@@ -315,7 +315,7 @@ async function checkPullDiagnostics(serverModule: string): Promise<void> {
   lsp.notify('initialized', {});
   await registered;
   lsp.notify('textDocument/didOpen', {
-    textDocument: { uri: scriptUri, languageId: 'python', version: 1, text: SERIES_SCRIPT },
+    textDocument: { uri: scriptUri, languageId: 'pyne', version: 1, text: SERIES_SCRIPT },
   });
   const report = (await lsp.request(
     'textDocument/diagnostic',
@@ -634,7 +634,7 @@ async function diagnose(
     return p.uri === scriptUri && ready(p);
   });
   lsp.notify('textDocument/didOpen', {
-    textDocument: { uri: scriptUri, languageId: 'python', version: 1, text },
+    textDocument: { uri: scriptUri, languageId: 'pyne', version: 1, text },
   });
   const diag = (await analyzed) as PublishParams;
 

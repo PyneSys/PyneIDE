@@ -501,12 +501,8 @@ const SNIPPETS_MARKER = /pyneide-snippets:\s*([0-9a-f]+)/;
  * Install the Pyne snippets as *workspace* snippets in
  * `<projectDir>/.vscode/pyne.code-snippets`.
  *
- * Pyne scripts are plain `.py`, so `contributes.snippets` would scope them to
- * language `python` — i.e. every Python file the user ever opens, Pyne project
- * or not. Their prefixes deliberately mirror the Pine ones (`rsi`, `bb`,
- * `table`, ...), which are ordinary words, so that leak would be noisy.
- * Workspace snippets scope by folder instead, and unlike a
- * `CompletionItemProvider` they stay a first-class snippet source, so the
+ * Scope the snippets to initialized projects, in both Python and Pyne modes.
+ * Unlike a `CompletionItemProvider` they stay a first-class snippet source, so the
  * "Insert Snippet" palette keeps listing them.
  *
  * A file without our marker is user-authored and never touched. Returns true
@@ -523,7 +519,8 @@ export function ensurePyneSnippets(projectDir: string, extensionPath: string): b
     return false;
   }
 
-  const fingerprint = crypto.createHash('sha256').update(source).digest('hex').slice(0, 12);
+  const scope = 'python,pyne';
+  const fingerprint = crypto.createHash('sha256').update(scope).update(source).digest('hex').slice(0, 12);
   const vscodeDir = path.join(projectDir, '.vscode');
   const targetPath = path.join(vscodeDir, SNIPPETS_FILE);
   if (fs.existsSync(targetPath)) {
@@ -537,11 +534,11 @@ export function ensurePyneSnippets(projectDir: string, extensionPath: string): b
     if (!marker || marker[1] === fingerprint) return false;
   }
 
-  // `scope` is what confines each snippet to Python inside this workspace;
+  // `scope` confines each snippet to Python/Pyne inside this workspace;
   // without it a .code-snippets entry applies to every language.
   const scoped: Record<string, unknown> = {};
   for (const [name, snippet] of Object.entries(snippets)) {
-    scoped[name] = { ...snippet, scope: 'python' };
+    scoped[name] = { ...snippet, scope };
   }
   const header =
     '// PyneIDE generated — Pyne snippets, scoped to this workspace.\n' +

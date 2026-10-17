@@ -22,7 +22,11 @@ export function registerLibraryCompletion(context: vscode.ExtensionContext): voi
   const provider = new LibraryCompletionProvider();
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(
-      [{ language: 'pine', scheme: 'file' }, { language: 'python', scheme: 'file' }],
+      [
+        { language: 'pine', scheme: 'file' },
+        { language: 'python', scheme: 'file' },
+        { language: 'pyne', scheme: 'file' },
+      ],
       provider,
       '/',
       '.',
