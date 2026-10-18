@@ -365,7 +365,13 @@ export class SymbolBrowserPanel {
     );
     this.activeDownloadId = id;
     try {
-      const res = await result;
+      let res: DownloadResult;
+      try {
+        res = await result;
+      } finally {
+        // Notifications and their actions can stay open after the RPC completes.
+        this.activeDownloadId = undefined;
+      }
       this.post({ type: 'downloadDone', ohlcvPath: res.ohlcv_path, barsWritten: res.bars_written, symbol: msg.symbol });
       await this.afterDownload(res, msg.symbol);
     } catch (err) {
@@ -377,8 +383,6 @@ export class SymbolBrowserPanel {
         message: explainError(err, providerTarget('The download', msg.provider)),
         retryable,
       });
-    } finally {
-      this.activeDownloadId = undefined;
     }
   }
 

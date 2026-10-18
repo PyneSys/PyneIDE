@@ -1302,6 +1302,7 @@
     ]
   },
   "scripts": {
+    "test:symbol-browser-download": "node --test test/symbolBrowserDownload.test.mjs",
     "test:download": "node --test test/download.test.mjs",
     "release:check": "node scripts/release.mjs",
     "test:release": "node --test test/release.test.mjs",
