@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-21
+
+### Changed
+
+- Pin PyneCore to 6.10.11 and update the bundled documentation to match.
+
+### Added
+
+- Charts show the indicator or strategy name, preferring its short title when
+  available. The legend toggle also controls this name.
+
 ### Fixed
 
+- Allow a script name to be reused after deleting the previous script, while
+  protecting existing files and unsaved edits.
+- Allow another Symbol Browser download while the previous download's success
+  notification remains open.
 - Wait for a cancelled download's file stream to close before deleting its
   partial archive, preventing leftover files during environment setup.
 - Pyne files use their own language mode, keeping Python's Run/Debug menu out
