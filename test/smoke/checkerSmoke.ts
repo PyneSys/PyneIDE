@@ -427,6 +427,53 @@ async function main(): Promise<void> {
     expectCodes(edgeCall, ['pyne-edge-call', 'pyne-edge-call'], 'edge-call');
     log('edge-call OK');
 
+    // --- Python's builtin open must not hide a missing price-series import ---
+    const openScaffold =
+      'from pynecore.lib import script, plot\n' +
+      '@script.indicator(title="T")\n';
+    const missingOpenSource = EDGE_HEAD + openScaffold +
+      'def main():\n' +
+      '    plot(open)\n' +
+      '    plot(open[1])\n' +
+      '    price = open + 1\n' +
+      '    open("prices.csv")\n';
+    const missingOpen = await worker.request(missingOpenSource);
+    expectCodes(missingOpen, Array(4).fill('pyne-edge-builtin'), 'edge-missing-open');
+    for (const [line, start, end, , message] of missingOpen.problems ?? []) {
+      assert(missingOpenSource.split('\n')[line].slice(start, end) === 'open',
+        'edge-missing-open: diagnostic must underline only open');
+      assert(message.includes('from pynecore.lib import open'),
+        'edge-missing-open: diagnostic must explain the missing series import');
+    }
+    expectCodes(await worker.request(missingOpenSource.replace(EDGE_HEAD, HEAD)), [],
+      'plain-pyne-builtin-open');
+    expectCodes(await worker.request(EDGE_HEAD +
+      'from pynecore.lib import open\n' + openScaffold +
+      'def main():\n    plot(open)\n    plot(open[1])\n'), [], 'edge-imported-open');
+    for (const [label, body] of [
+      ['parameter', 'def main(open: float = 1.0):\n    plot(open)\n'],
+      ['local', 'def main():\n    open = 1.0\n    plot(open)\n'],
+      ['closure', 'def main():\n    open = 1.0\n    def price():\n        return open\n    plot(price())\n'],
+      ['local-import', 'def main():\n    from pynecore.lib import open\n    plot(open)\n'],
+      ['lifted-import', 'def main():\n    plot(open)\ndef helper():\n    from pynecore.lib import open\n    return open\n'],
+      ['loop', 'def main():\n    for open in (1.0, 2.0):\n        plot(open)\n'],
+    ]) {
+      expectCodes(await worker.request(EDGE_HEAD + openScaffold + body), [], `edge-open-${label}`);
+    }
+    for (const [label, body] of [
+      ['sibling-import', 'def main():\n    plot(open)\ndef helper():\n    from lib.Example.v1 import open\n    return open\n'],
+      ['sibling-parameter', 'def main():\n    plot(open)\ndef helper(open):\n    return open\n'],
+      ['aliased-import', 'def main():\n    from pynecore.lib import open as price\n    plot(price)\n    plot(open)\n'],
+      ['default', 'def main(open: float = open):\n    plot(open)\n'],
+      ['nested-default', 'def main():\n    def price(open: float = open):\n        return open\n    plot(price())\n'],
+    ]) {
+      expectCodes(await worker.request(EDGE_HEAD + openScaffold + body), ['pyne-edge-builtin'],
+        `edge-open-${label}`);
+    }
+    expectCodes(await worker.request(EDGE_HEAD + 'from pynecore.lib import *\n' +
+      openScaffold + 'def main():\n    plot(open)\n'), [], 'edge-wildcard-open');
+    log('edge-open OK (missing import, exact spans, scope bindings, defaults, plain Pyne)');
+
     // --- functions/modules are not objects -----------------------------------
     const edgeFuncAttr = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nmain.cache = 1\n');
     expectCodes(edgeFuncAttr, ['pyne-edge-func-attr'], 'edge-func-attr');

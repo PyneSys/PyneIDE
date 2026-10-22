@@ -757,10 +757,18 @@ class _EdgeChecker:
     `field(default_factory=lambda: ...)` UDT field default.
     """
 
-    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns):
+    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns,
+                 source: str):
         self.tree = tree
         self.lib = lib
         self.columns = columns
+        self.symbols = symtable.symtable(source, '<pyne>', 'exec')
+        # PyneCore lifts lib imports out of functions and normalizes their
+        # reads globally. The root lib's wildcard exports open as well.
+        self.lib_open = ('open' in lib.names or 'open' in lib.modules or any(
+            isinstance(node, ast.ImportFrom) and node.module == 'pynecore.lib'
+            and any(alias.name == '*' for alias in node.names)
+            for node in ast.walk(tree)))
         self.problems: list[tuple[int, int, int, str, str]] = []
         # name -> (module, original name) for every `from X import y [as z]`
         self.from_imports: dict[str, tuple[str, str]] = {}
@@ -775,7 +783,7 @@ class _EdgeChecker:
         if _edge_rules is None:  # pragma: no cover - partial deployment
             return
         self._collect()
-        self._visit(self.tree)
+        self._visit(self.tree, self.symbols)
 
     # --- collection pre-pass ---------------------------------------------
 
@@ -817,7 +825,7 @@ class _EdgeChecker:
 
     # --- recursive walk ---------------------------------------------------
 
-    def _visit(self, node: ast.AST) -> None:
+    def _visit(self, node: ast.AST, scope: Any) -> None:
         kind = type(node).__name__
         if isinstance(node, (ast.expr_context, ast.boolop, ast.operator,
                              ast.unaryop, ast.cmpop)):
@@ -835,7 +843,13 @@ class _EdgeChecker:
         elif isinstance(node, ast.ClassDef):
             self._check_class(node)
         elif isinstance(node, ast.Call):
-            self._check_call(node)
+            if not self._is_builtin_open(node.func, scope):
+                self._check_call(node)
+        elif self._is_builtin_open(node, scope):
+            self._problem(node, 'pyne-edge-builtin',
+                          "'open' resolves to Python's builtin file-opening "
+                          f'function, which is {_EDGE_SUFFIX} — for the bar '
+                          'opening price, use: from pynecore.lib import open')
         elif isinstance(node, ast.Lambda):
             if id(node) not in self.allowed_lambdas:
                 self._problem(node, 'pyne-edge-lambda',
@@ -865,8 +879,39 @@ class _EdgeChecker:
         elif isinstance(node, ast.Compare):
             for op in node.ops:
                 self._check_op(node, op, _edge_rules.ALLOWED_CMP_OPS)
-        for child in ast.iter_child_nodes(node):
-            self._visit(child)
+        body_scope = scope
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Lambda)):
+            name = 'lambda' if isinstance(node, ast.Lambda) else node.name
+            body_scope = next((child for child in scope.get_children()
+                               if child.get_name() == name
+                               and child.get_lineno() == node.lineno), scope)
+        # Decorators, defaults and annotations belong to the enclosing scope;
+        # only the body enters the function/class/lambda's symbol table.
+        for field, value in ast.iter_fields(node):
+            child_scope = body_scope if field == 'body' else scope
+            if isinstance(value, ast.AST):
+                self._visit(value, child_scope)
+            elif isinstance(value, list):
+                for child in value:
+                    if isinstance(child, ast.AST):
+                        self._visit(child, child_scope)
+
+    def _is_builtin_open(self, node: ast.AST, scope: Any) -> bool:
+        if self.lib_open or not (isinstance(node, ast.Name) and node.id == 'open'
+                and isinstance(node.ctx, ast.Load)):
+            return False
+        try:
+            symbol = scope.lookup('open')
+        except KeyError:
+            return False
+        if scope is not self.symbols and not symbol.is_global():
+            return False
+        try:
+            binding = self.symbols.lookup('open')
+        except KeyError:
+            return True
+        return not (binding.is_assigned() or binding.is_imported()
+                    or binding.is_namespace())
 
     # --- structural rules -------------------------------------------------
 
@@ -1217,7 +1262,7 @@ def analyze(source: str) -> dict[str, Any]:
         checker.check()
         problems = checker.problems + analyzer.problems
         if _edge_rules is not None and _is_edge(source):
-            edge = _EdgeChecker(tree, analyzer.lib, columns)
+            edge = _EdgeChecker(tree, analyzer.lib, columns, source)
             edge.check()
             problems += edge.problems
         problems = sorted(problems)
