@@ -1,0 +1,96 @@
+name: Publish Marketplace
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag
+        required: true
+        type: string
+      publish:
+        description: Publish the VSIX (otherwise only verify the package and access)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-pynesys-pyneide
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Download the published release package
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p build/marketplace
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,publishedAt \
+            > build/marketplace/release.json
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/$GH_REPO/contents/package.json?ref=$RELEASE_TAG" \
+            > build/marketplace/package.json
+          gh release download "$RELEASE_TAG" --dir build/marketplace \
+            --pattern "pyneide-${RELEASE_TAG#v}.vsix" --pattern SHA256SUMS
+      - name: Verify checksum, version, publisher and Preview metadata
+        run: |
+          python3 scripts/marketplace.py --tag "$RELEASE_TAG" \
+            --assets build/marketplace
+      - name: Check Entra configuration
+        run: |
+          test -n "$AZURE_CLIENT_ID" || { echo 'Set AZURE_CLIENT_ID in the marketplace environment variables.' >&2; exit 1; }
+          test -n "$AZURE_TENANT_ID" || { echo 'Set AZURE_TENANT_ID in the marketplace environment variables.' >&2; exit 1; }
+      - name: Sign in with Microsoft Entra workload identity
+        uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Read the Marketplace identity for publisher membership
+        run: |
+          profile_id=$(az rest --method get \
+            --url 'https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.1' \
+            --resource 499b84ac-1321-427f-aa17-267ca6975798 --query id --output tsv)
+          test -n "$profile_id"
+          echo "Marketplace identity/profile ID: $profile_id" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify Marketplace publisher access
+        run: npx --no-install vsce verify-pat --azure-credential pynesys
+      - name: Publish the verified release VSIX
+        if: github.event_name == 'release' || inputs.publish
+        run: |
+          npx --no-install vsce publish --azure-credential \
+            --packagePath "build/marketplace/pyneide-${RELEASE_TAG#v}.vsix"
+      - name: Record publication result
+        if: success()
+        env:
+          PUBLISH: ${{ github.event_name == 'release' || inputs.publish }}
+        run: |
+          if [ "$PUBLISH" = true ]; then
+            echo "Uploaded $RELEASE_TAG to Visual Studio Marketplace. Public availability depends on Marketplace validation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Verified $RELEASE_TAG package and Marketplace publisher access. No version was uploaded." >> "$GITHUB_STEP_SUMMARY"
+          fi
