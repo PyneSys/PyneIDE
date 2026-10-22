@@ -103,18 +103,18 @@ publishing workflow's permissions.
    Graph application permissions. Record its Application (client) ID and
    Directory (tenant) ID.
 2. In **Certificates & secrets → Federated credentials → Add credential**,
-   choose **GitHub Actions deploying Azure resources** and enter:
+   choose **Other issuer → Explicit subject identifier** and enter:
 
-   | Field        | Value                                        |
-   | ------------ | -------------------------------------------- |
-   | Organization | `PyneSys`                                    |
-   | Repository   | `PyneIDE`                                    |
-   | Entity type  | Environment                                  |
-   | Environment  | `marketplace`                                |
-   | Name         | `pyneide-marketplace`                         |
-   | Issuer       | `https://token.actions.githubusercontent.com` |
-   | Subject      | `repo:PyneSys/PyneIDE:environment:marketplace` |
-   | Audience     | `api://AzureADTokenExchange`                  |
+   | Field    | Value                                          |
+   | -------- | ---------------------------------------------- |
+   | Name     | `pyneide-marketplace`                          |
+   | Issuer   | `https://token.actions.githubusercontent.com`  |
+   | Subject  | `repo:PyneSys/PyneIDE:environment:marketplace` |
+   | Audience | `api://AzureADTokenExchange`                   |
+
+   These values match this repository's current default OIDC subject. Verify
+   the repository's subject configuration before recreating the credential:
+   newer GitHub/Entra setup screens can generate immutable-ID subjects instead.
 
 3. Create the GitHub Actions environment `marketplace`. Allow deployments only
    from tags matching `v*`, plus branch `main` for manual verification/retry runs.
@@ -122,16 +122,23 @@ publishing workflow's permissions.
    required reviewer gate here. Add environment **variables** `AZURE_CLIENT_ID`
    and `AZURE_TENANT_ID` with the recorded IDs. They identify the app and tenant;
    no stored password or PAT is used.
-4. Run **Actions → Publish Marketplace → Run workflow** on `main`, enter an
+4. Add the application to an Azure DevOps organization connected to the same
+   Entra tenant, under **Organization settings → Users → Add users**. Select
+   `PyneIDE Marketplace`, **Stakeholder** access and no project access. This
+   creates the Azure DevOps profile needed by Marketplace. If creating a
+   separate technical organization, keep it within the free tier. Without this
+   step, the profile API can fail with `VSS011031: There is no profile for the
+   authenticated user in the system` even though Entra sign-in succeeds.
+5. Run **Actions → Publish Marketplace → Run workflow** on `main`, enter an
    existing published tag, and leave **publish** unchecked. This verifies the
    actual release package and signs in through Entra without uploading a version.
    The job summary records the Marketplace identity/profile ID. This ID is
    distinct from the Entra application ID and object IDs; the workflow obtains
    it as the signed-in service principal from the Azure DevOps profile API.
    On first setup, the publisher-access check can fail until the next step.
-5. Add that identity/profile ID as **Contributor** under
+6. Add that identity/profile ID as **Contributor** under
    [PyneSys publisher → Members](https://marketplace.visualstudio.com/manage/publishers/pynesys).
-6. Rerun the verification with **publish** unchecked. Confirm the publisher-access
+7. Rerun the verification with **publish** unchecked. Confirm the publisher-access
    check now succeeds before publishing the next GitHub release.
 
 After a transient publication failure, rerun the failed job, or manually dispatch
@@ -142,4 +149,5 @@ upload whose outcome is uncertain.
 
 References: [Microsoft Entra publishing](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#secure-automated-publishing-to-visual-studio-marketplace),
 [GitHub federation setup](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation-create-trust#github-actions),
+[Azure DevOps application identities](https://learn.microsoft.com/en-us/azure/devops/integrate/get-started/authentication/service-principal-managed-identity?view=azure-devops),
 [Azure Login without a subscription](https://github.com/Azure/login#login-without-subscription).
