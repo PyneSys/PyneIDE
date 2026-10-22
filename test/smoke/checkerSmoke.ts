@@ -463,6 +463,12 @@ async function main(): Promise<void> {
     for (const [label, body] of [
       ['sibling-import', 'def main():\n    plot(open)\ndef helper():\n    from lib.Example.v1 import open\n    return open\n'],
       ['sibling-parameter', 'def main():\n    plot(open)\ndef helper(open):\n    return open\n'],
+      // Only a `from` lib import standing directly in a function body is lifted
+      ['sibling-module-import',
+        'def main():\n    plot(open)\ndef helper():\n    import pynecore.lib as open\n    return open\n'],
+      ['sibling-conditional-import',
+        'def main():\n    plot(open)\ndef helper(c: bool):\n    if c:\n' +
+        '        from pynecore.lib import open\n    return 1.0\n'],
       ['aliased-import', 'def main():\n    from pynecore.lib import open as price\n    plot(price)\n    plot(open)\n'],
       ['default', 'def main(open: float = open):\n    plot(open)\n'],
       ['nested-default', 'def main():\n    def price(open: float = open):\n        return open\n    plot(price())\n'],
@@ -470,9 +476,95 @@ async function main(): Promise<void> {
       expectCodes(await worker.request(EDGE_HEAD + openScaffold + body), ['pyne-edge-builtin'],
         `edge-open-${label}`);
     }
-    expectCodes(await worker.request(EDGE_HEAD + 'from pynecore.lib import *\n' +
-      openScaffold + 'def main():\n    plot(open)\n'), [], 'edge-wildcard-open');
+    // A star import is reported once, wherever it stands: its uses do not cascade
+    for (const [label, declaration] of [
+      ['module', 'from pynecore.lib import *\n'],
+      ['conditional', 'if 1.0 < 0.0:\n    from pynecore.lib import *\nx = open\n'],
+      ['after-read', 'x = input.int(14)\nif 1.0 > 0.0:\n    from pynecore.lib import *\n'],
+    ]) {
+      expectCodes(await worker.request(EDGE_HEAD + declaration + openScaffold +
+        'def main():\n    plot(open)\n'), ['pyne-edge-import'], `edge-star-import-${label}`);
+    }
+    // An annotation without a value declares the name and binds nothing
+    expectCodes(await worker.request(EDGE_HEAD + 'open: float\n' + openScaffold +
+      'def main():\n    plot(open)\n'), ['pyne-edge-builtin'], 'edge-open-annotation-only');
+    expectCodes(await worker.request(EDGE_HEAD + 'open: float = 1.0\n' + openScaffold +
+      'def main():\n    plot(open)\n'), [], 'edge-open-annotated-value');
+    // The module is initialized top to bottom: a read that runs meanwhile sees
+    // only the bindings made ahead of it, its own assignment's not yet
+    for (const [label, declaration] of [
+      ['self-initializer', 'open: float = open\n'],
+      ['later-assignment', 'x = open\nopen = 1.0\n'],
+      ['later-default', 'def price(a: float = open):\n    return a\nopen = 1.0\n'],
+      ['loop-iterable', 'for open in open:\n    x = 1.0\n'],
+    ]) {
+      expectCodes(await worker.request(EDGE_HEAD + declaration + openScaffold +
+        'def main():\n    plot(open + 1.0)\n'), ['pyne-edge-builtin'], `edge-open-${label}`);
+    }
+    for (const [label, declaration] of [
+      ['earlier-assignment', 'open = 1.0\nx = open\n'],
+      ['conditional-assignment', 'if 1.0 > 0.0:\n    open = 1.0\n    x = open\n'],
+      ['module-loop', 'for open in (1.0, 2.0):\n    x = open\n'],
+    ]) {
+      expectCodes(await worker.request(EDGE_HEAD + declaration + openScaffold +
+        'def main():\n    plot(open + 1.0)\n'), [], `edge-open-${label}`);
+    }
+    // A function body is taken to run once the module is initialized
+    expectCodes(await worker.request(EDGE_HEAD + openScaffold +
+      'def main():\n    plot(open + 1.0)\nopen = 1.0\n'), [], 'edge-open-later-module-binding');
     log('edge-open OK (missing import, exact spans, scope bindings, defaults, plain Pyne)');
+
+    // --- input is the other lib name Python's builtins would answer ----------
+    const missingInputSource = EDGE_HEAD + openScaffold +
+      'def main():\n' +
+      '    length = input.int(14)\n' +
+      '    plot(input(1.0) + length)\n';
+    const missingInput = await worker.request(missingInputSource);
+    expectCodes(missingInput, ['pyne-edge-builtin', 'pyne-edge-builtin'], 'edge-missing-input');
+    for (const [line, start, end, , message] of missingInput.problems ?? []) {
+      assert(missingInputSource.split('\n')[line].slice(start, end) === 'input',
+        'edge-missing-input: diagnostic must underline only input');
+      assert(message.includes('from pynecore.lib import input'),
+        'edge-missing-input: diagnostic must explain the missing input import');
+    }
+    expectCodes(await worker.request(EDGE_HEAD +
+      'from pynecore.lib import input\n' + openScaffold +
+      'def main():\n    length = input.int(14)\n    plot(input(1.0) + length)\n'), [],
+      'edge-imported-input');
+    log('edge-input OK');
+
+    // --- a class body reads its own field only once the field is assigned ----
+    const classHead = EDGE_HEAD + 'from pynecore.core.pine_udt import udt\n' +
+      'from pynecore.lib import script\n';
+    const classTail = '@script.indicator(title="T")\ndef main():\n    pass\n';
+    for (const [label, body] of [
+      ['own-default', '@udt\nclass State:\n    open: float = open\n'],
+      ['own-default-input', '@udt\nclass State:\n    input: int = input.int(14)\n'],
+      ['annotation-only', '@udt\nclass State:\n    open: float\n    mid: float = open\n'],
+      ['nested-own-default',
+        'def helper():\n    open = 1.0\n\n    @udt\n    class State:\n        open: float = open\n' +
+        '    return State()\n'],
+    ]) {
+      expectCodes(await worker.request(classHead + body + classTail), ['pyne-edge-builtin'],
+        `edge-class-${label}`);
+    }
+    for (const [label, body] of [
+      ['field-above', '@udt\nclass State:\n    open: float = 0.0\n    mid: float = open\n'],
+      ['enclosing-local',
+        'def helper():\n    open = 1.0\n\n    @udt\n    class State:\n        mid: float = open\n' +
+        '    return State()\n'],
+    ]) {
+      expectCodes(await worker.request(classHead + body + classTail), [], `edge-class-${label}`);
+    }
+    log('edge-class-builtin OK (own field ahead of its assignment, after it, enclosing local)');
+
+    // --- an error only the symbol table raises leaves the other rules running -
+    expectCodes(await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nnonlocal x\n'),
+      ['pyne-edge-syntax'], 'edge-symtable-error');
+    expectCodes(await worker.request(EDGE_HEAD + openScaffold +
+      'def main():\n    plot(open)\ndef f(a, a):\n    return a\n'), [],
+      'edge-symtable-error-builtin-silent');
+    log('edge-symtable-error OK (Edge rules answer, the builtin-read rule falls silent)');
 
     // --- functions/modules are not objects -----------------------------------
     const edgeFuncAttr = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nmain.cache = 1\n');

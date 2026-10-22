@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-22
+
+### Changed
+
+- **Pyne Edge profile 2026.10.1**: reading `open` or `input` without importing
+  it from `pynecore.lib` is now an error (`pyne-edge-builtin`). Both names are
+  Python builtins too, so without the import a script silently got Python's
+  `open()` or `input()` instead of the bar's opening price or the script
+  inputs, and uses such as `plot(open)` or `input.int(14)` showed no
+  diagnostic. The message names the import to add. A module-level lib import
+  counts, and so does a `from pynecore.lib import` placed directly in a
+  function body, which PyneCore moves to module level. The script's own binding
+  of the name counts too, such as a parameter, a local variable, or a
+  module-level variable or class field assigned above the read, but an
+  annotation without a value (`open: float`) binds nothing, and `open = open`
+  reads the builtin before it binds the name.
+- **Pyne Edge profile 2026.10.1**: a star import such as
+  `from pynecore.lib import *` is now an error (`pyne-edge-import`), as it
+  already was for PyneCore's Edge gate. Before, the IDE accepted it, and one
+  placed anywhere in the script, even in a branch that never runs, also hid
+  every missing `open` or `input` import. The star import is reported once,
+  and the names it would import are not reported again.
+- Publishing a GitHub release now uploads its verified VSIX to Visual Studio
+  Marketplace automatically using Microsoft Entra workload identity federation.
+
 ## [0.9.1] - 2026-10-21
 
 ### Changed

@@ -35,7 +35,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.09.2'
+EDGE_RULES_VERSION = '2026.10.1'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -115,3 +115,17 @@ ALLOWED_BUILTIN_CALLS = frozenset({
     'len', 'abs', 'min', 'max', 'round', 'int', 'float', 'bool', 'str',
     'range', 'enumerate', 'print',
 })
+
+# --- names -----------------------------------------------------------------
+
+# 2026.10.1: PyneCore lib names that are Python builtins too. Without their
+# `from pynecore.lib import ...` a read silently resolves to the builtin, so
+# it is an error unless the lib binds the name module-wide (a module-level lib
+# import, or a `from pynecore.lib import` standing directly in a function body,
+# which PyneCore lifts) or the script binds it itself. Value: what the lib name
+# stands for, the diagnostic's hint. PyneCore's edge gate test checks the keys
+# against `pynecore.lib.__all__` & `dir(builtins)`.
+LIB_BUILTIN_NAMES = {
+    'input': 'script inputs',
+    'open': 'the bar opening price',
+}

@@ -748,27 +748,43 @@ class _EdgeChecker:
     The check is a single recursive walk that stops descending into a
     disallowed node (one error per construct, not one per child), plus
     structural rules for nodes that are allowed but constrained:
-    imports (PyneCore API + `lib.*` user libraries + `dataclasses` only),
+    imports (PyneCore API + `lib.*` user libraries + `dataclasses` only,
+    no star imports),
     decorators (`@script.*(...)`, `@method`, `@udt`/`@dataclass` only),
     classes (bases-less field lists), bare-name calls (defined functions,
     imported names and a small builtin whitelist), function signatures
     (plain positional parameters), subscript stores, attribute stores on
-    functions/modules, and `lambda` anywhere outside a
-    `field(default_factory=lambda: ...)` UDT field default.
+    functions/modules, `lambda` anywhere outside a
+    `field(default_factory=lambda: ...)` UDT field default, and reads of a lib
+    name that resolve to the Python builtin of the same name.
     """
 
     def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns,
-                 source: str):
+                 symbols: symtable.SymbolTable | None):
         self.tree = tree
         self.lib = lib
         self.columns = columns
-        self.symbols = symtable.symtable(source, '<pyne>', 'exec')
-        # PyneCore lifts lib imports out of functions and normalizes their
-        # reads globally. The root lib's wildcard exports open as well.
-        self.lib_open = ('open' in lib.names or 'open' in lib.modules or any(
-            isinstance(node, ast.ImportFrom) and node.module == 'pynecore.lib'
-            and any(alias.name == '*' for alias in node.names)
-            for node in ast.walk(tree)))
+        # None when only the symbol table rejects the source: the builtin-read
+        # rule then stays silent, every other rule still runs.
+        self.symbols = symbols
+        # The root lib's star import binds every lib name. It is reported
+        # once, its uses must not cascade.
+        wildcard = any(isinstance(node, ast.ImportFrom) and node.module == 'pynecore.lib'
+                       and any(alias.name == '*' for alias in node.names)
+                       for node in ast.walk(tree))
+        names = _edge_rules.LIB_BUILTIN_NAMES if _edge_rules is not None else {}
+        module_lib = _module_wide_lib_names(tree)
+        # Lib name -> what it stands for, for every lib name that Python's
+        # builtins would answer in this module.
+        self.lib_builtins: dict[str, str] = {} if wildcard else {
+            name: hint for name, hint in names.items() if name not in module_lib}
+        # The names the module's statements leave in its namespace, each with
+        # the source position from which it is bound: what an annotation
+        # without a value declares is not among them.
+        self.module_bound_from: dict[str, tuple[int, int]] = _binding_points(tree.body)
+        # Class symbol table id -> the names its body statements visited so
+        # far left in the class namespace.
+        self.class_bound: dict[int, set[str]] = {}
         self.problems: list[tuple[int, int, int, str, str]] = []
         # name -> (module, original name) for every `from X import y [as z]`
         self.from_imports: dict[str, tuple[str, str]] = {}
@@ -825,7 +841,13 @@ class _EdgeChecker:
 
     # --- recursive walk ---------------------------------------------------
 
-    def _visit(self, node: ast.AST, scope: Any) -> None:
+    def _visit(self, node: ast.AST, scope: symtable.SymbolTable | None,
+               deferred: bool = False) -> None:
+        """Check one node and its children.
+
+        ``deferred`` marks code taken to run once the module is initialized:
+        a function or lambda body.
+        """
         kind = type(node).__name__
         if isinstance(node, (ast.expr_context, ast.boolop, ast.operator,
                              ast.unaryop, ast.cmpop)):
@@ -843,13 +865,16 @@ class _EdgeChecker:
         elif isinstance(node, ast.ClassDef):
             self._check_class(node)
         elif isinstance(node, ast.Call):
-            if not self._is_builtin_open(node.func, scope):
+            if self._builtin_read(node.func, scope, deferred) is None:
                 self._check_call(node)
-        elif self._is_builtin_open(node, scope):
-            self._problem(node, 'pyne-edge-builtin',
-                          "'open' resolves to Python's builtin file-opening "
-                          f'function, which is {_EDGE_SUFFIX} — for the bar '
-                          'opening price, use: from pynecore.lib import open')
+        elif isinstance(node, ast.Name):
+            name = self._builtin_read(node, scope, deferred)
+            if name is not None:
+                self._problem(node, 'pyne-edge-builtin',
+                              f"'{name}' resolves to Python's builtin {name}(), "
+                              f'which is {_EDGE_SUFFIX} — for '
+                              f'{self.lib_builtins[name]}, use: '
+                              f'from pynecore.lib import {name}')
         elif isinstance(node, ast.Lambda):
             if id(node) not in self.allowed_lambdas:
                 self._problem(node, 'pyne-edge-lambda',
@@ -880,38 +905,70 @@ class _EdgeChecker:
             for op in node.ops:
                 self._check_op(node, op, _edge_rules.ALLOWED_CMP_OPS)
         body_scope = scope
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Lambda)):
-            name = 'lambda' if isinstance(node, ast.Lambda) else node.name
+        if scope is not None and isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Lambda)):
+            label = 'lambda' if isinstance(node, ast.Lambda) else node.name
             body_scope = next((child for child in scope.get_children()
-                               if child.get_name() == name
+                               if child.get_name() == label
                                and child.get_lineno() == node.lineno), scope)
+        # A class body runs statement by statement: its bindings are recorded
+        # after each one, so a read knows whether its class binding exists yet.
+        class_table = (body_scope if isinstance(node, ast.ClassDef) and body_scope is not scope
+                       else None)
+        body_deferred = deferred or isinstance(node, (ast.FunctionDef, ast.Lambda))
         # Decorators, defaults and annotations belong to the enclosing scope;
         # only the body enters the function/class/lambda's symbol table.
         for field, value in ast.iter_fields(node):
-            child_scope = body_scope if field == 'body' else scope
+            child_scope, child_deferred = ((body_scope, body_deferred) if field == 'body'
+                                           else (scope, deferred))
             if isinstance(value, ast.AST):
-                self._visit(value, child_scope)
+                self._visit(value, child_scope, child_deferred)
             elif isinstance(value, list):
                 for child in value:
                     if isinstance(child, ast.AST):
-                        self._visit(child, child_scope)
+                        self._visit(child, child_scope, child_deferred)
+                        if (class_table is not None and field == 'body'
+                                and isinstance(child, ast.stmt)):
+                            self.class_bound.setdefault(class_table.get_id(), set()).update(
+                                _binding_points([child]).keys())
 
-    def _is_builtin_open(self, node: ast.AST, scope: Any) -> bool:
-        if self.lib_open or not (isinstance(node, ast.Name) and node.id == 'open'
-                and isinstance(node.ctx, ast.Load)):
-            return False
+    def _builtin_read(self, node: ast.expr, scope: symtable.SymbolTable | None,
+                      deferred: bool) -> str | None:
+        """The lib name a read resolves to Python's builtin for, or None.
+
+        Python's own scoping decides: a name bound in the reading function or
+        an enclosing one is that binding; a class body sees its own binding
+        only once the statement binding it ran. A module-level read, an
+        implicit global and a class-body read ahead of the class binding are
+        the builtin unless the module binds the name. The module is
+        initialized top to bottom: a read that runs meanwhile (at module
+        level, in a class body there, in a default or a decorator) sees only a
+        binding made ahead of it. A ``deferred`` read, in a function or lambda
+        body, sees every binding.
+        """
+        module = self.symbols
+        if not (scope is not None and module is not None and isinstance(node, ast.Name)
+                and node.id in self.lib_builtins and isinstance(node.ctx, ast.Load)):
+            return None
+        name = node.id
         try:
-            symbol = scope.lookup('open')
+            symbol = scope.lookup(name)
         except KeyError:
-            return False
-        if scope is not self.symbols and not symbol.is_global():
-            return False
-        try:
-            binding = self.symbols.lookup('open')
-        except KeyError:
-            return True
-        return not (binding.is_assigned() or binding.is_imported()
-                    or binding.is_namespace())
+            return None
+        if scope is not module and not symbol.is_global():
+            # Ahead of its class binding, a class-body read skips the
+            # enclosing functions: Python looks it up in the module and the
+            # builtins.
+            if not (isinstance(scope, symtable.Class) and symbol.is_local()
+                    and name not in self.class_bound.get(scope.get_id(), ())):
+                return None
+        # The module's statements say whether one of them binds it: the symbol
+        # table counts an annotation without a value as an assignment.
+        bound_from = self.module_bound_from.get(name)
+        if bound_from is None:
+            return name
+        if deferred or bound_from <= (node.lineno, node.col_offset):
+            return None
+        return name
 
     # --- structural rules -------------------------------------------------
 
@@ -920,6 +977,10 @@ class _EdgeChecker:
             if node.level:
                 self._problem(node, 'pyne-edge-import',
                               f'relative imports are {_EDGE_SUFFIX}')
+                return
+            if any(alias.name == '*' for alias in node.names):
+                self._problem(node, 'pyne-edge-import',
+                              f'star imports are {_EDGE_SUFFIX} — import the names one by one')
                 return
             module = node.module or ''
             if _has_allowed_prefix(module):
@@ -1084,6 +1145,81 @@ def _bound_names(target: ast.expr) -> Iterable[str]:
         yield from _bound_names(target.value)
 
 
+def _is_lib_path(module: str) -> bool:
+    return module == 'pynecore.lib' or module.startswith('pynecore.lib.')
+
+
+def _module_wide_lib_names(tree: ast.Module) -> set[str]:
+    """The names PyneCore's lowering binds to the lib module-wide.
+
+    The import normalizer reads the module-level lib imports, and the import
+    lifter moves a `from pynecore.lib... import` standing directly in a
+    function body to module level. Any other lib import binds in its own
+    scope, where the symbol table answers for it.
+    """
+    stmts: list[ast.stmt] = list(tree.body)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            stmts.extend(stmt for stmt in node.body
+                         if isinstance(stmt, ast.ImportFrom) and _is_lib_path(stmt.module or ''))
+    names: set[str] = set()
+    for stmt in stmts:
+        if isinstance(stmt, ast.ImportFrom):
+            module = stmt.module or ''
+            if module == 'pynecore':
+                names.update(alias.asname or 'lib' for alias in stmt.names if alias.name == 'lib')
+            elif _is_lib_path(module):
+                names.update(alias.asname or alias.name for alias in stmt.names)
+        elif isinstance(stmt, ast.Import):
+            # The normalizer reads a lib module by its last part
+            names.update(alias.asname or alias.name.rpartition('.')[2]
+                         for alias in stmt.names if _is_lib_path(alias.name))
+    return names
+
+
+def _binding_points(body: Iterable[ast.stmt]) -> dict[str, tuple[int, int]]:
+    """The names module- or class-body statements leave in that namespace,
+    each with the source position from which the first of them binds it.
+
+    A name is bound once its statement ran (a loop target once the iterable
+    is evaluated, ahead of the loop body). A definition or an import binds its
+    name, an annotation without a value binds nothing, and a nested scope (a
+    definition's body, a lambda, a comprehension) binds inside itself.
+    """
+    points: dict[str, tuple[int, int]] = {}
+    pending: list[tuple[ast.AST, tuple[int, int]]] = [(stmt, _end(stmt)) for stmt in body]
+    while pending:
+        node, at = pending.pop()
+        if isinstance(node, ast.stmt):
+            at = _end(node)
+        names: Iterable[str] = ()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names = (node.name,)
+        elif isinstance(node, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp,
+                               ast.GeneratorExp)) or (
+                isinstance(node, ast.AnnAssign) and node.value is None):
+            continue
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names = (node.id,)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.asname or alias.name.split('.')[0] for alias in node.names]
+        for name in names:
+            if name not in points or at < points[name]:
+                points[name] = at
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        loop = node if isinstance(node, (ast.For, ast.AsyncFor)) else None
+        for child in ast.iter_child_nodes(node):
+            pending.append((child, _end(loop.iter) if loop is not None and child is loop.target
+                            else at))
+    return points
+
+
+def _end(node: ast.stmt | ast.expr) -> tuple[int, int]:
+    """Where a node's source ends."""
+    return node.end_lineno or node.lineno, node.end_col_offset or 0
+
+
 def _is_internal_test_module(tree: ast.Module) -> bool:
     """Whether the module is pynecore-internal rather than a user script.
 
@@ -1196,7 +1332,7 @@ def _exported_def_spans(tree: ast.Module,
     return sorted(set(spans))
 
 
-def _used_parameter_spans(tree: ast.Module, source: str,
+def _used_parameter_spans(tree: ast.Module, symbols: symtable.SymbolTable | None,
                           columns: _Utf16Columns) -> list[tuple[int, int, int]]:
     """Parameter reads in any branch, resolved with Python's lexical scopes.
 
@@ -1224,10 +1360,9 @@ def _used_parameter_spans(tree: ast.Module, source: str,
                 return True
         return False
 
-    try:
-        collect(symtable.symtable(source, '<pyne>', 'exec'))
-    except SyntaxError:
+    if symbols is None:
         return []
+    collect(symbols)
     spans = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -1251,6 +1386,14 @@ def analyze(source: str) -> dict[str, Any]:
     """Analyze Pyne source: series spans/references plus checker problems."""
     tree = ast.parse(source)
     columns = _Utf16Columns(source)
+    symbols: symtable.SymbolTable | None
+    try:
+        symbols = symtable.symtable(source, '<pyne>', 'exec')
+    except SyntaxError:
+        # Only the symbol table rejects a few parsed sources (`def f(a, a)`,
+        # a module-level `nonlocal`); its consumers fall silent, the rest of
+        # the analysis still answers.
+        symbols = None
     analyzer = _Analyzer(tree, columns)
     for stmt in tree.body:
         analyzer.visit(stmt)
@@ -1262,7 +1405,7 @@ def analyze(source: str) -> dict[str, Any]:
         checker.check()
         problems = checker.problems + analyzer.problems
         if _edge_rules is not None and _is_edge(source):
-            edge = _EdgeChecker(tree, analyzer.lib, columns, source)
+            edge = _EdgeChecker(tree, analyzer.lib, columns, symbols)
             edge.check()
             problems += edge.problems
         problems = sorted(problems)
@@ -1272,7 +1415,7 @@ def analyze(source: str) -> dict[str, Any]:
         'problems': [list(problem) for problem in problems],
         'overloads': [list(span) for span in _overload_def_spans(tree, columns)],
         'exports': [list(span) for span in _exported_def_spans(tree, columns)],
-        'usedParameters': [list(span) for span in _used_parameter_spans(tree, source, columns)],
+        'usedParameters': [list(span) for span in _used_parameter_spans(tree, symbols, columns)],
         'securityCalls': analyzer.security_calls,
     }
 
