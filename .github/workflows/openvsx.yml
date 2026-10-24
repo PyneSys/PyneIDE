@@ -1,0 +1,75 @@
+name: Publish Open VSX
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published GitHub release tag
+        required: true
+        type: string
+      publish:
+        description: Publish the VSIX (otherwise only verify the package)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openvsx-pynesys-pyneide
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: openvsx
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Download the published release package
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          mkdir -p build/openvsx
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,publishedAt \
+            > build/openvsx/release.json
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/$GH_REPO/contents/package.json?ref=$RELEASE_TAG" \
+            > build/openvsx/package.json
+          gh release download "$RELEASE_TAG" --dir build/openvsx \
+            --pattern "pyneide-${RELEASE_TAG#v}.vsix" --pattern SHA256SUMS
+      - name: Verify checksum, version, publisher and Preview metadata
+        run: |
+          python3 scripts/marketplace.py --tag "$RELEASE_TAG" \
+            --assets build/openvsx
+      - name: Publish the verified release VSIX
+        if: github.event_name == 'release' || inputs.publish
+        run: |
+          npx --no-install ovsx publish \
+            "build/openvsx/pyneide-${RELEASE_TAG#v}.vsix" --trusted-publishing
+      - name: Record publication result
+        if: success()
+        env:
+          PUBLISH: ${{ github.event_name == 'release' || inputs.publish }}
+        run: |
+          if [ "$PUBLISH" = true ]; then
+            echo "Uploaded $RELEASE_TAG to Open VSX. Check https://open-vsx.org/extension/pynesys/pyneide for public availability." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Verified $RELEASE_TAG package. Open VSX authentication was not checked and no version was uploaded." >> "$GITHUB_STEP_SUMMARY"
+          fi

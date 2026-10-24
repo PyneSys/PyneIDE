@@ -1,4 +1,4 @@
-"""Validate a GitHub release's existing VSIX before Marketplace publication."""
+"""Validate a GitHub release's existing VSIX before extension registry publication."""
 
 import argparse
 import hashlib
