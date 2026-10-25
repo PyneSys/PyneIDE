@@ -50,11 +50,24 @@ export class EnvManager {
 
   private stateValue: EnvState = { kind: 'unknown' };
   private setupRunning = false;
+  private readonly settingsWatcher: vscode.Disposable;
 
   constructor(
     private readonly storageDir: string,
     private readonly output: vscode.OutputChannel
-  ) {}
+  ) {
+    // Another interpreter setting is another environment: check it now, not on the
+    // next window reload. While a setup runs, its closing check (or, after a failed
+    // setup, the next run's) picks the change up.
+    this.settingsWatcher = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !this.setupRunning &&
+        (e.affectsConfiguration('pyneide.venvPath') || e.affectsConfiguration('pyneide.pythonPath'))
+      ) {
+        void this.check();
+      }
+    });
+  }
 
   get state(): EnvState {
     return this.stateValue;
@@ -320,7 +333,12 @@ export class EnvManager {
    * setup failed (after informing them).
    */
   async ensureReady(reason: string): Promise<string | undefined> {
-    let state = this.stateValue.kind === 'ready' ? this.stateValue : await this.check();
+    // A ready state is only reused while it is still the configured interpreter
+    let state =
+      this.stateValue.kind === 'ready' &&
+      this.stateValue.pythonBin === this.resolveTarget().pythonBin
+        ? this.stateValue
+        : await this.check();
     if (state.kind === 'needs-setup') {
       const choice = await vscode.window.showInformationMessage(reason, 'Setup Now');
       if (choice !== 'Setup Now') return undefined;
@@ -342,6 +360,7 @@ export class EnvManager {
   }
 
   dispose(): void {
+    this.settingsWatcher.dispose();
     this.onDidChangeStateEmitter.dispose();
   }
 }

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Pin PyneCore to 6.11.0 and update the bundled documentation to match.
 
+### Fixed
+
+- Changing `pyneide.venvPath` or `pyneide.pythonPath` now takes effect at once:
+  the environment is checked again instead of the previous interpreter being
+  used until the window was reloaded.
+
 ## [0.9.2] - 2026-10-22
 
 ### Changed
