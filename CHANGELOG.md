@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Profile**: a flame button next to Run and Debug (also in the CodeLens row,
+  the editor context menu and the Workspace view) runs the script under
+  PyneCore's line profiler. Each measured line shows its share of the script's
+  time in a column left of the code, the cell colored by how hot the line is;
+  the three costliest lines get a flame and the overview ruler marks the hot
+  spots. The hover gives the line's time, executions and average, the whole
+  block's time on a compound statement's header, and the time per
+  `request.security` context. A lens above line one sums up the run and hides
+  the annotations. On a `.pine` file the numbers land on the Pine lines through
+  the sourcemap. The profile is written to `output/<script>_profile.json`;
+  reopening an unchanged script offers it again with a **Show profile** lens.
+
 ### Changed
 
 - Pin PyneCore to 6.11.0 and update the bundled documentation to match.

@@ -13,6 +13,7 @@ const smokePyright = process.argv.includes('--smoke-pyright');
 const smokeChecker = process.argv.includes('--smoke-checker');
 const smokeEdgeCorpus = process.argv.includes('--smoke-edge-corpus');
 const smokeBridgeViz = process.argv.includes('--smoke-bridge-viz');
+const smokeBridgeProfile = process.argv.includes('--smoke-bridge-profile');
 const smokeChartBreakpoints = process.argv.includes('--smoke-chart-breakpoints');
 const smokeEquityNavigation = process.argv.includes('--smoke-equity-navigation');
 const smokeLibraryImports = process.argv.includes('--smoke-library-imports');
@@ -130,6 +131,13 @@ if (smoke) {
     ...common,
     entryPoints: ['test/smoke/bridgeVizSmoke.ts'],
     outfile: 'dist/bridge-viz-smoke.js',
+    minify: false,
+  });
+} else if (smokeBridgeProfile) {
+  await esbuild.build({
+    ...common,
+    entryPoints: ['test/smoke/bridgeProfileSmoke.ts'],
+    outfile: 'dist/bridge-profile-smoke.js',
     minify: false,
   });
 } else if (smokeChartBreakpoints) {

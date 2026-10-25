@@ -58,6 +58,7 @@ model; PyneIDE ships analysis built for it.
 - ✓ One-click compile and run on an interactive, streaming candlestick chart.
 - ✓ A script's `input.*()` calls as an editable form — save and the chart re-runs, your source untouched.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
+- ✓ A line-by-line profiler that shows where a script spends its time, on Pine and Pyne code alike.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
 - ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
 
@@ -146,6 +147,32 @@ built in.
 ![The Layers popup toggling individual plots off and back on, with the chart updating instantly](media/chart.gif)
 
 *Toggle a plot off in the Layers popup and it's gone instantly — nothing re-runs.*
+
+## Find the slow lines
+
+Press **Profile** (the flame button next to Run and Debug) and the script runs as
+usual, measured line by line. When the run ends, a column left of the code shows each
+line's share of the script's time. The cell gets darker as the share grows, the three
+costliest lines get a flame, and the scrollbar marks the hot spots in a long file.
+Hover a line for its time, executions and average per execution. On an `if`, a loop
+or a function header the hover adds the whole block's time; on a line a
+`request.security` context ran, the time in each context.
+
+A line's time includes everything it calls, your own functions too. TradingView's
+Pine Profiler counts the same way. The same time therefore shows on every level of a
+call chain, and the shares can add up to more than 100%.
+
+On a `.pine` file the numbers sit on the Pine lines, mapped through the compiler's
+sourcemap. A lens above line one sums up the run: bars, total time, and how it split
+between your code, the data feed, plot output and the strategy engine. **Hide** clears
+the annotations, and so does editing the file. The profile stays in
+`output/<script>_profile.json`; when you open the script again and it has not changed,
+a **Show profile** lens brings the numbers back. Profiling needs Python 3.13 or newer,
+and the same measurement runs from the command line as `pyne run --profile`.
+
+![The flame button runs the Pine strategy, each measured line gets its share of the script's time in a column left of the code, and hovering the costliest line shows its time and executions](media/profile.gif)
+
+*One click on the flame: the WMA line inside the helper costs 39% of the script, and both calls to the helper carry it.*
 
 ## Pyne code, done right
 

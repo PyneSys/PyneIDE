@@ -68,6 +68,8 @@ export interface StartEvent {
     trades: string | null;
     /** Native PyneCore visualization sidecar (newline-delimited JSON). */
     viz?: string | null;
+    /** Per-line profile (JSON), written when a profiled run completes. */
+    profile?: string | null;
   };
 }
 
@@ -222,6 +224,8 @@ export interface BridgeRunOptions {
    * arrives in the `debugpy` event.
    */
   debugpyPort?: number;
+  /** Profile the run per source line (`output/<stem>_profile.json`). */
+  profile?: boolean;
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -256,6 +260,7 @@ export class BridgeRun {
     for (const sec of opts.security ?? []) args.push('--security', sec);
     if (opts.batchSize) args.push('--batch-size', String(opts.batchSize));
     if (opts.debugpyPort !== undefined) args.push('--debugpy-port', String(opts.debugpyPort));
+    if (opts.profile) args.push('--profile');
 
     const pythonPath = process.env.PYTHONPATH
       ? `${opts.bridgeRoot}${path.delimiter}${process.env.PYTHONPATH}`

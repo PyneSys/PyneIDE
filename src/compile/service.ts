@@ -112,6 +112,15 @@ export class CompileService {
     return undefined;
   }
 
+  /** Whether the .py next to a .pine document was compiled from exactly its current text. */
+  isCompiledFrom(doc: vscode.TextDocument): boolean {
+    const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
+    const strict = vscode.workspace
+      .getConfiguration('pyneide', doc.uri)
+      .get<boolean>('strictCompile', false);
+    return this.cache()[outputPath]?.pineHash === sha256(`${strict}:${doc.getText()}`);
+  }
+
   private async compileActiveEditor(): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.languageId !== 'pine') {

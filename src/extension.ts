@@ -34,6 +34,7 @@ import { showNetworkError } from './net/notify';
 import { PineLsService } from './pinels/service';
 import { PluginsPanel } from './plugins/panel';
 import { PluginService } from './plugins/service';
+import { ProfileView } from './profile/profileView';
 import { registerReportCommand } from './report/command';
 import { logHub } from './report/logTee';
 import { PyneDecorationProvider } from './pyneDecorations';
@@ -152,6 +153,9 @@ export function activate(context: vscode.ExtensionContext): void {
     libraryDiagnostics
   );
   runService.register();
+  const profileView = new ProfileView(context, compileService);
+  profileView.register();
+  runService.setProfileView(profileView);
   registerPyneDebug(context, runService);
   const chartManager = new ChartManager(context);
   runService.attachChart(chartManager);

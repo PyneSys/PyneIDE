@@ -118,6 +118,9 @@ function fmtSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** Outputs a run writes next to its `<stem>.csv`, nested under it in the tree. */
+const OUTPUT_SIDECARS = ['_viz.ndjson', '_strat.csv', '_trade.csv', '_profile.json'];
+
 /** Provider names that carry the `<provider>_…` stem convention, used only as a
  * fallback when the `.toml` has no persisted `[download]` provider string. */
 const KNOWN_PROVIDERS = new Set(['ccxt', 'bybit', 'tradingview', 'capitalcom', 'ctrader', 'coinbase']);
@@ -527,7 +530,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     for (const name of names) {
       if (!/\.csv$/i.test(name)) continue;
       const stem = name.slice(0, -4);
-      for (const suffix of ['_viz.ndjson', '_strat.csv', '_trade.csv']) {
+      for (const suffix of OUTPUT_SIDECARS) {
         const sidecar = `${stem}${suffix}`;
         if (present.has(sidecar)) nested.add(sidecar);
       }
@@ -544,7 +547,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
   private outputSidecarChildren(node: OutputNode): OutputNode[] {
     if (!/\.csv$/i.test(node.uri.fsPath)) return [];
     const stem = node.uri.fsPath.slice(0, -4);
-    return ['_viz.ndjson', '_strat.csv', '_trade.csv']
+    return OUTPUT_SIDECARS
       .map((suffix) => `${stem}${suffix}`)
       .filter((file) => fs.existsSync(file))
       .map((file): OutputNode => ({ type: 'output', uri: vscode.Uri.file(file), sidecar: true }));
@@ -693,6 +696,10 @@ export function registerWorkspaceView(
     const uri = nodeUri(node);
     if (uri) void vscode.commands.executeCommand('pyneide.debugScript', uri);
   };
+  const profileNode = (node?: PyneNode): void => {
+    const uri = nodeUri(node);
+    if (uri) void vscode.commands.executeCommand('pyneide.profileScript', uri);
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.workspace.refresh', () => {
@@ -707,6 +714,8 @@ export function registerWorkspaceView(
     vscode.commands.registerCommand('pyneide.workspace.runPineScript', runNode),
     vscode.commands.registerCommand('pyneide.workspace.debugScript', debugNode),
     vscode.commands.registerCommand('pyneide.workspace.debugPineScript', debugNode),
+    vscode.commands.registerCommand('pyneide.workspace.profileScript', profileNode),
+    vscode.commands.registerCommand('pyneide.workspace.profilePineScript', profileNode),
     vscode.commands.registerCommand('pyneide.workspace.selectData', (node?: PyneNode) => {
       const uri = nodeUri(node);
       if (uri) void vscode.commands.executeCommand('pyneide.changeRunData', uri);

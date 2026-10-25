@@ -228,6 +228,31 @@
         "enablement": "resourceLangId == pine"
       },
       {
+        "command": "pyneide.profileScript",
+        "title": "Profile Pyne code",
+        "category": "PyneIDE",
+        "icon": "$(flame)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.profilePineScript",
+        "title": "Profile Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(flame)",
+        "enablement": "resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.showProfile",
+        "title": "Show Profile",
+        "category": "PyneIDE",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "pyneide.hideProfile",
+        "title": "Hide Profile",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.changeRunData",
         "title": "Select Data…",
         "category": "PyneIDE",
@@ -365,6 +390,18 @@
         "icon": "$(debug-alt)"
       },
       {
+        "command": "pyneide.workspace.profileScript",
+        "title": "Profile Pyne code",
+        "category": "PyneIDE",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "pyneide.workspace.profilePineScript",
+        "title": "Profile Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(flame)"
+      },
+      {
         "command": "pyneide.workspace.selectData",
         "title": "Select Data…",
         "category": "PyneIDE",
@@ -460,6 +497,18 @@
           "when": "resourceLangId == pine"
         },
         {
+          "command": "pyneide.profileScript",
+          "when": "resourceLangId != pine"
+        },
+        {
+          "command": "pyneide.profilePineScript",
+          "when": "resourceLangId == pine"
+        },
+        {
+          "command": "pyneide.showProfile",
+          "when": "resourceLangId == pine || pyneide.isPyneScript"
+        },
+        {
           "command": "pyneide.workspace.runScript",
           "when": "false"
         },
@@ -473,6 +522,14 @@
         },
         {
           "command": "pyneide.workspace.debugPineScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.workspace.profileScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.workspace.profilePineScript",
           "when": "false"
         }
       ],
@@ -511,6 +568,16 @@
         },
         {
           "command": "pyneide.debugScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.profilePineScript",
+          "when": "resourceLangId == pine",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.profileScript",
           "when": "resourceLangId != pine && pyneide.isPyneScript",
           "group": "pyneide@2"
         },
@@ -555,6 +622,16 @@
           "command": "pyneide.debugScript",
           "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
           "group": "navigation@-1"
+        },
+        {
+          "command": "pyneide.profilePineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@0"
+        },
+        {
+          "command": "pyneide.profileScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
+          "group": "navigation@0"
         },
         {
           "command": "pyneide.openChart",
@@ -693,6 +770,16 @@
           "group": "pyneide@2"
         },
         {
+          "command": "pyneide.workspace.profilePineScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScriptPine",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.workspace.profileScript",
+          "when": "view == pyneide.workspace && viewItem == pyneScript",
+          "group": "pyneide@2"
+        },
+        {
           "command": "pyneide.workspace.selectData",
           "when": "view == pyneide.workspace && viewItem =~ /^pyneScript/",
           "group": "pyneide@3"
@@ -779,6 +866,88 @@
         }
       ]
     },
+    "colors": [
+      {
+        "id": "pyneide.profile.hotBackground",
+        "description": "Profile column cell of the lines that took at least 10% of the script's time.",
+        "defaults": {
+          "dark": "#FF5A1F66",
+          "light": "#FF5A1F4D",
+          "highContrast": "#FF5A1F80",
+          "highContrastLight": "#FF5A1F4D"
+        }
+      },
+      {
+        "id": "pyneide.profile.warmBackground",
+        "description": "Profile column cell of the lines that took 3-10% of the script's time.",
+        "defaults": {
+          "dark": "#FF9F1A47",
+          "light": "#FF9F1A38",
+          "highContrast": "#FF9F1A66",
+          "highContrastLight": "#FF9F1A38"
+        }
+      },
+      {
+        "id": "pyneide.profile.mildBackground",
+        "description": "Profile column cell of the lines that took 1-3% of the script's time.",
+        "defaults": {
+          "dark": "#FFD23F2E",
+          "light": "#E0A80029",
+          "highContrast": "#FFD23F47",
+          "highContrastLight": "#E0A80029"
+        }
+      },
+      {
+        "id": "pyneide.profile.measuredBackground",
+        "description": "Profile column cell of the measured lines that took less than 1% of the script's time.",
+        "defaults": {
+          "dark": "#80808024",
+          "light": "#8080801F",
+          "highContrast": "#80808040",
+          "highContrastLight": "#8080801F"
+        }
+      },
+      {
+        "id": "pyneide.profile.hotRuler",
+        "description": "Overview ruler mark of the profiled lines that took at least 10% of the script's time.",
+        "defaults": {
+          "dark": "#FF5A1FD0",
+          "light": "#FF5A1FD0",
+          "highContrast": "#FF5A1F",
+          "highContrastLight": "#FF5A1F"
+        }
+      },
+      {
+        "id": "pyneide.profile.warmRuler",
+        "description": "Overview ruler mark of the profiled lines that took 3-10% of the script's time.",
+        "defaults": {
+          "dark": "#FF9F1A99",
+          "light": "#FF9F1A99",
+          "highContrast": "#FF9F1A",
+          "highContrastLight": "#FF9F1A"
+        }
+      },
+      {
+        "id": "pyneide.profile.mildRuler",
+        "description": "Overview ruler mark of the profiled lines that took 1-3% of the script's time.",
+        "defaults": {
+          "dark": "#FFD23F66",
+          "light": "#E0A80066",
+          "highContrast": "#FFD23F",
+          "highContrastLight": "#E0A800"
+        }
+      },
+      {
+        "id": "pyneide.profile.annotationForeground",
+        "description": "Text of the profile column: the line's share of the script's time.",
+        "defaults": {
+          "dark": "editorCodeLens.foreground",
+          "light": "editorCodeLens.foreground",
+          "highContrast": "editorCodeLens.foreground",
+          "highContrastLight": "editorCodeLens.foreground"
+        }
+      }
+    ],
     "keybindings": [
       {
         "command": "pyneide.workspace.deleteSelected",
@@ -861,7 +1030,11 @@
               "onCommand:pyneide.runScript",
               "onCommand:pyneide.runPineScript",
               "onCommand:pyneide.workspace.runScript",
-              "onCommand:pyneide.workspace.runPineScript"
+              "onCommand:pyneide.workspace.runPineScript",
+              "onCommand:pyneide.profileScript",
+              "onCommand:pyneide.profilePineScript",
+              "onCommand:pyneide.workspace.profileScript",
+              "onCommand:pyneide.workspace.profilePineScript"
             ]
           },
           {
@@ -1324,6 +1497,7 @@
     "test:checker": "node esbuild.mjs --smoke-checker && node dist/checker-smoke.js",
     "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
+    "test:bridge-profile": "node esbuild.mjs --smoke-bridge-profile && node dist/bridge-profile-smoke.js",
     "test:bridge-security": "node esbuild.mjs --smoke-bridge-security && node dist/bridge-security-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "test:equity-navigation": "node esbuild.mjs --smoke-equity-navigation && node dist/equity-navigation-smoke.js",
@@ -1335,7 +1509,8 @@
     "vscode:prepublish": "npm run build",
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/",
-    "test:pyne-language": "node --test test/pyneLanguage.test.mjs"
+    "test:pyne-language": "node --test test/pyneLanguage.test.mjs",
+    "test:profile-store": "node --test test/profileStore.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

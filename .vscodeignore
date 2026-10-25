@@ -31,3 +31,4 @@ dist/checker-smoke.js
 dist/edge-corpus-smoke.js
 dist/agent-skills-smoke.js
 dist/chart-breakpoint-condition-smoke.js
+dist/bridge-profile-smoke.js

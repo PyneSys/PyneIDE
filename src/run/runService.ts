@@ -1,8 +1,9 @@
 /**
  * Run Pyne/Pine scripts through the runner bridge.
  *
- * Owns the `pyneide.runScript` / `pyneide.debugScript` commands, the Run and
- * Debug CodeLenses / editor-title buttons (via the `pyneide.isPyneScript`
+ * Owns the `pyneide.runScript` / `pyneide.debugScript` / `pyneide.profileScript`
+ * commands, the Run, Debug and Profile CodeLenses / editor-title buttons (via the
+ * `pyneide.isPyneScript`
  * context key), the minimal data picker, the run lifecycle (status bar,
  * cancellation, logs), the bar-level controls (pause / next bar / run to
  * bar N — commands surfaced in the debug toolbar and a status bar menu),
@@ -26,6 +27,7 @@ import { mapTracebackFrames } from '../compile/sourcemap';
 import { buildOutputPreview, resolveScriptOutputPair } from '../data/outputPreview';
 import type { DebugBreakpointControl } from '../debug/dapProxy';
 import type { EnvManager } from '../env/manager';
+import type { ProfileView } from '../profile/profileView';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { detectPineVersion } from '../pineVersion';
 import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
@@ -64,6 +66,11 @@ interface PreparedRun {
   /** Explicit `--security KEY=stem` args for unresolved cross-symbol feeds
    * (map-resolved feeds need none; the core reads the symbol map itself). */
   security?: string[];
+}
+
+export interface RunOptions {
+  /** Profile the run per source line and show the result in the editor. */
+  profile?: boolean;
 }
 
 export class RunService {
@@ -125,6 +132,8 @@ export class RunService {
   private startPending = false;
   /** Owns the Run/Stop/Debug lenses; refreshed whenever a run starts or ends. */
   private codeLensProvider: RunCodeLensProvider | undefined;
+  /** Shows the result of a Profile run in the editor. */
+  private profileView: ProfileView | undefined;
 
   /** How many trailing bars of a run-to-bar crawl on the per-bar breakpoint
    * (the rest fly with breakpoints removed). */
@@ -147,6 +156,11 @@ export class RunService {
   /** Wire the Symbol Browser opener used by the security "Download…" choice. */
   setShowSymbolBrowser(cb: ShowSymbolBrowser): void {
     this.securityData.setShowSymbolBrowser(cb);
+  }
+
+  /** Wire the editor view that shows the result of a Profile run. */
+  setProfileView(view: ProfileView): void {
+    this.profileView = view;
   }
 
   /** Wire the "a security choice was persisted" listener (editor diagnostics). */
@@ -179,6 +193,12 @@ export class RunService {
       ),
       vscode.commands.registerCommand('pyneide.debugPineScript', (uri?: vscode.Uri) =>
         this.debugFromCommand(uri)
+      ),
+      vscode.commands.registerCommand('pyneide.profileScript', (uri?: vscode.Uri) =>
+        this.runFromCommand(uri, { profile: true })
+      ),
+      vscode.commands.registerCommand('pyneide.profilePineScript', (uri?: vscode.Uri) =>
+        this.runFromCommand(uri, { profile: true })
       ),
       vscode.commands.registerCommand('pyneide.changeRunData', (uri?: vscode.Uri) =>
         this.changeRunData(uri)
@@ -237,10 +257,10 @@ export class RunService {
     void vscode.commands.executeCommand('setContext', 'pyneide.runActiveHere', runningHere);
   }
 
-  private async runFromCommand(uri?: vscode.Uri): Promise<void> {
+  private async runFromCommand(uri?: vscode.Uri, options?: RunOptions): Promise<void> {
     const doc = await this.resolveDocument(uri);
     if (!doc) return;
-    await this.runDocument(doc);
+    await this.runDocument(doc, options);
   }
 
   /** The Debug button/CodeLens routes through the `pyne` debug type, so the
@@ -441,7 +461,7 @@ export class RunService {
     return vscode.window.activeTextEditor?.document;
   }
 
-  async runDocument(doc: vscode.TextDocument): Promise<void> {
+  async runDocument(doc: vscode.TextDocument, options?: RunOptions): Promise<void> {
     // Run now restarts a run in flight, so a double-click is a plausible
     // accident: without this guard both clicks would pass the activeRun check
     // (it is only armed once the bridge is spawned) and start two bridges.
@@ -456,7 +476,7 @@ export class RunService {
       this.startPending = false;
     }
     if (!prepared) return;
-    await this.executeRun(prepared);
+    await this.executeRun({ ...prepared, profile: options?.profile });
   }
 
   /** Re-run a visible script chart after something its result depends on
@@ -1240,6 +1260,7 @@ export class RunService {
     chartKey: string;
     security?: string[];
     debug?: { onEndpoint: (host: string, port: number) => void };
+    profile?: boolean;
   }): Promise<void> {
     const scriptName = path.basename(opts.scriptPath);
     const chartKey = opts.chartKey;
@@ -1247,8 +1268,9 @@ export class RunService {
     this.supersedePreview(chartKey);
     this.activeChartKey = chartKey;
     this.activeRunIsDebug = opts.debug !== undefined;
+    const mode = opts.debug ? 'Debug' : opts.profile ? 'Profile' : 'Run';
     this.output.appendLine(
-      `--- ${opts.debug ? 'Debug' : 'Run'}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
+      `--- ${mode}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
     );
 
     let stats: Record<string, number | null> | undefined;
@@ -1259,6 +1281,7 @@ export class RunService {
     const trades: TradeRecord[] = [];
     let endBars = 0;
     let cancelled = false;
+    let profileFile: string | null | undefined;
 
     // Script log output is easy to lose among the other channels, so the first
     // log line of a run brings this one up. Once per run only — a per-bar
@@ -1292,8 +1315,12 @@ export class RunService {
       // Debug: listen on a free port and per-bar flushes, so the chart
       // shows every processed bar while execution sits at a breakpoint.
       ...(opts.debug ? { debugpyPort: 0, batchSize: 1 } : {}),
+      ...(opts.profile ? { profile: true } : {}),
       onEvent: (event) => {
         switch (event.e) {
+          case 'start':
+            profileFile = event.outputs.profile;
+            break;
           case 'debugpy':
             opts.debug?.onEndpoint(event.host, event.port);
             break;
@@ -1461,10 +1488,19 @@ export class RunService {
     // Non-intrusive: the chart toolbar now owns CSV access, so a transient
     // status-bar note replaces the old dismissable notification toast.
     vscode.window.setStatusBarMessage(summary, 6000);
+
+    if (!opts.profile || cancelled) return;
+    if (!profileFile) {
+      void vscode.window.showWarningMessage(
+        'PyneIDE: the installed PyneCore cannot profile yet; the script ran without a profile.'
+      );
+    } else if (!this.profileView?.show(profileFile)) {
+      void vscode.window.showWarningMessage(`PyneIDE: the run wrote no readable profile (${profileFile}).`);
+    }
   }
 }
 
-/** "Run ..." / "Debug" CodeLenses on the first line of Pyne/Pine scripts. */
+/** "Run ..." / "Debug" / "Profile" CodeLenses on the first line of Pyne/Pine scripts. */
 class RunCodeLensProvider implements vscode.CodeLensProvider {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeCodeLenses = this.changed.event;
@@ -1502,9 +1538,14 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
         title: '$(bug) Debug',
         command: 'pyneide.debugScript',
         arguments: [doc.uri],
+      }),
+      new vscode.CodeLens(range, {
+        title: '$(flame) Profile',
+        command: 'pyneide.profileScript',
+        arguments: [doc.uri],
       })
     );
-    // Appended last so Run and Debug keep their position while a run streams.
+    // Appended last so Run, Debug and Profile keep their position while a run streams.
     // A .pine and its compiled .py fold onto one chart key, so the Stop lens
     // shows on whichever of the pair the user is looking at.
     if (this.stopTarget() === canonicalChartKey(doc.uri.fsPath)) {

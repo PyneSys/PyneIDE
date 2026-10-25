@@ -577,6 +577,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
     strat_path = output_dir / f"{script.stem}_strat.csv"
     trade_path = output_dir / f"{script.stem}_trade.csv"
     viz_path = output_dir / f"{script.stem}_viz.ndjson"
+    profile_path = output_dir / f"{script.stem}_profile.json"
 
     # --security KEY=VALUE mappings (backtest file mode only)
     security_data: dict[str, str] | None = None
@@ -663,6 +664,18 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         # request.security() feeds resolve from the map with no --security arg.
         if "config_dir" in runner_params:
             runner_kwargs["config_dir"] = workdir / "config"
+        profiled = False
+        if args.profile:
+            if "profile_path" in runner_params:
+                # The profile file appears only when this run completes: a stale one
+                # from an earlier run would read as this run's result
+                profile_path.unlink(missing_ok=True)
+                runner_kwargs["profile_path"] = profile_path
+                profiled = True
+            else:
+                emitter.emit({"e": "log", "level": "warning",
+                              "message": "this PyneCore cannot profile; the script "
+                                         "runs without a profile"})
 
         runner = ScriptRunner(
             script, ohlcv_iter, syminfo,
@@ -689,6 +702,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                 "strat": str(strat_path) if is_strategy else None,
                 "trades": str(trade_path) if is_strategy else None,
                 "viz": str(viz_path) if viz_supported else None,
+                "profile": str(profile_path) if profiled else None,
             },
         })
 

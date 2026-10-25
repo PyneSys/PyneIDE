@@ -68,6 +68,9 @@ def main() -> int:
     parser.add_argument("--debugpy-port", type=int, default=None,
                         help="Start a debugpy listener on this port (0 = pick a free "
                              "one) and wait for the IDE to attach before running")
+    parser.add_argument("--profile", action="store_true",
+                        help="Profile the run per source line and write "
+                             "output/<stem>_profile.json (pynecore's profiler)")
     args = parser.parse_args()
 
     emitter = Emitter(proto_stream)
