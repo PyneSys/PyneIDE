@@ -15,7 +15,8 @@ comprehensions, f-strings, try/with/raise, slices, walrus, yield, async,
 global/nonlocal or starred expressions (``assert`` is admitted on top, see
 ``ALLOWED_NODES``); decorators only
 ``@script.indicator/strategy/library(...)``, ``@method`` and ``@udt``;
-classes only as bases-less ``@udt`` field lists; ``lambda`` only as a
+classes only as bases-less ``@udt`` field lists (methods in the class body
+are admitted on top, see ``ALLOWED_CLASS_DECORATORS``); ``lambda`` only as a
 ``field(default_factory=lambda: ...)`` UDT field default; plain positional
 parameters (with defaults) only; subscripts in Load context only. A few
 trivially portable extras are allowed on top and marked below.
@@ -35,7 +36,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.10.1'
+EDGE_RULES_VERSION = '2026.10.2'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -103,6 +104,13 @@ ALLOWED_CLASS_DECORATORS = frozenset({
     ('pynecore.core.pine_udt', 'udt'),
     ('dataclasses', 'dataclass'),
 })
+# 2026.10.2: a class body may declare METHODS next to its fields, on top of
+# the emitter set (which declares them as `@method` functions outside the
+# class). An undecorated `def` whose first parameter is the receiver is
+# Pine's `method m(Type this)` spelled in the class: the receiver is the
+# class, and the method keeps its state per call site like any function.
+# A decorated one (`@staticmethod`, `@classmethod`, `@method`, ...) is out:
+# the decorator decides what the class attribute holds (checked in the worker).
 
 # --- calls -----------------------------------------------------------------
 

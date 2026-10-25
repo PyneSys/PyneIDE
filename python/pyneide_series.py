@@ -751,8 +751,9 @@ class _EdgeChecker:
     imports (PyneCore API + `lib.*` user libraries + `dataclasses` only,
     no star imports),
     decorators (`@script.*(...)`, `@method`, `@udt`/`@dataclass` only),
-    classes (bases-less field lists), bare-name calls (defined functions,
-    imported names and a small builtin whitelist), function signatures
+    classes (bases-less field lists with undecorated methods), bare-name
+    calls (defined functions, imported names and a small builtin whitelist),
+    function signatures
     (plain positional parameters), subscript stores, attribute stores on
     functions/modules, `lambda` anywhere outside a
     `field(default_factory=lambda: ...)` UDT field default, and reads of a lib
@@ -1036,10 +1037,25 @@ class _EdgeChecker:
         if body and _is_docstring(body[0]):
             body = body[1:]
         for stmt in body:
-            if not isinstance(stmt, (ast.AnnAssign, ast.Pass)):
+            if isinstance(stmt, ast.FunctionDef):
+                self._check_member(stmt)
+            elif not isinstance(stmt, (ast.AnnAssign, ast.Pass)):
                 self._problem(stmt, 'pyne-edge-class',
                               f'a class body may only contain annotated '
-                              f'fields in the Pyne Edge profile')
+                              f'fields and methods in the Pyne Edge profile')
+
+    def _check_member(self, node: ast.FunctionDef) -> None:
+        """A method in a class body: Pine's `method m(Type this)`, spelled
+        in the class, so it is undecorated and takes its receiver first."""
+        if node.decorator_list:
+            self._problem(node, 'pyne-edge-class',
+                          f'a decorated method in a class body is '
+                          f'{_EDGE_SUFFIX} — a method takes its receiver '
+                          f'first and no decorator')
+        elif not (node.args.posonlyargs or node.args.args):
+            self._problem(node, 'pyne-edge-class',
+                          f'a method without its receiver as the first '
+                          f'parameter is {_EDGE_SUFFIX}')
 
     def _is_protocol_shim(self, node: ast.ClassDef) -> bool:
         """A library-export signature shim: `class _ProtocolX(Protocol)` with

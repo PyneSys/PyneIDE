@@ -414,6 +414,28 @@ async function main(): Promise<void> {
     expectCodes(edgeClass, ['pyne-edge-class'], 'edge-class');
     log('edge-class OK');
 
+    // --- class methods: undecorated with a receiver, Pine's `method` ---------
+    const edgeMethod = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.core.pine_udt import udt\n' +
+        SCAFFOLD +
+        '\n\n@udt\nclass Pair:\n    a: float = 0.0\n\n' +
+        '    def doubled(self) -> float:\n        return self.a * 2\n'
+    );
+    expectCodes(edgeMethod, [], 'edge-method');
+    log('edge-method OK');
+
+    const edgeMethodDecorated = await worker.request(
+      EDGE_HEAD +
+        'from pynecore.core.pine_udt import udt\n' +
+        SCAFFOLD +
+        '\n\n@udt\nclass Pair:\n    a: float = 0.0\n\n' +
+        '    @staticmethod\n    def zero() -> float:\n        return 0.0\n'
+    );
+    expectCodes(edgeMethodDecorated, ['pyne-edge-decorator', 'pyne-edge-class'],
+      'edge-method-decorated');
+    log('edge-method-decorated OK');
+
     // --- calls: unknown bare names (and with them every escape hatch) --------
     const edgeCall = await worker.request(
       EDGE_HEAD +
