@@ -5,17 +5,20 @@ title: "Differences from Pine Script"
 description: "Key differences between PyneCore and TradingView Pine Script"
 icon: "compare"
 date: "2025-03-31"
-lastmod: "2026-09-05"
+lastmod: "2026-10-18"
 draft: false
 toc: true
-categories: ["Overview", "Comparisons"]
-tags: ["pine-script", "differences", "comparison", "python", "syntax", "types"]
+categories: ["Overview"]
+tags: ["pine-script", "comparison", "python", "syntax", "types"]
 ---
 -->
 
 # Differences from Pine Script
 
-1st and most important, it is Python ;)
+Pyne is a [domain-specific language with Python syntax](./pyne-code.md).
+It shares Pine Script's bar-by-bar approach while using its own script structure
+and explicit state annotations. Plain `@pyne` also supports broader Python
+integration; the `@pyne edge` profile uses a restricted subset.
 
 ## Structure differences
 
@@ -305,11 +308,31 @@ as well. The one exception is text Pine compiles into the indicator's metadata: 
 a `plotchar` char or text, a `plotshape` text or an `alertcondition` title or message given
 as `na` is the text `na`, just as on TradingView.
 
+The same holds for the other types: a bare `na` written where a float or an int goes is the
+numeric na, `float('nan')`, and one written where an object of a user type or a drawing goes
+(`p: Pivot = na`, `Pivot(1.0) if c else na`, `array.push(pivots, na)`, a `Pivot` parameter or
+field) is the na of that class, `na(Pivot)`, so an overloaded function or method sees the
+class the value was typed with, as it does on TradingView. One written where an array, a map
+or a matrix goes is the na of that container, `na(list)`, `na(dict)` or `na(Matrix)`, the way
+a compiled `array<float> a = na` reads. A variable that starts as a bare `na` and is assigned
+a value later (`result = na`, then `result = compute()` in a branch) takes the type of its
+assignments, and the `na` it starts as is that type's na, a tuple that starts as `[na, na]`
+per position; assignments of two different types (`"s"` in one branch, `2` in another) are
+reported as the error they are in Pine, a tuple's positions one by one. The `na` a
+`request.security` call yields on a bar with no value is the na of the requested expression's
+type, per position for a tuple. A history read before the bar exists (`close[1]` on the first
+bar, `ta.ema(close, 20)[1]` or any other `expr[n]` with fewer than `n` bars behind it) is the
+na of the series' own type as well: the nan for a number, `""` for a string, the bool na the
+script runs with for a bool, `na(Pivot)` for an object. A series declared without a type
+takes it from the first typed value it stores. `ta.change(cond)` of a bool knows the missing
+bars apart from a stored `false`: it is `false` (or na, under the three-state bool) until
+`cond` has `length` bars of history, as on TradingView.
+
 ### Array
 
 Although we implemented all the array functions in array module, we decided to not implement Pine's `array` class and
 its methods. Instead, we use Python's builtin `list`, because it is almost the same
-and Pyne is just a Python framework after all.
+in PyneCore's Python runtime.
 
 This means if you see something like this in Pine:
 

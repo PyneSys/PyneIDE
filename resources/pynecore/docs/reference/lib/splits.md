@@ -5,11 +5,11 @@ title: "splits"
 description: "Stock split data field constants"
 icon: "call_split"
 date: "2026-08-04"
-lastmod: "2026-08-04"
+lastmod: "2026-10-25"
 draft: false
 toc: true
-categories: ["Reference", "Library"]
-tags: ["splits", "request", "library", "reference"]
+categories: ["Reference"]
+tags: ["splits", "request", "corporate-events"]
 ---
 -->
 
@@ -32,5 +32,5 @@ denominator = request.splits("NASDAQ:AAPL", splits.denominator, ignore_invalid_s
 ## Compatibility
 
 The constants are available for Pine-compatible source code. PyneCore does not currently provide
-split data: `request.splits()` returns `na` with `ignore_invalid_symbol=True` and otherwise raises
-`NotImplementedError`.
+split data: `request.splits()` returns `na` with `ignore_invalid_symbol=True` or when it requests
+the current crypto chart's own ticker, and otherwise raises `NotImplementedError`.

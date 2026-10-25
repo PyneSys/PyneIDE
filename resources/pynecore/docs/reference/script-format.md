@@ -5,18 +5,19 @@ title: "Script Format"
 description: "Structure and anatomy of a PyneCore script file"
 icon: "description"
 date: "2026-04-05"
-lastmod: "2026-04-05"
+lastmod: "2026-10-25"
 draft: false
 toc: true
 categories: ["Reference"]
-tags: ["script", "pyne", "main", "decorator", "indicator", "strategy", "library"]
+tags: ["scripts", "pyne", "main", "decorator", "indicators", "strategies"]
 ---
 -->
 
 # Script Format
 
-A PyneCore script is a standard `.py` file with a specific structure. This page documents the
-required elements and conventions.
+A [Pyne code](../overview/pyne-code.md) script uses Python syntax in a `.py` file,
+with a marker that enables Pyne's execution rules. This page documents its required
+elements and conventions.
 
 ## Minimal Example
 
@@ -62,12 +63,47 @@ You may also encounter scripts whose docstring starts with `@pyne edge`:
 """@pyne edge"""
 ```
 
-The extra token marks code that stays within a strict, Pine-equivalent subset of Python. The
-PyneComp compiler emits it automatically, since compiled Pine Script always falls within this
-subset. PyneCore runs `@pyne edge` scripts exactly like any other Pyne code — the token changes
-nothing at runtime. It exists to enable future tooling that relies on the subset guarantee (for
-example, a possible Pyne-to-Pine conversion). If you edit such a script and want the full power
-of Python, simply remove the `edge` word from the docstring.
+The extra token selects the **edge language profile**, a defined subset of Pyne's
+syntax, imports, and calls. PyneIDE checks this profile and reports unsupported
+constructs. PyneComp emits the marker for converted scripts, and the beginner's book
+uses it for programs written directly in Pyne.
+
+PyneCore applies the same bar-by-bar language behavior and also analyzes edge
+modules against the profile. Runtime rejection of profile diagnostics can be enabled
+with `PYNE_EDGE_STRICT=1`; it is not enabled by default. A script running with the
+default setting is therefore not proof that it meets the edge profile.
+
+Use plain `@pyne` when a program deliberately needs broader Python integration.
+Removing `edge` opts out of the subset contract; such a program must not be assumed
+portable to a runtime or compiler that supports only edge code.
+
+#### Types and methods in the edge profile
+
+In an edge module, a class declares a user-defined type, Pine's `type`:
+
+- It has exactly one decorator, `@udt` (or `@dataclass`), and no base class.
+- Its body holds annotated fields and methods. A docstring and `pass` are allowed too;
+  any other statement is outside the profile.
+- A method is an undecorated `def` whose first parameter is the receiver, by convention
+  `self`. The receiver needs no annotation: its type is the class. A `@staticmethod`, a
+  `@classmethod` or any other decorator on a method is outside the profile.
+
+```python
+@udt
+class PriceRange:
+    bottom: float = 0.0
+    top: float = 0.0
+
+    def midpoint(self) -> float:
+        return (self.bottom + self.top) / 2
+```
+
+A method is Pine's `method midpoint(PriceRange this)`. Call it on the object,
+`current_range.midpoint()`, or through the class, `PriceRange.midpoint(current_range)`.
+It can keep state like any function (`ta.*` calls, `Series`, `Persistent`), and the state
+belongs to the call site, as on TradingView. The same method can also be written as a free
+function marked `@method` whose first parameter is annotated with the type; PyneComp emits
+that form for converted scripts. See [User-Defined Types](./types.md#user-defined-types-udt).
 
 ## 2. Imports
 

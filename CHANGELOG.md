@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pin PyneCore to 6.11.0 and update the bundled documentation to match.
+
 ## [0.9.2] - 2026-10-22
 
 ### Changed
