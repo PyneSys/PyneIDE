@@ -60,6 +60,7 @@ model; PyneIDE ships analysis built for it.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
 - ✓ A line-by-line profiler that shows where a script spends its time, on Pine and Pyne code alike.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
+- ✓ Set up for **AI coding agents**: new projects get `AGENTS.md` and skills that point the agent at the bundled PyneCore docs and a Pine documentation index.
 - ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
 
 ## Full Pine Script language support
@@ -193,6 +194,25 @@ keeps working. Snippets and workspace-library intelligence round it out.
 
 ![Hover documentation for the Pine types, and a typo caught as you type](media/pyne.png)
 
+## AI agents that know the project
+
+When you initialize a project, PyneIDE also sets it up for coding agents. It writes an
+`AGENTS.md`, which Claude Code reads through `CLAUDE.md`, and three skills into
+`.agents/skills/`, `.claude/skills/` and `.cursor/skills/`: one for Pine Script, one for
+Pyne code, and one for running and debugging in PyneIDE.
+
+The skills tell the agent where things live in your project: the workdir, the Python
+environment and the `pyne` CLI. The PyneCore documentation ships inside the extension,
+matched to the runtime version, and the agent reads it from disk without a network
+request. For Pine, the agent gets the v6 basics and a topic index into the Pine
+documentation, so it opens the page for the API it needs. The skills also tell the agent
+to edit only the `.pine` source, leave the compiled Python to PyneIDE, and report which
+checks it actually ran.
+
+Your own preferences go in `AGENT_RULES.md`, which **PyneIDE: Edit Agent Rules…** opens.
+Re-initializing the project never overwrites that file. The agent files are hidden in the
+Explorer by default; set `pyneide.showAgentFiles` to see them.
+
 ## Zero-setup Python environment
 
 PyneIDE bootstraps its own reproducible Python environment with `uv` — Python plus
@@ -243,7 +263,7 @@ view keeps your Scripts, Data, and Output in one place.
 
 1. **Install** PyneIDE from the Marketplace.
 2. Open a folder and run **PyneIDE: Initialize Pyne Project** — it scaffolds a
-   runnable demo plus sample data.
+   runnable demo plus sample data, and the agent files described above.
 3. When prompted, let PyneIDE **set up the Python environment** (a one-time ~80 MB
    download of `uv` + Python + PyneCore into extension storage, ~250 MB on disk).
    It stays there when the extension is uninstalled, so **PyneIDE: Remove
