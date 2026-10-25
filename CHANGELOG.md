@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-25
+
 ### Added
 
 - **Profile**: a flame button next to Run and Debug (also in the CodeLens row,
@@ -20,10 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the annotations. On a `.pine` file the numbers land on the Pine lines through
   the sourcemap. The profile is written to `output/<script>_profile.json`;
   reopening an unchanged script offers it again with a **Show profile** lens.
+- Publishing a GitHub release now also uploads its verified VSIX to Open VSX,
+  so PyneIDE can be installed from Open VSX-based editors.
 
 ### Changed
 
 - Pin PyneCore to 6.11.0 and update the bundled documentation to match.
+- **Pyne Edge profile 2026.10.2**: a `@udt` class body may now declare methods
+  next to its fields. An undecorated `def` whose first parameter is the
+  receiver is Pine's `method m(Type this)` written inside the class; a
+  decorated method or one without a receiver is still reported as
+  `pyne-edge-class`.
 
 ### Fixed
 
