@@ -1,13 +1,4 @@
-/**
- * Installing extra packages (plugins) into the managed venv with the same
- * pinned uv the bootstrap uses. Kept vscode-free so it stays headless-testable
- * next to bootstrap.ts.
- *
- * The pinned pynecore is deliberately NOT resolvable away here: callers must
- * check a plugin's `min_pynecore` against the installed version BEFORE calling
- * in, so uv never has a reason to upgrade pynecore under the extension (the
- * IDE <-> PyneCore bridge is an unversioned private contract).
- */
+/** Install project plugins while preserving the selected Core release. */
 import type { Logger } from './constants';
 import { execChecked } from './exec';
 import { ensureUv, uvEnv } from './uv';
@@ -19,6 +10,7 @@ export interface PackageOperation {
   packages: string[];
   log: Logger;
   proxyUrl?: string;
+  pynecoreVersion?: string;
 }
 
 /** `uv pip install` the given requirement strings into the managed venv. */
@@ -37,7 +29,8 @@ async function runUvPip(op: PackageOperation, action: 'install' | 'uninstall'): 
   const { uvBin } = await ensureUv(op.storageDir, op.log, env);
   await execChecked(
     uvBin,
-    ['pip', action, '--python', op.pythonBin, ...op.packages],
+    ['pip', action, '--python', op.pythonBin, ...op.packages,
+      ...(action === 'install' && op.pynecoreVersion ? [`pynesys-pynecore==${op.pynecoreVersion}`] : [])],
     op.log,
     { env, timeoutMs: 600000 }
   );

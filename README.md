@@ -203,9 +203,10 @@ Pyne code, and one for running and debugging in PyneIDE.
 
 The skills tell the agent where things live in your project: the workdir, the Python
 environment and the `pyne` CLI. The PyneCore documentation ships inside the extension,
-matched to the runtime version, and the agent reads it from disk without a network
-request. For Pine, the agent gets the v6 basics and a topic index into the Pine
-documentation, so it opens the page for the API it needs. The skills also tell the agent
+and the agent reads it from disk without a network request. The project references
+record the documentation version separately from the runtime version. For Pine,
+the agent gets the v6 basics and a topic index into the Pine documentation, so it
+opens the page for the API it needs. The skills also tell the agent
 to edit only the `.pine` source, leave the compiled Python to PyneIDE, and report which
 checks it actually ran.
 
@@ -215,38 +216,67 @@ Explorer by default; set `pyneide.showAgentFiles` to see them.
 
 ## Zero-setup Python environment
 
-PyneIDE bootstraps its own reproducible Python environment with `uv` — Python plus
-the PyneCore runtime — with **no dependency on the Microsoft Python extension** and
-nothing to configure. It sets itself up on first run so you can go straight to
-writing scripts.
+PyneIDE creates a Python environment for each project with `uv`, including
+PyneCore and the debugger. It works without the Microsoft Python extension.
+The environment lives in `.pyneide/venv` inside the workspace folder. The `.pyneide`
+directory is hidden in the Explorer by default and excluded from Git by its
+`.gitignore`. Python installations and uv remain in extension storage and are
+shared between projects. The first setup downloads
+about 80 MB; later projects reuse cached downloads.
 
-The one-time setup downloads about 80 MB (uv + Python + PyneCore) and takes
-roughly 250 MB on disk in VS Code's extension storage — **PyneIDE: Reveal
-Environment Folder** shows the exact location, **PyneIDE: Remove Environment**
-gives the space back.
+Leave `pyneide.pynecore.version` empty to follow the latest stable PyneCore
+release. After the initial setup, updates install automatically without asking,
+with checks at most once a day. Updates are deferred while the environment is
+in use. To keep a tested system on one release, set an exact version in the
+project's `.vscode/settings.json`:
 
-To use a separate development environment, set `pyneide.venvPath` to its directory
-or `pyneide.pythonPath` to its Python executable (`venvPath` takes precedence).
-Install PyneCore and `debugpy` there yourself. Setup and update commands then only
-check that environment; they do not modify it or update PyneIDE's internal one.
-With both paths empty, PyneIDE manages its internal environment and updates it
-to the pinned PyneCore release in place, preserving installed plugins.
+```json
+{
+  "pyneide.pynecore.version": "6.11.1"
+}
+```
 
-In a project you initialized with PyneIDE, the **integrated terminal** opens with
-that environment already activated: `pyne`, `python` and `pip` are the managed
-ones, and the CLI is pointed at the same workdir the extension uses, so
-`pyne run …` or `pyne data download …` work without activating anything by hand.
-Other windows are untouched — your own Python projects keep their own interpreter.
+The minimum supported release is 6.11.1. A selected version stays in place until
+you change or clear the setting, including when the environment is rebuilt.
+You can switch back to an older supported Core by setting its exact version.
+Different projects can use different Core versions and plugins, including
+folders opened in the same VS Code window.
+Existing global environments from earlier PyneIDE releases are left untouched.
+For an initialized project, PyneIDE offers to reinstall previously recorded
+plugins into its new environment.
 
-**PyneCore plugins** — extra data providers, brokers and CLI tools — install into
-that same environment from the **plugin manager** (the PyneIDE status bar item, or
-**PyneIDE: Manage Plugins**). Browse the catalogue, read each plugin's own
-documentation, and install or uninstall in one click. Because they live in the
-shared environment and not in a project, every Pyne project you open can use what
-you installed. A plugin that needs a newer PyneCore than the one you have cannot be
-installed by accident. If you pointed PyneIDE at your own Python environment
-instead, it does not install into it — it hands you the `pip install` command to
-run there yourself.
+**PyneIDE: Reveal Environment Folder** opens the current project's environment
+folder. **PyneIDE: Remove Environment** can delete that project's environment
+without deleting shared Python installations or another project's packages.
+The shared Pine language server is a separate removal option.
+
+The managed environment uses Python 3.14.x. Core updates keep the existing
+interpreter. Rebuilding can reuse an installed Python 3.14.x, so it does not
+necessarily download the newest patch release. The Python patch version is
+not fixed for the project.
+
+To use your own environment, set `pyneide.venvPath` to its directory or
+`pyneide.pythonPath` to its Python executable (`venvPath` takes precedence).
+Use this option if you need a specific Python version. Paths can be relative
+to the workspace folder. Install PyneCore and `debugpy` there yourself. PyneIDE
+checks this environment, including an explicitly selected Core version, but
+never installs into it.
+
+In a project initialized with PyneIDE, new integrated terminals use the project's
+interpreter and workdir. The `pyne`, `python` and `pip` commands are available
+without activating the environment by hand. Terminals in other projects keep
+their own environment.
+
+PyneCore plugins install into the project's environment from **PyneIDE: Manage
+Plugins**, also available in the status bar menu. Installing a plugin preserves
+the installed Core version; an incompatible dependency causes the installation
+to fail rather than upgrading the project's Core. With a user-provided Python
+environment, the manager gives you a `pip install` command to run yourself.
+
+The Pine language server is shared between projects and also updates automatically
+by default. Set `pyneide.pineLs.autoUpdate` to `false` to turn off its automatic
+updates. The status bar menu offers a manual update check and rollback to the
+previous LS version when one is available.
 
 ![PyneIDE managed environment setup](media/env.png)
 
@@ -265,7 +295,7 @@ view keeps your Scripts, Data, and Output in one place.
 2. Open a folder and run **PyneIDE: Initialize Pyne Project** — it scaffolds a
    runnable demo plus sample data, and the agent files described above.
 3. When prompted, let PyneIDE **set up the Python environment** (a one-time ~80 MB
-   download of `uv` + Python + PyneCore into extension storage, ~250 MB on disk).
+   download of `uv` + Python + PyneCore, with a separate environment for the project).
    It stays there when the extension is uninstalled, so **PyneIDE: Remove
    Environment** is there to delete it again and give the disk space back;
    **PyneIDE: Reveal Environment Folder** shows where it lives.
@@ -277,8 +307,8 @@ view keeps your Scripts, Data, and Output in one place.
 ## Requirements
 
 - **Visual Studio Code** 1.90 or newer.
-- An internet connection for the one-time environment setup, and whenever a Pine
-  script compiles — every Run and Debug of a `.pine` file goes through the cloud
+- An internet connection for initial setup, downloading updates or plugins, and
+  Pine compilation. Every Run and Debug of a `.pine` file goes through the cloud
   compiler unless the file is unchanged since the last compile.
 - For **Pine** compilation: a **PyneSys account and API key**
   ([app.pynesys.io](https://app.pynesys.io)). Writing, running and debugging **Pyne
@@ -329,10 +359,10 @@ provider's own terms. Your API keys stay in the local workdir configuration.
 it, it asks separately whether your script may be attached, and it never reads
 your API key or broker credentials.
 
-**Downloads.** The one-time environment setup fetches `uv` from GitHub releases,
-then Python and PyneCore through it; the optional Pine language server and the
-plugin catalogue come from PyneSys (the catalogue is public — no API key, no
-account), and plugins install from PyPI.
+**Downloads.** Environment setup fetches `uv` from GitHub releases, then installs
+Python and PyneCore through it. Core updates and plugin packages download from
+PyPI. The optional Pine language server and the plugin catalogue come from
+PyneSys; the catalogue is public and needs no account or API key.
 
 Everything else — running, charting and debugging Pyne code, and Pine editing
 support once the language server is installed — happens **entirely on your

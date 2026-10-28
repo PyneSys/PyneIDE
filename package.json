@@ -62,6 +62,9 @@
   },
   "contributes": {
     "configurationDefaults": {
+      "files.exclude": {
+        "**/.pyneide": true
+      },
       "explorer.fileNesting.enabled": true,
       "explorer.fileNesting.expand": false,
       "explorer.fileNesting.patterns": {
@@ -995,7 +998,7 @@
           {
             "id": "environment",
             "title": "Set up the Pyne runtime",
-            "description": "PyneIDE brings its own Python. It downloads uv, Python and the PyneCore runtime into extension storage — no system Python, no Microsoft Python extension, nothing to configure.\nIt offers this by itself the first time you need it, or you can start it now.\n[Set Up Environment](command:pyneide.setupEnvironment)",
+            "description": "PyneIDE creates a Python environment for this project with PyneCore and the debugger. Python and uv are shared between projects. No system Python or Microsoft Python extension is needed.\nIt offers setup the first time you need it, or you can start it now.\n[Set Up Environment](command:pyneide.setupEnvironment)",
             "media": {
               "svg": "media/walkthrough/environment.svg",
               "altText": "A VS Code window with a notification showing the one-time environment setup progress, and the PyneIDE status bar item."
@@ -1326,19 +1329,27 @@
         "title": "Environment",
         "order": 3,
         "properties": {
+          "pyneide.pynecore.version": {
+            "type": "string",
+            "default": "",
+            "scope": "resource",
+            "order": 0,
+            "pattern": "^$|^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
+            "markdownDescription": "PyneCore version for this project (minimum 6.11.1). Leave empty to automatically update to the latest stable release. Set an exact version, such as `6.11.1`, to keep this project on that release. Each project has its own environment in `.pyneide/venv`. Applies to managed environments; external environments are checked but never modified."
+          },
           "pyneide.pythonPath": {
             "type": "string",
             "default": "",
-            "scope": "machine",
+            "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "Path to a Python interpreter to use instead of PyneIDE's internal environment. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this interpreter; they never change it or update the internal environment while this setting is active."
+            "markdownDescription": "Path to a Python interpreter to use instead of PyneIDE's project environment. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this interpreter; they never change it or update the project environment while this setting is active."
           },
           "pyneide.venvPath": {
             "type": "string",
             "default": "",
-            "scope": "machine",
+            "scope": "machine-overridable",
             "order": 2,
-            "markdownDescription": "Path to a virtualenv directory to use instead of PyneIDE's internal environment. Takes precedence over `#pyneide.pythonPath#`. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this environment; they never change it or update the internal environment while this setting is active."
+            "markdownDescription": "Path to a virtualenv directory to use instead of PyneIDE's project environment. Takes precedence over `#pyneide.pythonPath#`. Install your development PyneCore and `debugpy` there yourself. Setup and update commands only check this environment; they never change it or update the project environment while this setting is active."
           }
         }
       },
@@ -1510,7 +1521,8 @@
     "prepackage": "node -e \"require('fs').mkdirSync('build',{recursive:true})\"",
     "package": "vsce package --out build/",
     "test:pyne-language": "node --test test/pyneLanguage.test.mjs",
-    "test:profile-store": "node --test test/profileStore.test.mjs"
+    "test:profile-store": "node --test test/profileStore.test.mjs",
+    "test:project-env": "node --test test/projectEnvironment.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

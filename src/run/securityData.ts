@@ -21,6 +21,7 @@
  * timeframe override and the newest scripts/lib mtime — so an input-save chart
  * re-run never re-prompts.
  */
+import { trackInterpreter } from '../env/usage';
 import { spawn } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -456,6 +457,7 @@ export class SecurityDataService {
         }
       );
 
+      trackInterpreter(child, pythonBin);
       let settled = false;
       let stdoutBuf = '';
       const timer = setTimeout(() => {

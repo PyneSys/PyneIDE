@@ -10,6 +10,7 @@
  * download. If the process dies, every pending request rejects and the next
  * request respawns it.
  */
+import { trackInterpreter } from '../env/usage';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
@@ -172,6 +173,7 @@ export class ProviderService {
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    trackInterpreter(child, this.opts.pythonBin);
     this.child = child;
     this.stdoutBuf = '';
 

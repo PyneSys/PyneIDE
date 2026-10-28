@@ -78,7 +78,7 @@ export interface SymbolBrowserDeps {
 }
 
 export class SymbolBrowserPanel {
-  private static current: SymbolBrowserPanel | undefined;
+  private static readonly panels = new Map<string, SymbolBrowserPanel>();
 
   private readonly panel: vscode.WebviewPanel;
   private readonly service: ProviderService;
@@ -94,13 +94,13 @@ export class SymbolBrowserPanel {
     deps: SymbolBrowserDeps,
     prefill?: SecurityPrefill
   ): void {
-    if (SymbolBrowserPanel.current) {
-      const existing = SymbolBrowserPanel.current;
+    const existing = SymbolBrowserPanel.panels.get(JSON.stringify([deps.workdir, deps.pythonBin]));
+    if (existing) {
       existing.panel.reveal(vscode.ViewColumn.Active);
       if (prefill) existing.arm(prefill);
       return;
     }
-    SymbolBrowserPanel.current = new SymbolBrowserPanel(context, deps, prefill);
+    SymbolBrowserPanel.panels.set(JSON.stringify([deps.workdir, deps.pythonBin]), new SymbolBrowserPanel(context, deps, prefill));
   }
 
   /**
@@ -109,10 +109,10 @@ export class SymbolBrowserPanel {
    * go before the new provider can show up.
    */
   static reloadProviders(): void {
-    const panel = SymbolBrowserPanel.current;
-    if (!panel) return;
-    panel.service.restart();
-    void panel.sendInit();
+    for (const panel of SymbolBrowserPanel.panels.values()) {
+      panel.service.restart();
+      void panel.sendInit();
+    }
   }
 
   private constructor(
@@ -455,7 +455,7 @@ export class SymbolBrowserPanel {
   }
 
   private dispose(): void {
-    SymbolBrowserPanel.current = undefined;
+    SymbolBrowserPanel.panels.delete(JSON.stringify([this.deps.workdir, this.deps.pythonBin]));
     this.service.dispose();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;

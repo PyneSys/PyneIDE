@@ -26,7 +26,8 @@ export function resolveWorkspaceWorkdir(
   folder?: vscode.WorkspaceFolder,
   scriptDir?: string
 ): WorkdirResolution | undefined {
-  const ws = folder ?? vscode.workspace.workspaceFolders?.[0];
+  const active = vscode.window.activeTextEditor?.document.uri;
+  const ws = folder ?? (active && vscode.workspace.getWorkspaceFolder(active)) ?? vscode.workspace.workspaceFolders?.[0];
   const setting = vscode.workspace.getConfiguration('pyneide', ws?.uri).get<string>('workdir');
   return resolveWorkdir({ setting, wsFolder: ws?.uri.fsPath, scriptDir });
 }

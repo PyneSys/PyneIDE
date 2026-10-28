@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '0 5 * * *'
   workflow_call:
 
 permissions:
@@ -31,6 +33,7 @@ jobs:
       - run: npm run test:report
       - run: npm run test:agent-skills
       - run: npm run test:release
+      - run: npm run test:project-env
       - run: python3 -m unittest discover -s test -p marketplace_test.py
       - run: npx vsce package --out pyneide.vsix
       - uses: actions/upload-artifact@v4
@@ -46,6 +49,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        core: ['6.11.1', latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -56,3 +60,5 @@ jobs:
       - run: npm ci
       - run: npm run test:download
       - run: npm run test:env
+        env:
+          PYNEIDE_TEST_CORE: ${{ matrix.core }}

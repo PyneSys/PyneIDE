@@ -45,11 +45,16 @@ export function registerTerminalEnv(
 ): void {
   updateTerminalEnv(context, manager);
   context.subscriptions.push(
-    manager.onDidChangeState(() => updateTerminalEnv(context, manager)),
+    manager.onDidChangeProjectState(() => updateTerminalEnv(context, manager)),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('pyneide.workdir')) updateTerminalEnv(context, manager);
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => updateTerminalEnv(context, manager))
+    vscode.workspace.onDidChangeWorkspaceFolders((e) => {
+      for (const folder of e.removed) {
+        context.environmentVariableCollection.getScoped({ workspaceFolder: folder }).clear();
+      }
+      updateTerminalEnv(context, manager);
+    })
   );
 }
 
@@ -61,42 +66,23 @@ export function updateTerminalEnv(
   context: vscode.ExtensionContext,
   manager: EnvManager
 ): void {
-  const collection = context.environmentVariableCollection;
-  const workdir = resolveWorkspaceWorkdir();
-
-  // The bare `pyne` CLI would otherwise miss a workdir that is the project
-  // folder itself — its upward search matches the directory NAME `workdir`.
-  if (workdir?.exists) {
-    collection.replace('PYNE_WORK_DIR', workdir.path, MUTATOR_OPTIONS);
-  } else {
-    collection.delete('PYNE_WORK_DIR');
-  }
-
-  // Until the first check completes the interpreter is simply not known yet.
-  // VS Code persists this collection across restarts, so leaving it alone keeps
-  // the previous session's values for terminals restored at startup, instead of
-  // stripping the environment for a moment and putting it straight back.
-  const state = manager.state;
-  if (state.kind === 'unknown' || state.kind === 'working') return;
-
-  const pythonBin = state.kind === 'ready' ? state.pythonBin : undefined;
-  if (!pythonBin || !resolvePyneIdeWorkdir()) {
-    collection.delete('PATH');
-    collection.delete('VIRTUAL_ENV');
-    collection.description = WORKDIR_ONLY_DESCRIPTION;
-    return;
-  }
-
-  collection.prepend('PATH', path.dirname(pythonBin) + path.delimiter, MUTATOR_OPTIONS);
-  collection.description = ACTIVATED_DESCRIPTION;
-
-  // Only a real virtual environment has a VIRTUAL_ENV to announce; with
-  // `pyneide.pythonPath` pointing at a bare interpreter, claiming one would
-  // send every venv-aware tool in that terminal to a directory that is not one.
-  const venv = venvLocation(pythonBin);
-  if (venv) {
-    collection.replace('VIRTUAL_ENV', path.join(venv.venvPath, venv.venv), MUTATOR_OPTIONS);
-  } else {
-    collection.delete('VIRTUAL_ENV');
+  const root = context.environmentVariableCollection;
+  root.clear();
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const collection = root.getScoped({ workspaceFolder: folder });
+    collection.clear();
+    const workdir = resolveWorkspaceWorkdir(folder);
+    if (workdir?.exists) collection.replace('PYNE_WORK_DIR', workdir.path, MUTATOR_OPTIONS);
+    const state = manager.forProject(folder.uri).state;
+    if (state.kind !== 'ready' || !resolvePyneIdeWorkdir(folder)) {
+      collection.description = WORKDIR_ONLY_DESCRIPTION;
+      continue;
+    }
+    collection.prepend('PATH', path.dirname(state.pythonBin) + path.delimiter, MUTATOR_OPTIONS);
+    collection.description = ACTIVATED_DESCRIPTION;
+    const venv = venvLocation(state.pythonBin);
+    if (venv) {
+      collection.replace('VIRTUAL_ENV', path.join(venv.venvPath, venv.venv), MUTATOR_OPTIONS);
+    }
   }
 }

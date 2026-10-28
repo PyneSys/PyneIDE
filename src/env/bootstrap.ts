@@ -24,6 +24,9 @@ export interface EnvMarker {
   python: string;
   pynecore: string;
   debugpy: string;
+  /** Empty means automatically follow stable Core releases. */
+  selection?: string;
+  checkedAt?: number;
 }
 
 export interface VerifyResult {
@@ -44,6 +47,10 @@ export interface VerifyResult {
 
 export interface BootstrapOptions {
   storageDir: string;
+  /** Project-owned state; shared uv and Python installations stay in storageDir. */
+  environmentDir?: string;
+  /** Exact stable release, or empty to install the latest stable release. */
+  pynecoreVersion?: string;
   log: Logger;
   proxyUrl?: string;
   /** Aborts the current download or child process and throws a CancelledError. */
@@ -136,16 +143,30 @@ export function currentMarker(): EnvMarker {
   };
 }
 
-export function markerUpToDate(storageDir: string): boolean {
+export function markerUpToDate(storageDir: string, selection = PYNECORE_VERSION): boolean {
   const marker = readMarker(storageDir);
   if (!marker) return false;
   const want = currentMarker();
   return (
     marker.schema === want.schema &&
     marker.python === want.python &&
-    marker.pynecore === want.pynecore &&
+    (selection ? marker.pynecore === selection : compareVersions(marker.pynecore, PYNECORE_MIN_VERSION) >= 0) &&
+    (marker.selection ?? marker.pynecore) === selection &&
     marker.debugpy === want.debugpy
   );
+}
+
+/** Settings accept stable releases only; never pass arbitrary requirements to uv. */
+export function validateCoreVersion(value: string): string {
+  const version = value.trim();
+  if (!version) return '';
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+    throw new Error('PyneCore version must be a stable version such as 6.11.1, or empty for automatic updates.');
+  }
+  if (compareVersions(version, PYNECORE_MIN_VERSION) < 0) {
+    throw new Error(`PyneCore ${version} is older than the supported minimum ${PYNECORE_MIN_VERSION}.`);
+  }
+  return version;
 }
 
 /** Compare dotted version strings; returns negative/zero/positive. */
@@ -216,8 +237,8 @@ export async function verifyPython(
 }
 
 /**
- * Create (or recreate) the managed venv under globalStorage and install the
- * pinned packages. Idempotent; `recreate` wipes the venv first for repair.
+ * Create (or recreate) the managed venv in environmentDir and install the
+ * selected packages. Idempotent; `recreate` wipes the venv first for repair.
  */
 export async function bootstrapManagedEnv(
   options: BootstrapOptions & { recreate?: boolean }
@@ -235,7 +256,10 @@ async function runBootstrap(
   tracker: SetupProgressTracker
 ): Promise<{ pythonBin: string; verify: VerifyResult }> {
   const { storageDir, log, proxyUrl, recreate, cancel } = options;
+  const environmentDir = options.environmentDir ?? storageDir;
+  const selection = validateCoreVersion(options.pynecoreVersion ?? PYNECORE_VERSION);
   fs.mkdirSync(storageDir, { recursive: true });
+  fs.mkdirSync(environmentDir, { recursive: true });
   const env = uvEnv(storageDir, proxyUrl);
   tracker.begin('uv', 'Preparing the package manager…');
   const { uvBin } = await ensureUv(storageDir, log, env, {
@@ -244,12 +268,12 @@ async function runBootstrap(
   });
   throwIfCancelled(cancel);
 
-  const venvDir = managedVenvDir(storageDir);
+  const venvDir = managedVenvDir(environmentDir);
   const pythonBin = venvPythonPath(venvDir);
 
   // A schema bump means the env layout changed (not just package pins), so the
   // venv itself must be rebuilt, not merely reinstalled into.
-  const marker = readMarker(storageDir);
+  const marker = readMarker(environmentDir);
   const staleLayout = marker !== undefined && marker.schema !== ENV_SCHEMA_VERSION;
   if (recreate || staleLayout) {
     log(
@@ -258,7 +282,7 @@ async function runBootstrap(
         : `Env schema changed (${marker?.schema} -> ${ENV_SCHEMA_VERSION}), rebuilding venv at ${venvDir}`
     );
     fs.rmSync(venvDir, { recursive: true, force: true });
-    fs.rmSync(markerPath(storageDir), { force: true });
+    fs.rmSync(markerPath(environmentDir), { force: true });
   }
 
   if (!fs.existsSync(pythonBin)) {
@@ -277,12 +301,16 @@ async function runBootstrap(
   }
   throwIfCancelled(cancel);
 
-  const packages = [`pynesys-pynecore[all]==${PYNECORE_VERSION}`, `debugpy==${DEBUGPY_VERSION}`];
+  const packages = [
+    `pynesys-pynecore[all]${selection ? `==${selection}` : `>=${PYNECORE_MIN_VERSION}`}`,
+    `debugpy==${DEBUGPY_VERSION}`,
+  ];
 
   log(`Installing: ${packages.join(', ')}`);
   tracker.begin('packages', 'Resolving packages…');
   const installProgress = new UvInstallProgress();
-  await execChecked(uvBin, ['pip', 'install', '--python', pythonBin, ...packages], log, {
+  await execChecked(uvBin, ['pip', 'install', '--python', pythonBin,
+    ...(!selection ? ['--upgrade-package', 'pynesys-pynecore'] : []), ...packages], log, {
     env,
     timeoutMs: 600000,
     cancel,
@@ -304,7 +332,9 @@ async function runBootstrap(
     return runBootstrap({ ...options, recreate: true }, tracker);
   }
   if (verify.ok) {
-    fs.writeFileSync(markerPath(storageDir), JSON.stringify(currentMarker(), null, 2));
+    fs.writeFileSync(markerPath(environmentDir), JSON.stringify({
+      ...currentMarker(), pynecore: verify.pynecoreVersion, selection, checkedAt: Date.now(),
+    }, null, 2));
     log(
       `Environment ready: Python ${verify.pythonVersion}, ` +
         `pynecore ${verify.pynecoreVersion}, debugpy ${verify.debugpyVersion}`

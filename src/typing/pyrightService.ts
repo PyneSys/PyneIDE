@@ -98,7 +98,6 @@ export class PyrightService {
   private readonly statusItem: vscode.LanguageStatusItem;
   private syncing = false;
   private syncAgain = false;
-  private lastPushedPython?: string;
   private servesPython = false;
   private readonly analyzer: SeriesAnalyzer;
   /** Unfiltered diagnostics per document, for re-publishing after analysis. */
@@ -151,7 +150,7 @@ export class PyrightService {
       vscode.workspace.onDidOpenTextDocument((doc) => {
         if (isPythonSyntax(doc.languageId) && !this.client) void this.sync();
       }),
-      this.env.onDidChangeState((state) => {
+      this.env.onDidChangeProjectState(({ state }) => {
         if (state.kind === 'ready' || state.kind === 'error') {
           this.analyzer.refreshInterpreter();
           void this.pushEnvironment();
@@ -221,7 +220,7 @@ export class PyrightService {
    * folder named `workdir`, which the name-based search would claim.
    */
   private isPyneContext(): boolean {
-    if (resolvePyneIdeWorkdir()) return true;
+    if ((vscode.workspace.workspaceFolders ?? []).some((folder) => resolvePyneIdeWorkdir(folder))) return true;
     return vscode.workspace.textDocuments.some(
       (doc) => isPythonSyntax(doc.languageId) && this.isPyneDocument(doc)
     );
@@ -288,12 +287,14 @@ export class PyrightService {
   private reconcileIndexRule(ours: boolean): void {
     // Only a config we generated is ours to flip; a workdir without one belongs
     // to a project that never opted into the Pyne setup.
-    const workdir = resolvePyneIdeWorkdir();
-    if (!workdir) return;
-    if (ensurePyrightConfig(workdir.path, { preciseIndexFilter: ours })) {
-      this.output.appendLine(
-        `reportIndexIssue ${ours ? 'restored for the per-access filter' : 'suppressed for other checkers'}`
-      );
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const workdir = resolvePyneIdeWorkdir(folder);
+      if (!workdir) continue;
+      if (ensurePyrightConfig(workdir.path, { preciseIndexFilter: ours })) {
+        this.output.appendLine(
+          `reportIndexIssue ${ours ? 'restored for the per-access filter' : 'suppressed for other checkers'}`
+        );
+      }
     }
   }
 
@@ -319,7 +320,7 @@ export class PyrightService {
           configuration: async (params, token, next) => {
             const items = await next(params, token);
             if (!Array.isArray(items)) return items;
-            return params.items.map((item, i) => this.amendConfiguration(item.section, items[i]));
+            return params.items.map((item, i) => this.amendConfiguration(item.section, items[i], item.scopeUri ? vscode.Uri.parse(item.scopeUri) : undefined));
           },
         },
         handleDiagnostics: (uri, diagnostics, next) => {
@@ -346,7 +347,6 @@ export class PyrightService {
     this.client = client;
     try {
       await client.start();
-      this.lastPushedPython = this.readyPythonBin();
       const version = this.bundledVersion();
       this.output.appendLine(`pyright ${version} started (bundled, ${serverModule})`);
       this.setStatus({ kind: 'running', version });
@@ -361,7 +361,6 @@ export class PyrightService {
   private async stopClient(): Promise<void> {
     const client = this.client;
     this.client = undefined;
-    this.lastPushedPython = undefined;
     if (!client) return;
     try {
       if (client.state !== State.Stopped) await client.stop(5000);
@@ -371,8 +370,8 @@ export class PyrightService {
     await client.dispose();
   }
 
-  private readyPythonBin(): string | undefined {
-    const state = this.env.state;
+  private readyPythonBin(resource?: vscode.Uri): string | undefined {
+    const state = this.env.forResource(resource).state;
     return state.kind === 'ready' ? state.pythonBin : undefined;
   }
 
@@ -386,17 +385,17 @@ export class PyrightService {
    * own toggles. User/workspace settings for these sections pass through and
    * win where they exist.
    */
-  private amendConfiguration(section: string | undefined, value: unknown): unknown {
+  private amendConfiguration(section: string | undefined, value: unknown, resource?: vscode.Uri): unknown {
     const base = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
     if (section === 'python') {
       let amended = base;
-      const pythonBin = this.readyPythonBin();
+      const pythonBin = this.readyPythonBin(resource);
       if (pythonBin && !amended.pythonPath) amended = { ...amended, pythonPath: pythonBin };
       // The configless default instance (see `pyright` below) only requests
       // the `python` section and reads `analysis` nested inside it — this is
       // where its extraPaths must go so `pynecore` resolves from an editable
       // install, whose import-hook finder static analysis cannot follow.
-      const root = this.editablePynecoreRoot();
+      const root = this.editablePynecoreRoot(resource);
       const analysis =
         amended.analysis && typeof amended.analysis === 'object'
           ? (amended.analysis as Record<string, unknown>)
@@ -408,7 +407,7 @@ export class PyrightService {
     }
     if (section === 'python.analysis') {
       // Workspace instances request the flat section too; same default.
-      const root = this.editablePynecoreRoot();
+      const root = this.editablePynecoreRoot(resource);
       if (root && !hasEntries(base.extraPaths)) return { ...base, extraPaths: [root] };
       return base;
     }
@@ -422,8 +421,8 @@ export class PyrightService {
   }
 
   /** The pynecore source root when it is an editable/dev install; else undefined. */
-  private editablePynecoreRoot(): string | undefined {
-    const state = this.env.state;
+  private editablePynecoreRoot(resource?: vscode.Uri): string | undefined {
+    const state = this.env.forResource(resource).state;
     if (state.kind !== 'ready') return undefined;
     const root = state.verify.pynecoreRoot;
     if (!root || path.basename(root) === 'site-packages') return undefined;
@@ -436,9 +435,6 @@ export class PyrightService {
       void this.sync();
       return;
     }
-    const pythonBin = this.readyPythonBin();
-    if (pythonBin === this.lastPushedPython) return;
-    this.lastPushedPython = pythonBin;
     await this.client.sendNotification(DidChangeConfigurationNotification.type, {
       settings: null,
     });

@@ -7,6 +7,7 @@
  * from the sibling `<script>.toml` and are written back there on save,
  * preserving the rest of the file.
  */
+import { trackInterpreter } from '../env/usage';
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
 
@@ -78,7 +79,7 @@ export class InputsViewManager {
       return;
     }
 
-    const workdir = resolveWorkspaceWorkdir();
+    const workdir = resolveWorkspaceWorkdir(vscode.workspace.getWorkspaceFolder(scriptUri), path.dirname(scriptPath));
     if (!workdir?.exists) {
       void vscode.window.showWarningMessage(
         'PyneIDE: no Pyne workspace found — initialize one first.'
@@ -86,7 +87,7 @@ export class InputsViewManager {
       return;
     }
     const pythonBin = await this.manager.ensureReady(
-      'Reading a script\'s inputs uses the pyne bridge, so the Python environment must be set up first.'
+      'Reading a script\'s inputs uses the pyne bridge, so the Python environment must be set up first.', scriptUri
     );
     if (!pythonBin) return;
 
@@ -239,6 +240,7 @@ export class InputsViewManager {
         child.stdin.end(JSON.stringify(stdinJson));
       }
 
+      trackInterpreter(child, pythonBin);
       let settled = false;
       let stdoutBuf = '';
       const finish = (fn: () => void): void => {

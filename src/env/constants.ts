@@ -1,25 +1,11 @@
-/**
- * Pinned toolchain versions. Changing any of them already marks existing
- * installs outdated (the env.json marker carries all four), which reinstalls
- * into the venv in place. ENV_SCHEMA_VERSION is for LAYOUT changes only — it
- * wipes the venv, taking installed plugins with it.
- */
-
+/** Shared toolchain versions and the bundled Core documentation baseline. */
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.11.0';
+export const PYNECORE_VERSION = '6.11.1';
 export const DEBUGPY_VERSION = '1.8.21';
 
-/**
- * Minimum pynecore accepted when the user brings their own install. Kept equal
- * to PYNECORE_VERSION: the bridge contract is unversioned and only the pinned
- * release is ever tested against it, so an own install older than the pin would
- * be an untested pairing. Everything below 6.8.14 is additionally unusable —
- * `pynecore.core.ohlcv` (the self-describing v2 format the runner bridge imports
- * unconditionally) wrote through POSIX-only `os.pread`/`os.pwrite` before it, so
- * any OHLCV write died on Windows.
- */
-export const PYNECORE_MIN_VERSION = '6.11.0';
+/** Oldest supported Core release; independent of future documentation updates. */
+export const PYNECORE_MIN_VERSION = '6.11.1';
 
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;

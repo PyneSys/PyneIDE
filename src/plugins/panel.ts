@@ -8,7 +8,7 @@
  * each one. Detail payloads are fetched per selection and memoized for the
  * lifetime of the panel.
  *
- * One panel at a time (singleton): a second `show()` reveals the existing one.
+ * One panel per project: a second `show()` for that project reveals it.
  */
 import * as vscode from 'vscode';
 
@@ -19,7 +19,7 @@ import type { PluginsInMessage, PluginsOutMessage } from './messages';
 import { PluginActionError, type PluginRow, type PluginService } from './service';
 
 export class PluginsPanel {
-  private static current: PluginsPanel | undefined;
+  private static readonly panels = new Map<string, PluginsPanel>();
 
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
@@ -28,16 +28,15 @@ export class PluginsPanel {
   private busyRow: string | undefined;
 
   static show(context: vscode.ExtensionContext, service: PluginService): void {
-    if (PluginsPanel.current) {
-      PluginsPanel.current.panel.reveal(vscode.ViewColumn.Active);
-      return;
-    }
-    PluginsPanel.current = new PluginsPanel(context, service);
+    service = service.forResource();
+    const existing = PluginsPanel.panels.get(service.projectKey);
+    if (existing) { existing.panel.reveal(vscode.ViewColumn.Active); return; }
+    PluginsPanel.panels.set(service.projectKey, new PluginsPanel(context, service));
   }
 
   /** Re-post the model if the panel is open (an install elsewhere changed it). */
   static refresh(): void {
-    void PluginsPanel.current?.postModel();
+    for (const panel of PluginsPanel.panels.values()) void panel.postModel();
   }
 
   private constructor(
@@ -177,7 +176,7 @@ export class PluginsPanel {
   }
 
   private dispose(): void {
-    PluginsPanel.current = undefined;
+    PluginsPanel.panels.delete(this.service.projectKey);
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }

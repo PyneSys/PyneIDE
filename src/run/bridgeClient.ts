@@ -6,6 +6,7 @@
  * stdout, forwards stderr lines (pynecore logs + user print()s) to a log
  * callback, and writes control commands (pause/resume/step/cancel) to stdin.
  */
+import { trackInterpreter } from '../env/usage';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
@@ -282,6 +283,7 @@ export class BridgeRun {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
+    trackInterpreter(child, opts.pythonBin);
     let stdoutBuf = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {

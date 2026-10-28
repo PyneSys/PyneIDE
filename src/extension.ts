@@ -13,8 +13,7 @@ import { SymbolBrowserPanel, type SecurityPrefill } from './data/symbolBrowserPa
 import { SymbolMapPanel } from './data/symbolMapPanel';
 import { ChartBreakpointService } from './debug/chartBreakpoints';
 import { registerPyneDebug } from './debug/pyneDebug';
-import { currentMarker } from './env/bootstrap';
-import { PYNECORE_VERSION, SETUP_DOWNLOAD_MB } from './env/constants';
+import { SETUP_DOWNLOAD_MB } from './env/constants';
 import { EnvManager, type EnvState } from './env/manager';
 import { registerRemoveEnvironment } from './env/removeCommand';
 import { EnvStatusBar } from './env/statusBar';
@@ -65,15 +64,8 @@ import { registerLibraryHelp } from './workspace/libraryHelp';
 import { registerWorkspaceView } from './workspace/tree';
 
 const SETUP_PROMPTED_KEY = 'pyneide.setupPrompted';
-const UPDATE_PROMPTED_KEY = 'pyneide.updatePromptedFor';
 /** Must match `contributes.walkthroughs[].id` in package.json. */
 const WALKTHROUGH_ID = 'pyneide.gettingStarted';
-
-/** Stable tag of the pinned target, so an outdated-env prompt fires once per new pin. */
-function pinnedTargetTag(): string {
-  const m = currentMarker();
-  return `${m.schema}-${m.python}-${m.pynecore}-${m.debugpy}`;
-}
 
 export function activate(context: vscode.ExtensionContext): void {
   registerPyneLanguage(context);
@@ -111,7 +103,7 @@ export function activate(context: vscode.ExtensionContext): void {
   new EnvStatusBar(manager, auth, pineLs, plugins).register(context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.setup()),
+    vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.forResource().setup()),
     vscode.commands.registerCommand('pyneide.showEnvironmentLog', () => output.show()),
     vscode.commands.registerCommand('pyneide.openSettings', () =>
       vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
@@ -190,7 +182,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // pynecore lives for an editable/dev install, and which Python version to
   // analyze against (see reconcilePyrightConfig).
   context.subscriptions.push(
-    manager.onDidChangeState((state) => reconcilePyrightConfig(state))
+    manager.onDidChangeProjectState(({ manager: project, state }) => {
+      const folder = project.projectUri && vscode.workspace.getWorkspaceFolder(project.projectUri);
+      reconcilePyrightConfig(state, folder);
+    })
   );
   reconcilePyrightConfig(manager.state);
 
@@ -280,7 +275,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   watchForLostPlugins(context, manager, plugins);
-  void initialCheck(context, manager);
+  void initialCheck(context, manager).then(() => manager.autoUpdateCheck());
+  const updateTimer = setInterval(() => void manager.autoUpdateCheck(), 60 * 60 * 1000);
+  context.subscriptions.push({ dispose: () => clearInterval(updateTimer) });
   void pineLs.initialize();
 }
 
@@ -295,7 +292,9 @@ async function openSymbolBrowser(
   output: vscode.OutputChannel,
   prefill?: SecurityPrefill
 ): Promise<void> {
-  const workdir = resolveWorkspaceWorkdir();
+  manager = manager.forResource(prefill ? vscode.Uri.file(prefill.chartKey ?? prefill.workdir) : undefined);
+  const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
+  const workdir = prefill ? { path: prefill.workdir, exists: fs.existsSync(prefill.workdir) } : resolveWorkspaceWorkdir(folder);
   if (!workdir?.exists) {
     void vscode.window.showWarningMessage(
       'PyneIDE: no Pyne workspace found — initialize one first.'
@@ -329,7 +328,9 @@ async function legacyDownloadWizard(
   manager: EnvManager,
   output: vscode.OutputChannel
 ): Promise<void> {
-  const workdir = resolveWorkspaceWorkdir();
+  manager = manager.forResource();
+  const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
+  const workdir = resolveWorkspaceWorkdir(folder);
   if (!workdir?.exists) return;
   const pythonBin = await manager.ensureReady(
     'Downloading OHLCV data uses the pyne CLI, so the Python environment must be set up first.'
@@ -407,14 +408,14 @@ async function dataFileAction(
 ): Promise<void> {
   const uri = node?.uri;
   if (!uri) return;
-  const workdir = resolveWorkspaceWorkdir();
+  const workdir = resolveWorkspaceWorkdir(vscode.workspace.getWorkspaceFolder(uri), path.dirname(uri.fsPath));
   if (!workdir?.exists) {
     void vscode.window.showWarningMessage(
       'PyneIDE: no Pyne workspace found — initialize one first.'
     );
     return;
   }
-  const pythonBin = await manager.ensureReady(
+  const pythonBin = await manager.forResource(uri).ensureReady(
     'Downloading OHLCV data needs the pyne provider service, so the Python environment must be set up first.'
   );
   if (!pythonBin) return;
@@ -488,88 +489,68 @@ function watchForLostPlugins(
   manager: EnvManager,
   plugins: PluginService
 ): void {
-  let running = false;
-  let declined = false;
-  let retryRequested = false;
-  const check = async (state: EnvState): Promise<void> => {
-    if (state.kind !== 'ready' || running || declined) return;
-    running = true;
+  const status = new Map<string, { running: boolean; declined: boolean }>();
+  const check = async (project: EnvManager, state: EnvState): Promise<void> => {
+    const key = project.projectUri?.toString();
+    if (!key || state.kind !== 'ready') return;
+    const progress = status.get(key) ?? { running: false, declined: false };
+    status.set(key, progress);
+    if (progress.running || progress.declined) return;
+    progress.running = true;
+    const service = plugins.forResource(project.projectUri);
+    let retryRequested = false;
     try {
-      const missing = await plugins.missingManagedPlugins();
-      if (missing.length === 0) return;
-      const names = missing.map((p) => p.package).join(', ');
+      const missing = await service.missingManagedPlugins();
+      if (!missing.length) return;
       const choice = await vscode.window.showInformationMessage(
-        `PyneIDE: ${missing.length} plugin${missing.length > 1 ? 's are' : ' is'} ` +
-          `missing from the Python environment (${names}). Reinstall?`,
-        'Reinstall',
-        'Not Now'
+        `PyneIDE: ${missing.length} previously installed plugin(s) are missing from ` +
+        `${path.basename(project.projectUri!.fsPath)} (${missing.map((p) => p.package).join(', ')}). Reinstall?`,
+        'Reinstall', 'Not Now'
       );
-      if (choice !== 'Reinstall') {
-        declined = true;
-        return;
-      }
-      await plugins.restoreManagedPlugins(missing);
+      if (choice !== 'Reinstall') { progress.declined = true; return; }
+      await service.restoreManagedPlugins(missing);
     } catch (err) {
       await showNetworkError({
-        headline: 'reinstalling plugins failed',
-        error: err,
+        headline: 'reinstalling plugins failed', error: err,
         target: pypiTarget('Reinstalling plugins'),
-        // Started after the finally: `running` is only cleared there.
-        retry: () => {
-          retryRequested = true;
-        },
+        retry: () => { retryRequested = true; },
       });
-    } finally {
-      running = false;
-    }
-    if (retryRequested) {
-      retryRequested = false;
-      await check(state);
-    }
+    } finally { progress.running = false; }
+    if (retryRequested) await check(project, state);
   };
-  context.subscriptions.push(manager.onDidChangeState((state) => void check(state)));
-  void check(manager.state);
+  context.subscriptions.push(manager.onDidChangeProjectState(({ manager: project, state }) => void check(project, state)));
 }
 
 async function initialCheck(
   context: vscode.ExtensionContext,
   manager: EnvManager
 ): Promise<void> {
-  const state = await manager.check();
+  await Promise.all((vscode.workspace.workspaceFolders ?? []).map(
+    (folder) => manager.forProject(folder.uri).check()
+  ));
+  const project = manager.forResource();
+  if (!project.projectUri) return;
+  const state = project.state;
   if (state.kind !== 'needs-setup') return;
-
+  const folder = vscode.workspace.getWorkspaceFolder(project.projectUri);
+  const hasPyneDocument = vscode.workspace.textDocuments.some((document) =>
+    vscode.workspace.getWorkspaceFolder(document.uri)?.uri.toString() === project.projectUri!.toString() &&
+    (document.languageId === 'pine' || document.languageId === 'pyne')
+  );
+  if (!resolvePyneIdeWorkdir(folder) && !hasPyneDocument && !project.selection) return;
   if (state.cause === 'outdated') {
-    // The env already worked; a new extension release bumped the pinned
-    // versions. Prompt once per new pin so declining ("Later") does not renag
-    // every window, but the next update prompts again.
-    const tag = pinnedTargetTag();
-    if (context.globalState.get<string>(UPDATE_PROMPTED_KEY) === tag) return;
-    await context.globalState.update(UPDATE_PROMPTED_KEY, tag);
-    const choice = await vscode.window.showInformationMessage(
-      `PyneIDE bundles a new PyneCore (${PYNECORE_VERSION}). ` +
-        'Update the Python environment now?',
-      'Update Now',
-      'Later'
-    );
-    if (choice === 'Update Now') {
-      await manager.setup();
-    }
+    await project.setup();
     return;
   }
-
-  // First install (missing): ask once instead of silently downloading ~80 MB.
-  if (context.globalState.get<boolean>(SETUP_PROMPTED_KEY)) return;
-  await context.globalState.update(SETUP_PROMPTED_KEY, true);
+  const promptKey = `${SETUP_PROMPTED_KEY}:${project.projectUri.toString()}`;
+  if (context.globalState.get<boolean>(promptKey)) return;
+  await context.globalState.update(promptKey, true);
   const choice = await vscode.window.showInformationMessage(
-    'PyneIDE needs a Python environment to run Pyne scripts ' +
-      `(downloads uv + Python + PyneCore into extension storage, ~${SETUP_DOWNLOAD_MB} MB, ` +
-      'a few minutes on a typical connection). Set it up now?',
-    'Setup Now',
-    'Later'
+    'PyneIDE needs a Python environment for this project ' +
+      `(first setup downloads about ${SETUP_DOWNLOAD_MB} MB; shared downloads are reused). Set it up now?`,
+    'Setup Now', 'Later'
   );
-  if (choice === 'Setup Now') {
-    await manager.setup();
-  }
+  if (choice === 'Setup Now') await project.setup();
 }
 
 /**
@@ -618,17 +599,19 @@ async function takeOverPythonAnalysis(): Promise<boolean> {
  *   `pythonVersion` alone does not do: a wheel install gets no `extraPaths`,
  *   so an editor aimed at another interpreter would not find `pynecore` at all.
  */
-function reconcilePyrightConfig(state: EnvState): void {
+function reconcilePyrightConfig(state: EnvState, folder?: vscode.WorkspaceFolder): void {
   if (state.kind !== 'ready') return;
-  const workdir = resolvePyneIdeWorkdir();
+  const workdir = resolvePyneIdeWorkdir(folder);
   if (!workdir) return;
   const root = state.verify.pynecoreRoot;
   const editable = root !== undefined && path.basename(root) !== 'site-packages';
-  ensurePyrightConfig(workdir.path, {
+  const options = {
     extraPaths: editable && root ? [root] : [],
     pythonVersion: state.verify.pythonVersion,
     pythonBin: state.pythonBin,
-  });
+  };
+  ensurePyrightConfig(workdir.path, options);
+  if (folder && folder.uri.fsPath !== workdir.path) ensurePyrightConfig(folder.uri.fsPath, options);
 }
 
 /**
@@ -658,6 +641,18 @@ async function initProjectCommand(
   manager: EnvManager,
   output: vscode.OutputChannel
 ): Promise<void> {
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const folder = (activeUri && vscode.workspace.getWorkspaceFolder(activeUri)) ?? vscode.workspace.workspaceFolders?.[0];
+  let projectUri = folder?.uri;
+  if (!projectUri) {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+      openLabel: 'Initialize Pyne project here',
+    });
+    projectUri = picked?.[0];
+    if (!projectUri) return;
+  }
+  manager = manager.forProject(projectUri);
   const pyneBin = await ensurePyneCli(manager);
   if (!pyneBin) return;
   const log = (msg: string): void => output.appendLine(msg);
@@ -676,7 +671,6 @@ async function initProjectCommand(
     });
   };
 
-  const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
     const choice = await vscode.window.showQuickPick(
       [
@@ -737,15 +731,7 @@ async function initProjectCommand(
     return;
   }
 
-  // No folder open: pick one, scaffold it as the project root, then open it.
-  const picked = await vscode.window.showOpenDialog({
-    canSelectFiles: false,
-    canSelectFolders: true,
-    canSelectMany: false,
-    openLabel: 'Initialize Pyne project here',
-  });
-  const baseDir = picked?.[0]?.fsPath;
-  if (!baseDir) return;
+  const baseDir = projectUri.fsPath;
 
   try {
     const result = await scaffoldWorkdirWithCli(pyneBin, baseDir, log);

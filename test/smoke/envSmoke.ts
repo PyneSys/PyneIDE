@@ -19,6 +19,7 @@ import {
 import { CancelSource, CancelledError, isCancelledError } from '../../src/env/cancel';
 import { DEBUGPY_VERSION, PYNECORE_VERSION } from '../../src/env/constants';
 import { execChecked } from '../../src/env/exec';
+import { installPackages } from '../../src/env/packages';
 import {
   SETUP_TARGET,
   apiTarget,
@@ -723,6 +724,35 @@ async function managedUpgradeSmoke(pythonBin: string, storageDir: string): Promi
   }
 }
 
+/** A plugin dependency must never move the project's installed Core. */
+async function pluginCoreConstraintSmoke(pythonBin: string, storageDir: string): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-plugin-constraint-'));
+  try {
+    const wheel = path.join(root, 'pyneide_conflict-1.0.0-py3-none-any.whl');
+    const script = [
+      'import sys, zipfile',
+      'with zipfile.ZipFile(sys.argv[1], "w") as wheel:',
+      '    wheel.writestr("pyneide_conflict-1.0.0.dist-info/METADATA", "Metadata-Version: 2.1\\nName: pyneide-conflict\\nVersion: 1.0.0\\nRequires-Dist: pynesys-pynecore>=999.0.0\\n")',
+      '    wheel.writestr("pyneide_conflict-1.0.0.dist-info/WHEEL", "Wheel-Version: 1.0\\nGenerator: test\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n")',
+      '    wheel.writestr("pyneide_conflict-1.0.0.dist-info/RECORD", "")',
+    ].join('\n');
+    await execChecked(pythonBin, ['-c', script, wheel], log);
+    const versionScript = 'from importlib.metadata import version; print(version("pynesys-pynecore"))';
+    const before = (await execChecked(pythonBin, ['-c', versionScript], log)).stdout.trim();
+    let rejected = false;
+    try {
+      await installPackages({ storageDir, pythonBin, packages: [wheel], pynecoreVersion: before, log });
+    } catch (err) {
+      if (!String(err).includes('999.0.0')) throw err;
+      rejected = true;
+    }
+    if (!rejected) throw new Error('Conflicting plugin installation unexpectedly succeeded');
+    const after = (await execChecked(pythonBin, ['-c', versionScript], log)).stdout.trim();
+    if (before !== after) throw new Error('Plugin installation changed the selected Core');
+    log('Conflicting plugin rejected; selected Core preserved');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
 async function main(): Promise<void> {
   sourcemapUnitTests();
   setupProgressUnitTests();
@@ -732,9 +762,15 @@ async function main(): Promise<void> {
   log(`Storage dir: ${storageDir}`);
 
   const proxyUrl = process.env.HTTPS_PROXY || process.env.https_proxy || undefined;
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-project-'));
+  const environmentDir = path.join(projectRoot, '.pyneide');
+  const selectedCore = process.env.PYNEIDE_TEST_CORE === 'latest' ? ''
+    : process.env.PYNEIDE_TEST_CORE ?? PYNECORE_VERSION;
   const progressFeed: SetupProgress[] = [];
   const { pythonBin, verify } = await bootstrapManagedEnv({
     storageDir,
+    environmentDir,
+    pynecoreVersion: selectedCore,
     log,
     proxyUrl,
     progress: (p) => progressFeed.push(p),
@@ -754,11 +790,12 @@ async function main(): Promise<void> {
   }
   const url = progressFeed.find((p) => p.message.includes('://'));
   if (url) throw new Error(`setup progress label contains a URL: ${url.message}`);
-  if (pythonBin !== venvPythonPath(managedVenvDir(storageDir))) {
+  if (pythonBin !== venvPythonPath(managedVenvDir(environmentDir))) {
     throw new Error('Unexpected python path for managed venv');
   }
 
   await managedUpgradeSmoke(pythonBin, storageDir);
+  await pluginCoreConstraintSmoke(pythonBin, storageDir);
 
   // The pyne CLI must start from the venv.
   const pyneBin = pyneBinPath(pythonBin);

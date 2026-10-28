@@ -5,12 +5,7 @@ import { markerPath } from './bootstrap';
 import type { Logger } from './constants';
 import { managedPythonDir, managedVenvDir, uvDir } from './uv';
 
-/**
- * Everything PyneIDE downloads lives in globalStorage, which VS Code does NOT
- * delete when the extension is uninstalled — without this module the ~250 MB
- * managed environment is only removable by hand. Kept vscode-free like the
- * rest of src/env; the command UI lives in `removeCommand.ts`.
- */
+/** Project environments and the shared language server can be removed separately. */
 
 export type RemovableId = 'python' | 'pine-ls';
 
@@ -30,6 +25,8 @@ export interface RemovableComponent {
  * its one-way dependencies).
  */
 export interface ComponentLocations {
+  /** Only this project's venv is removable; shared tools and legacy venv stay intact. */
+  projectDir?: string;
   /** `src/pinels/installer.ts` `pineLsRoot()`. */
   pineLsRoot: string;
   /** `src/plugins/installed.ts` `cliWorkdir()`. */
@@ -45,21 +42,27 @@ export async function removableComponents(
   storageDir: string,
   locations: ComponentLocations
 ): Promise<RemovableComponent[]> {
-  const python = [
+  const python = (locations.projectDir ? [
+    managedVenvDir(locations.projectDir),
+    markerPath(locations.projectDir),
+    locations.cliWorkdir,
+  ] : [
     uvDir(storageDir),
     managedPythonDir(storageDir),
     managedVenvDir(storageDir),
     markerPath(storageDir),
     locations.cliWorkdir,
-  ].filter((target) => fs.existsSync(target));
+  ]).filter((target) => fs.existsSync(target));
   const pineLs = [locations.pineLsRoot].filter((target) => fs.existsSync(target));
 
   const components: RemovableComponent[] = [];
   if (python.length > 0) {
     components.push({
       id: 'python',
-      label: 'Python environment',
-      note: 'uv, the standalone Python, the virtual environment and any installed plugins',
+      label: locations.projectDir ? 'Project Python environment' : 'Python environment',
+      note: locations.projectDir
+        ? 'This project’s virtual environment and installed plugins; shared Python and other projects are kept'
+        : 'uv, the standalone Python, the virtual environment and any installed plugins',
       paths: python,
       bytes: await totalBytes(python),
     });
@@ -68,7 +71,7 @@ export async function removableComponents(
     components.push({
       id: 'pine-ls',
       label: 'Pine language server',
-      note: 'Installing it again needs an internet connection',
+      note: 'Shared by all projects; installing it again needs an internet connection',
       paths: pineLs,
       bytes: await totalBytes(pineLs),
     });

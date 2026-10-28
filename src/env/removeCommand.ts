@@ -18,13 +18,7 @@ interface PickItem extends vscode.QuickPickItem {
   component: RemovableComponent;
 }
 
-/**
- * "Remove Environment" and "Reveal Environment Folder".
- *
- * Uninstalling the extension leaves globalStorage behind, so without a remove
- * command the only way to get the disk space back is to find the folder by
- * hand — which is also why Reveal sits next to it.
- */
+/** Remove the selected project's environment, or reveal its directory. */
 export function registerRemoveEnvironment(
   context: vscode.ExtensionContext,
   manager: EnvManager,
@@ -34,12 +28,13 @@ export function registerRemoveEnvironment(
   const storageDir = context.globalStorageUri.fsPath;
   return [
     vscode.commands.registerCommand('pyneide.removeEnvironment', () =>
-      removeEnvironment(storageDir, manager, pineLs, output)
+      removeEnvironment(storageDir, manager.forResource(), pineLs, output)
     ),
     vscode.commands.registerCommand('pyneide.revealEnvironmentFolder', async () => {
-      // globalStorage is created lazily, so it may not exist before a setup.
-      await fs.promises.mkdir(storageDir, { recursive: true });
-      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(storageDir));
+      const directory = manager.environmentDir;
+      if (!directory) return;
+      await fs.promises.mkdir(directory, { recursive: true });
+      await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(directory));
     }),
   ];
 }
@@ -50,7 +45,8 @@ async function removeEnvironment(
   pineLs: PineLsService,
   output: vscode.OutputChannel
 ): Promise<void> {
-  if (manager.state.kind === 'working') {
+  if (!manager.environmentDir) return;
+  if (manager.busy || manager.state.kind === 'working') {
     void vscode.window.showInformationMessage(
       'PyneIDE: the environment is busy. Wait for it to finish (or cancel it) before removing it.'
     );
@@ -61,8 +57,9 @@ async function removeEnvironment(
     { location: vscode.ProgressLocation.Window, title: 'PyneIDE: measuring the environment…' },
     () =>
       removableComponents(storageDir, {
+        projectDir: manager.environmentDir,
         pineLsRoot: pineLsRoot(storageDir),
-        cliWorkdir: cliWorkdirPath(storageDir),
+        cliWorkdir: cliWorkdirPath(manager.environmentDir!),
       })
   );
   if (components.length === 0) {
@@ -76,7 +73,7 @@ async function removeEnvironment(
     components.map((component) => toItem(component)),
     {
       title: 'PyneIDE — Remove Environment',
-      placeHolder: 'Select what to delete from PyneIDE storage',
+      placeHolder: 'Select the project environment or shared language server to delete',
       canPickMany: true,
     }
   );

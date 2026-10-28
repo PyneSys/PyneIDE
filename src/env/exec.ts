@@ -1,3 +1,4 @@
+import { trackInterpreter } from './usage';
 import { spawn } from 'node:child_process';
 
 import { CancelledError, type CancelToken } from './cancel';
@@ -63,6 +64,7 @@ export function execProcess(
       cwd: options.cwd,
       windowsHide: true,
     });
+    trackInterpreter(child, command);
     let stdout = '';
     let stderr = '';
 

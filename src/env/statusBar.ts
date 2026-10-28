@@ -98,7 +98,7 @@ export class EnvStatusBar {
 
   private update(state: EnvState): void {
     this.item.backgroundColor = undefined;
-    // A missing environment is a global fact, and calling for attention about
+    // A missing environment belongs to the selected project, and calling for attention about
     // it in a window with no Pyne work in it is just noise — a JS project has
     // nothing to set up. The state is still reported, only without the colour.
     const wanted = this.isWantedHere();
@@ -135,7 +135,7 @@ export class EnvStatusBar {
       case 'ready': {
         this.item.text = '$(check) PyneIDE';
         const source =
-          state.source === 'managed' ? 'managed environment' : `custom (${state.source})`;
+          state.source === 'managed' ? 'project environment' : `custom (${state.source})`;
         const versions =
           `Python ${state.verify.pythonVersion}, ` +
           `pynecore ${state.verify.pynecoreVersion}, debugpy ${state.verify.debugpyVersion}`;
@@ -248,7 +248,7 @@ export class EnvStatusBar {
         },
         {
           label: '$(trash) Remove Environment…',
-          description: 'Delete what PyneIDE downloaded and free the disk space',
+          description: 'Remove this project’s environment or the shared language server',
           action: () => void vscode.commands.executeCommand('pyneide.removeEnvironment'),
         },
         {
@@ -257,7 +257,7 @@ export class EnvStatusBar {
         },
         {
           label: '$(folder-opened) Reveal Environment Folder',
-          description: 'Where PyneIDE keeps Python, PyneCore and the Pine language server',
+          description: 'This project’s virtual environment and PyneCore packages',
           action: () => void vscode.commands.executeCommand('pyneide.revealEnvironmentFolder'),
         },
         {

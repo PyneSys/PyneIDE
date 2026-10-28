@@ -305,7 +305,7 @@ export class RunService {
       return undefined;
     }
     const pythonBin = await this.manager.ensureReady(
-      'Selecting data needs the Python environment. Set it up now?'
+      'Selecting data needs the Python environment. Set it up now?', doc.uri
     );
     if (!pythonBin) return undefined;
     const workdir = await this.resolveOrInitWorkdir(doc, doc.uri.fsPath);
@@ -396,7 +396,7 @@ export class RunService {
     }
 
     const pythonBin = await this.manager.ensureReady(
-      'Previewing OHLCV data needs the Python environment. Set it up now?'
+      'Previewing OHLCV data needs the Python environment. Set it up now?', doc.uri
     );
     if (!pythonBin) return;
     let data = rememberedData;
@@ -778,7 +778,7 @@ export class RunService {
 
     this.output.appendLine(`Compiled OK, checking Python environment for: ${scriptPath}`);
     const pythonBin = await this.manager.ensureReady(
-      'Running Pyne scripts needs the Python environment. Set it up now?'
+      'Running Pyne scripts needs the Python environment. Set it up now?', doc.uri
     );
     if (!pythonBin) {
       this.output.appendLine('Run stopped: no Python environment available.');
@@ -887,7 +887,7 @@ export class RunService {
     }
 
     const pythonBin = await this.manager.ensureReady(
-      'Checking data requirements needs the Python environment. Set it up now?'
+      'Checking data requirements needs the Python environment. Set it up now?', doc.uri
     );
     if (!pythonBin) return;
     const workdir = await this.resolveOrInitWorkdir(doc, scriptPath);

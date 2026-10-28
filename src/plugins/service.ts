@@ -17,7 +17,7 @@ import * as vscode from 'vscode';
 import type { AuthService } from '../api/auth';
 import type { EnvManager } from '../env/manager';
 import { pyneBinPath } from '../env/uv';
-import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
+import { resolvePyneIdeWorkdir, resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { apiTarget, explainError, type NetworkTarget } from '../net/errors';
 import {
   fetchPluginDetail,
@@ -121,6 +121,9 @@ export class PluginService {
   /** Fires after an install/uninstall, so views can re-read the model. */
   readonly onDidChange = this.changeEmitter.event;
 
+  private readonly projects = new Map<string, PluginService>();
+  private readonly subscriptions: vscode.Disposable[] = [];
+
   private inFlight: Promise<PluginsModel> | undefined;
 
   constructor(
@@ -132,7 +135,24 @@ export class PluginService {
 
   dispose(): void {
     this.changeEmitter.dispose();
+    for (const subscription of this.subscriptions) subscription.dispose();
+    for (const service of this.projects.values()) service.dispose();
   }
+
+  forResource(resource?: vscode.Uri): PluginService {
+    const manager = this.manager.forResource(resource);
+    if (manager === this.manager) return this;
+    const key = manager.projectUri!.toString();
+    let service = this.projects.get(key);
+    if (!service) {
+      service = new PluginService(this.context, manager, this.auth, this.output);
+      this.projects.set(key, service);
+      this.subscriptions.push(service.onDidChange(() => this.changeEmitter.fire()));
+    }
+    return service;
+  }
+
+  get projectKey(): string { return this.manager.projectUri?.toString() ?? ''; }
 
   private log = (message: string): void => this.output.appendLine(message);
 
@@ -147,6 +167,8 @@ export class PluginService {
    * cache window.
    */
   async model(refresh = false): Promise<PluginsModel> {
+    const project = this.forResource();
+    if (project !== this) return project.model(refresh);
     // Concurrent callers (panel + status bar + tree) share one build.
     if (!refresh && this.inFlight) return this.inFlight;
     const build = this.buildModel(refresh).finally(() => {
@@ -343,8 +365,9 @@ export class PluginService {
    * there); without one a private scratch workdir keeps the CLI from prompting.
    */
   private workdir(): string {
-    const resolved = resolveWorkdirSafely();
-    return resolved ?? cliWorkdir(this.context.globalStorageUri.fsPath);
+    const folder = this.manager.projectUri && vscode.workspace.getWorkspaceFolder(this.manager.projectUri);
+    const resolved = resolveWorkdirSafely(folder);
+    return resolved ?? cliWorkdir(this.manager.environmentDir ?? this.context.globalStorageUri.fsPath);
   }
 
   // --- mutations -----------------------------------------------------------
@@ -354,6 +377,8 @@ export class PluginService {
    * declined the trust prompt.
    */
   async install(row: PluginRow): Promise<boolean> {
+    const project = this.forResource();
+    if (project !== this) return project.install(row);
     await this.requireInstallableEnvironment();
     if (row.blockedReason) {
       throw new PluginActionError(row.blockedReason, 'pynecore');
@@ -372,6 +397,8 @@ export class PluginService {
   }
 
   async uninstall(row: PluginRow): Promise<void> {
+    const project = this.forResource();
+    if (project !== this) return project.uninstall(row);
     await this.requireInstallableEnvironment();
     try {
       await this.manager.uninstallPackages([row.package], `PyneIDE: Removing ${row.package}…`);
@@ -411,20 +438,33 @@ export class PluginService {
   // --- managed-package bookkeeping ----------------------------------------
 
   managedPlugins(): ManagedPlugin[] {
-    return this.context.globalState.get<ManagedPlugin[]>(MANAGED_KEY) ?? [];
+    const project = this.forResource();
+    if (project !== this) return project.managedPlugins();
+    const key = this.managedKey();
+    const existing = this.context.globalState.get<ManagedPlugin[]>(key);
+    if (existing) return existing;
+    const folder = this.manager.projectUri && vscode.workspace.getWorkspaceFolder(this.manager.projectUri);
+    const legacy = folder && resolvePyneIdeWorkdir(folder)
+      ? this.context.globalState.get<ManagedPlugin[]>(MANAGED_KEY) ?? [] : [];
+    void this.context.globalState.update(key, legacy);
+    return legacy;
+  }
+
+  private managedKey(): string {
+    return `${MANAGED_KEY}:${this.projectKey}`;
   }
 
   private async rememberManaged(pkg: string, version: string): Promise<void> {
     const key = normalizePackageName(pkg);
     const next = this.managedPlugins().filter((p) => normalizePackageName(p.package) !== key);
     next.push({ package: pkg, version });
-    await this.context.globalState.update(MANAGED_KEY, next);
+    await this.context.globalState.update(this.managedKey(), next);
   }
 
   private async forgetManaged(pkg: string): Promise<void> {
     const key = normalizePackageName(pkg);
     await this.context.globalState.update(
-      MANAGED_KEY,
+      this.managedKey(),
       this.managedPlugins().filter((p) => normalizePackageName(p.package) !== key)
     );
   }
@@ -435,6 +475,8 @@ export class PluginService {
    * so a broken environment never looks like "everything vanished".
    */
   async missingManagedPlugins(): Promise<ManagedPlugin[]> {
+    const project = this.forResource();
+    if (project !== this) return project.missingManagedPlugins();
     const managed = this.managedPlugins();
     if (managed.length === 0) return [];
     const installed = await this.loadInstalled();
@@ -445,6 +487,8 @@ export class PluginService {
 
   /** Reinstall what a venv rebuild removed, in one uv call. */
   async restoreManagedPlugins(plugins: ManagedPlugin[]): Promise<void> {
+    const project = this.forResource();
+    if (project !== this) return project.restoreManagedPlugins(plugins);
     if (plugins.length === 0) return;
     await this.requireInstallableEnvironment();
     const requirements = plugins.map((p) => (p.version ? `${p.package}==${p.version}` : p.package));
@@ -456,6 +500,7 @@ export class PluginService {
     } catch (err) {
       throw new PluginActionError(err instanceof Error ? err.message : String(err), 'failed');
     }
+    for (const plugin of plugins) await this.rememberManaged(plugin.package, plugin.version);
     this.changeEmitter.fire();
   }
 }
@@ -504,9 +549,9 @@ function comparePluginRows(a: PluginRow, b: PluginRow): number {
 }
 
 /** The workspace workdir when one exists — never throws into the model build. */
-function resolveWorkdirSafely(): string | undefined {
+function resolveWorkdirSafely(folder?: vscode.WorkspaceFolder): string | undefined {
   try {
-    const resolved = resolveWorkspaceWorkdir();
+    const resolved = resolveWorkspaceWorkdir(folder);
     return resolved?.exists ? resolved.path : undefined;
   } catch {
     return undefined;

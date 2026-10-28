@@ -212,10 +212,12 @@ export function collectReport(
   failure: FailureRecord | undefined,
   clientVersion: string
 ): CollectedReport {
-  const { context, manager, pineLs } = deps;
-  const workdir = resolveWorkspaceWorkdir();
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const { context, pineLs } = deps;
   const script = resolveScript(failure);
+  const manager = deps.manager.forResource(script ? vscode.Uri.file(script.path) : undefined);
+  const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
+  const workdir = resolveWorkspaceWorkdir(folder);
+  const workspaceFolder = folder?.uri.fsPath;
   const marker = currentMarker();
 
   // All five roots matter: env/exec.ts logs the whole spawn command line, which
@@ -250,6 +252,7 @@ export function collectReport(
       debugpy: marker.debugpy,
       pynecore_min: PYNECORE_MIN_VERSION,
     },
+    pynecore_selection: vscode.workspace.getConfiguration('pyneide', manager.projectUri).get<string>('pynecore.version', ''),
     pynecore_version:
       manager.state.kind === 'ready' ? manager.state.verify.pynecoreVersion : undefined,
     env: collectEnv(manager),
