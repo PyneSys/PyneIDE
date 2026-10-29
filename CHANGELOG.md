@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-29
+
+### Added
+
+- `pyneide.pynecore.version` selects the PyneCore release per project. Left
+  empty, the project follows the latest stable release: updates install
+  automatically after the initial setup, checked at most once a day and
+  deferred while the environment is in use. An exact version, such as `6.11.1`,
+  keeps the project on that release, also when the environment is rebuilt.
+  The minimum supported release is 6.11.1.
+
+### Changed
+
+- Each project now has its own Python environment in `.pyneide/venv` instead of
+  one shared environment in extension storage. Different projects, including
+  folders opened in the same window, can use different PyneCore versions and
+  plugins. uv and the Python installations stay shared, so later projects reuse
+  the cached downloads. The `.pyneide` folder is hidden in the Explorer and
+  excluded from Git.
+- Environments from earlier PyneIDE releases are left untouched. For an
+  initialized project, PyneIDE offers to reinstall its previously recorded
+  plugins into the new environment.
+- Plugins install into the project's environment and keep its PyneCore
+  version: a plugin with an incompatible dependency fails to install instead of
+  upgrading the project's PyneCore.
+- **PyneIDE: Remove Environment** deletes the current project's environment
+  without removing the shared Python installations or another project's
+  packages. **PyneIDE: Reveal Environment Folder** opens the project's
+  environment folder.
+- `pyneide.venvPath` and `pyneide.pythonPath` can now be set per workspace, and
+  relative paths resolve against the workspace folder.
+- Update the bundled PyneCore documentation to 6.11.1.
+
 ### Fixed
 
 - The Performance tab's **Max drawdown** and **Max run-up** now show the
