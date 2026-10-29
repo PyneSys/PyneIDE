@@ -13,10 +13,17 @@ import * as path from 'node:path';
 export const BRIDGE_PROTOCOL_VERSION = 3;
 
 /**
- * One bar row: [timeMs, open, high, low, close, volume, plots, equity].
+ * The engine's running equity extremes after a bar:
+ * [maxDrawdown, maxDrawdownPct, maxRunup, maxRunupPct], the values
+ * `strategy.max_drawdown` / `strategy.max_runup` (and their percents) report.
+ */
+export type EquityExcursions = [number | null, number | null, number | null, number | null];
+
+/**
+ * One bar row: [timeMs, open, high, low, close, volume, plots, equity, excursions].
  * `plots` aligns to the most recent `plotKeys` event; rows may carry fewer
  * plot columns than the current key list (missing trailing values are null).
- * `equity` is only present for strategies.
+ * `equity` and `excursions` are only present for strategies.
  */
 export type BarRow = [
   number,
@@ -27,6 +34,7 @@ export type BarRow = [
   number | null,
   (number | null)[] | null,
   (number | null)?,
+  (EquityExcursions | null)?,
 ];
 
 export interface TradeRecord {

@@ -28,7 +28,14 @@ import {
   type VisibleRange,
 } from 'klinecharts';
 
-import type { BarRow, DrawingFamily, PlotMetaRecord, StartEvent, TradeRecord } from '../../run/bridgeClient';
+import type {
+  BarRow,
+  DrawingFamily,
+  EquityExcursions,
+  PlotMetaRecord,
+  StartEvent,
+  TradeRecord,
+} from '../../run/bridgeClient';
 import {
   CANDLE_STYLE_OPTIONS,
   DEFAULT_CANDLE_STYLE,
@@ -320,6 +327,7 @@ const PLOT_COLORS = [
 interface PyneBar extends KLineData {
   plots: (number | null)[];
   equity?: number | null;
+  excursions?: EquityExcursions | null;
 }
 
 interface RunState {
@@ -711,6 +719,7 @@ function rowToBar(row: BarRow): PyneBar {
     volume: row[5] ?? undefined,
     plots: row[6] ?? [],
     equity: row[7] ?? null,
+    excursions: row[8] ?? null,
   };
 }
 
@@ -2410,8 +2419,8 @@ function signClass(v: number | null | undefined): string {
   return v > 0 ? 'pos' : 'neg';
 }
 
-function signed(v: number): string {
-  return `${v > 0 ? '+' : ''}${fmt(v)}`;
+function signed(v: number | null): string {
+  return v === null ? '—' : `${v > 0 ? '+' : ''}${fmt(v)}`;
 }
 
 function percent(v: number | null): string {
@@ -2449,8 +2458,8 @@ function renderPerformanceSummary(summary: EquitySummary): string {
     ) +
     performanceMetric(
       'Max drawdown',
-      `−${fmt(summary.maxDrawdown)}`,
-      -summary.maxDrawdown,
+      summary.maxDrawdown === null ? '—' : `−${fmt(summary.maxDrawdown)}`,
+      summary.maxDrawdown === null ? null : -summary.maxDrawdown,
       summary.maxDrawdownPct === null ? '—' : `−${fmt(summary.maxDrawdownPct)}%`
     ) +
     performanceMetric('Final equity', fmt(summary.finalEquity), null)

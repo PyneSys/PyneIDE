@@ -24,13 +24,30 @@ FLUSH_AGE_SECONDS = 0.1
 _MISSING = object()
 
 
+def _equity_excursions(position: Any) -> list[float | None]:
+    """The engine's running equity extremes as
+    ``[max_drawdown, max_drawdown_percent, max_runup, max_runup_percent]``.
+
+    These are the values ``strategy.max_drawdown`` / ``strategy.max_runup``
+    report: measured from the realized high-water mark and run-up anchor to
+    the intrabar high/low marks. A curve of bar-close equity cannot rebuild
+    them, so the Performance view takes them from here.
+    """
+    return [
+        num_or_none(position.max_drawdown),
+        num_or_none(position.max_drawdown_percent),
+        num_or_none(position.max_runup),
+        num_or_none(position.max_runup_percent),
+    ]
+
+
 def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
     """Create pynecore's native writer with IDE-owned persistence fields.
 
     The source-data path lets a persisted chart recover its binding. Strategy
-    equity is stored on each bar because the plot CSV intentionally contains
-    plots only; without it a chart reopened from disk could not rebuild the
-    full-run performance curve.
+    equity and the engine's equity excursions are stored on each bar because
+    the plot CSV intentionally contains plots only; without them a chart
+    reopened from disk could not rebuild the full-run performance view.
     """
     from pynecore.core.viz import VizWriter
 
@@ -50,7 +67,8 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
                 if position is not None:
                     equity = float(position.equity) if position.equity \
                         else float(runner.script.initial_capital)
-                    obj = {**obj, "equity": num_or_none(equity)}
+                    obj = {**obj, "equity": num_or_none(equity),
+                           "excursions": _equity_excursions(position)}
             elif obj.get("t") == "end":
                 position = getattr(runner.script, "position", None)
                 if position is not None:
@@ -925,6 +943,7 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 equity = float(position.equity) if position and position.equity \
                     else runner.script.initial_capital
                 row.append(num_or_none(equity))
+                row.append(_equity_excursions(position) if position else None)
                 if len(item) > 2 and item[2]:
                     for trade in item[2]:
                         serialized = _serialize_trade(trade)

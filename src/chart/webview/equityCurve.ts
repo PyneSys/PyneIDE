@@ -1,6 +1,9 @@
+import type { EquityExcursions } from '../../run/bridgeClient';
+
 export interface EquitySample {
   timestamp: number;
   equity?: number | null;
+  excursions?: EquityExcursions | null;
 }
 
 export interface EquityPoint {
@@ -15,9 +18,9 @@ export interface EquitySummary {
   finalEquity: number;
   pnl: number;
   returnPct: number | null;
-  maxRunup: number;
+  maxRunup: number | null;
   maxRunupPct: number | null;
-  maxDrawdown: number;
+  maxDrawdown: number | null;
   maxDrawdownPct: number | null;
   minPnl: number;
   maxPnl: number;
@@ -183,6 +186,15 @@ export class EquityCrosshair {
   }
 }
 
+/**
+ * Summarize the equity samples for the Performance view.
+ *
+ * Run-up and drawdown are the engine's own values from the latest sample that
+ * carries them, the ones `strategy.max_runup` / `strategy.max_drawdown`
+ * report. The bar-close curve cannot reproduce them: the engine measures from
+ * the realized high-water mark to the intrabar high/low marks, while the
+ * curve sees open profit at the close only.
+ */
 export function calculateEquitySummary(
   samples: readonly EquitySample[],
   baseline?: number
@@ -195,33 +207,15 @@ export function calculateEquitySummary(
 
   const initialEquity =
     typeof baseline === 'number' && Number.isFinite(baseline) ? baseline : finite[0].equity;
-  let peak = initialEquity;
-  let trough = initialEquity;
-  let maxRunup = 0;
-  let maxRunupPct: number | null = null;
-  let maxDrawdown = 0;
-  let maxDrawdownPct: number | null = null;
   let minPnl = 0;
   let maxPnl = 0;
+  let excursions: EquityExcursions | null | undefined;
 
   const points = finite.map((sample) => {
     const pnl = sample.equity - initialEquity;
     minPnl = Math.min(minPnl, pnl);
     maxPnl = Math.max(maxPnl, pnl);
-
-    peak = Math.max(peak, sample.equity);
-    const drawdown = peak - sample.equity;
-    if (drawdown > maxDrawdown) {
-      maxDrawdown = drawdown;
-      maxDrawdownPct = peak === 0 ? null : (drawdown / Math.abs(peak)) * 100;
-    }
-
-    trough = Math.min(trough, sample.equity);
-    const runup = sample.equity - trough;
-    if (runup > maxRunup) {
-      maxRunup = runup;
-      maxRunupPct = trough === 0 ? null : (runup / Math.abs(trough)) * 100;
-    }
+    if (sample.excursions) excursions = sample.excursions;
     return { timestamp: sample.timestamp, equity: sample.equity, pnl };
   });
 
@@ -233,10 +227,10 @@ export function calculateEquitySummary(
     finalEquity,
     pnl,
     returnPct: initialEquity === 0 ? null : (pnl / Math.abs(initialEquity)) * 100,
-    maxRunup,
-    maxRunupPct,
-    maxDrawdown,
-    maxDrawdownPct,
+    maxRunup: excursions?.[2] ?? null,
+    maxRunupPct: excursions?.[3] ?? null,
+    maxDrawdown: excursions?.[0] ?? null,
+    maxDrawdownPct: excursions?.[1] ?? null,
     minPnl,
     maxPnl,
   };

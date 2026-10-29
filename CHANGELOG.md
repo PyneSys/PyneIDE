@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Performance tab's **Max drawdown** and **Max run-up** now show the
+  strategy engine's values, the same ones as `strategy.max_drawdown` /
+  `strategy.max_runup` and the **Stats** tab. They were computed from the
+  bar-close equity curve before, so they could differ from **Stats** on the
+  same run.
+
 ## [0.10.0] - 2026-10-25
 
 ### Added

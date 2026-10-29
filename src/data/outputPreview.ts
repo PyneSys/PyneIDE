@@ -19,6 +19,7 @@ import type {
   ColorEnc,
   DrawingFamily,
   DrawingEventRecord,
+  EquityExcursions,
   PlotMetaRecord,
   StartEvent,
   TradeRecord,
@@ -32,6 +33,7 @@ interface NativeRecord {
   kind?: string;
   time?: number;
   equity?: number | null;
+  excursions?: unknown;
   c?: Record<string, ColorEnc>;
   script?: Record<string, unknown>;
   syminfo?: Record<string, unknown>;
@@ -265,6 +267,7 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   const metas = new Map<string, PlotMetaRecord>();
   const colors: ColorDeltaRow[] = [];
   const equityByTime = new Map<number, number>();
+  const excursionsByTime = new Map<number, EquityExcursions>();
   let drawings: NativeRecord | undefined;
   let complete = false;
   let savedTrades: { closed: TradeRecord[]; open: TradeRecord[] } | undefined;
@@ -276,6 +279,14 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
       if (record.c) colors.push([record.time, record.c]);
       if (typeof record.equity === 'number' && Number.isFinite(record.equity)) {
         equityByTime.set(record.time, record.equity);
+      }
+      if (Array.isArray(record.excursions) && record.excursions.length === 4) {
+        excursionsByTime.set(
+          record.time,
+          record.excursions.map((v) =>
+            typeof v === 'number' && Number.isFinite(v) ? v : null
+          ) as EquityExcursions
+        );
       }
     } else if (record.t === 'drawings') {
       drawings = record;
@@ -289,6 +300,8 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   for (const bar of bars) {
     const equity = equityByTime.get(bar[0]);
     if (equity !== undefined) bar[7] = equity;
+    const excursions = excursionsByTime.get(bar[0]);
+    if (excursions !== undefined) bar[8] = excursions;
   }
 
   const script = hdr?.script ?? {};

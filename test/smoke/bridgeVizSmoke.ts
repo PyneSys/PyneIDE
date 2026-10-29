@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import assert from 'node:assert/strict';
 
+import { calculateEquitySummary } from '../../src/chart/webview/equityCurve';
 import { execProcess } from '../../src/env/exec';
 import {
   buildOutputPreview,
@@ -370,7 +371,25 @@ function assertNativeEquityFile(workdir: string, stem: string, liveEvents: Bridg
     fail(`strategy equity replay mismatch: ${replayed.length}/${persisted.length}`);
   }
   log(`Native strategy equity OK: ${persisted.length} bars`);
-  const trades = (events: BridgeEvent[], kind: 'trades' | 'openTrades') =>
+
+  // The Performance view's run-up/drawdown are the engine's values, so the
+  // last bar's excursions (live and replayed) must equal the end-of-run stats.
+  const stats = liveEvents.find((event) => event.e === 'stats');
+  if (!stats || stats.e !== 'stats') fail('strategy stats missing');
+  const expected = [
+    stats.d['Max Equity Drawdown'],
+    stats.d['Max Equity Drawdown %'],
+    stats.d['Max Equity Run-up'],
+    stats.d['Max Equity Run-up %'],
+  ];
+  const liveBars = liveEvents.flatMap((event) => event.e === 'bars' ? event.d : []);
+  assert.deepEqual(liveBars.at(-1)?.[8], expected, 'live excursions differ from strategy stats');
+  assert.deepEqual(bars.d.at(-1)?.[8], expected, 'replayed excursions differ from strategy stats');
+  assert.ok(calculateEquitySummary(
+    bars.d.map((bar) => ({ timestamp: bar[0], equity: bar[7], excursions: bar[8] })),
+    start.initialCapital
+  )?.maxDrawdown === expected[0], 'Performance summary must show the engine drawdown');
+  const trades =(events: BridgeEvent[], kind: 'trades' | 'openTrades') =>
     events.flatMap((event) => event.e === kind ? event.d : []);
   const liveClosed = trades(liveEvents, 'trades');
   const liveOpen = trades(liveEvents, 'openTrades');
