@@ -36,6 +36,7 @@ import { logHub } from '../report/logTee';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
 import { getRememberedData, pickRunData } from './dataSelect';
+import { runtimeErrorLocation } from './runtimeError';
 import {
   SecurityDataService,
   type SecurityRequirementItem,
@@ -79,7 +80,7 @@ export class RunService {
   // channel created without it silently falls back to plaintext and loses the
   // level/timestamp colouring (microsoft/vscode#176902, closed as not planned).
   private readonly output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Run', 'log'));
-  /** Runtime errors mapped back to the Pine source via the .py.map sourcemap. */
+  /** Runtime errors on Pyne sources, or Pine sources via the .py.map sourcemap. */
   private readonly runtimeDiagnostics = vscode.languages.createDiagnosticCollection('pyne-runtime');
   private readonly statusItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -1277,7 +1278,6 @@ export class RunService {
     let errorMessage: string | undefined;
     let errorKind: string | undefined;
     let errorTraceback: string | undefined;
-    let errorPineLocation: { pinePath: string; pineLine: number } | undefined;
     const trades: TradeRecord[] = [];
     let endBars = 0;
     let cancelled = false;
@@ -1366,19 +1366,13 @@ export class RunService {
             errorKind = event.kind;
             errorTraceback = event.traceback;
             this.output.appendLine(event.traceback);
-            // Map traceback frames back to the Pine source (needs the
-            // .py.map written at compile time); the deepest mapped frame
-            // is where the user should look.
+            // Add Pine locations alongside the raw traceback in the log.
             try {
               const frames = mapTracebackFrames(event.traceback);
-              const deepest = frames[frames.length - 1];
-              if (deepest) {
-                errorPineLocation = deepest;
-                for (const f of frames) {
-                  this.output.appendLine(
-                    `  -> ${path.basename(f.pinePath)}:${f.pineLine} (${path.basename(f.pyPath)}:${f.pyLine})`
-                  );
-                }
+              for (const f of frames) {
+                this.output.appendLine(
+                  `  -> ${path.basename(f.pinePath)}:${f.pineLine} (${path.basename(f.pyPath)}:${f.pyLine})`
+                );
               }
             } catch {
               // Mapping is best-effort; the raw traceback is already logged.
@@ -1424,24 +1418,27 @@ export class RunService {
     }
 
     if (errorMessage) {
+      this.chartManager?.closeChart(chartKey);
+      const source = runtimeErrorLocation(errorTraceback ?? '', opts.scriptPath, opts.workdir);
       let location = '';
-      if (errorPineLocation) {
-        // Surface the mapped Pine line in the Problems panel too.
-        const { pinePath, pineLine } = errorPineLocation;
+      if (source) {
+        location = ` (${path.basename(source.path)}:${source.line})`;
         try {
-          const pineDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(pinePath));
-          const line = Math.max(0, Math.min(pineLine - 1, pineDoc.lineCount - 1));
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(source.path));
+          const line = Math.max(0, Math.min(source.line - 1, doc.lineCount - 1));
           const diagnostic = new vscode.Diagnostic(
-            pineDoc.lineAt(line).range,
+            doc.lineAt(line).range,
             errorMessage,
             vscode.DiagnosticSeverity.Error
           );
           diagnostic.source = 'Pyne runtime';
-          this.runtimeDiagnostics.set(pineDoc.uri, [diagnostic]);
+          this.runtimeDiagnostics.set(doc.uri, [diagnostic]);
+          const selection = new vscode.Range(line, 0, line, 0);
+          const editor = await vscode.window.showTextDocument(doc, { selection, preview: false });
+          editor.revealRange(diagnostic.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
         } catch {
-          // The .pine may have vanished meanwhile; the log still has the mapping.
+          // Source may have disappeared while the run was finishing.
         }
-        location = ` (${path.basename(pinePath)}:${pineLine})`;
       }
       // Paths (script, workdir, chart key) stay out of the record on purpose;
       // the report layer only ever scrubs what it cannot avoid carrying.
@@ -1456,17 +1453,19 @@ export class RunService {
           debug: opts.debug !== undefined,
           securityCount: opts.security?.length ?? 0,
           data: path.basename(opts.data),
-          pineLine: errorPineLocation?.pineLine,
+          sourceLine: source?.line,
         },
         traceback: errorTraceback,
         // The user's own source (chartKey), not the compiled .py the bridge ran.
         scriptPath: chartKey,
         scriptLanguage: /\.pine$/i.test(chartKey) ? 'pine' : 'python',
       });
-      const choice = await vscode.window.showErrorMessage(
-        `PyneIDE: run failed: ${errorMessage}${location}`,
+      const showMessage = source?.scriptStop ? vscode.window.showWarningMessage : vscode.window.showErrorMessage;
+      const headline = source?.scriptStop ? 'script stopped' : source ? 'script runtime error' : 'run failed';
+      const choice = await showMessage(
+        `PyneIDE: ${headline}: ${errorMessage}${location}`,
         'Show Log',
-        'Report a Problem'
+        ...(source ? [] : ['Report a Problem'])
       );
       if (choice === 'Show Log') this.output.show();
       else if (choice === 'Report a Problem') {

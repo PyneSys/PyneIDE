@@ -1057,7 +1057,8 @@ export class ChartManager implements RunListener {
   }
 
   /** Dispose a chart's webview (if any) and drop its snapshot. */
-  private closeChart(chartKey: string): void {
+  closeChart(chartKey: string): void {
+    this.dataPreviews.delete(chartKey);
     const panel = this.panels.get(chartKey);
     if (!panel) return;
     this.panels.delete(chartKey);
