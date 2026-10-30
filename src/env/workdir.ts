@@ -144,6 +144,9 @@ export function venvLocation(
  */
 const PYNEIDE_MARKER = 'PYNEIDE';
 
+/** The project-owned environment directory, relative to the workspace folder. */
+const PROJECT_ENV_DIR = '.pyneide';
+
 /**
  * The generated pyright/Pylance config for Pyne projects. The pieces are the
  * outcome of the L5 typing spike (work/SPIKE-L5.md in this repo):
@@ -172,6 +175,16 @@ const PYNEIDE_MARKER = 'PYNEIDE';
  *   Unknown, which collapses pynecore's `Series: TypeAlias = T` into a plain
  *   variable and turns every `Series[...]` annotation into
  *   "Variable not allowed in type expression".
+ * - The project-owned environment in `.pyneide/` is listed twice. `exclude`
+ *   keeps its site-packages out of the project's file set: an explicit
+ *   `exclude` switches off pyright's own auto-excludes (hidden directories and
+ *   virtualenvs), so without the entry the whole environment counts as project
+ *   source.
+ *   `exclude` does not cover a file the editor opens, though, and Go to
+ *   Definition opens installed library sources from there; `ignore` keeps a
+ *   checker from reporting on them as if they were project files (e.g.
+ *   pynecore's `lib/ta.py` gets `reportWildcardImportFromLibrary`). Both still
+ *   let imports and definitions resolve into the environment.
  */
 const PYRIGHT_CONFIG = {
   typeCheckingMode: 'basic',
@@ -180,8 +193,30 @@ const PYRIGHT_CONFIG = {
   reportIndexIssue: 'none',
   reportRedeclaration: 'none',
   pythonVersion: PYTHON_VERSION_FLOOR,
-  exclude: ['data', 'output', '**/__pycache__'],
+  exclude: ['data', 'output', '**/__pycache__', PROJECT_ENV_DIR],
+  ignore: [PROJECT_ENV_DIR],
 };
+
+/**
+ * Add the project environment to a generated config's `exclude` and `ignore`
+ * lists, keeping every entry already there; true when the config changed.
+ * A config without `exclude` stays without it: pyright then applies its own
+ * auto-excludes, which already cover `.pyneide`, and adding a list would
+ * switch those off.
+ */
+function applyEnvEntries(config: Record<string, unknown>): boolean {
+  const normalize = (entry: unknown): unknown =>
+    typeof entry === 'string' ? entry.replace(/^\.\//, '').replace(/\/+$/, '') : entry;
+  let changed = false;
+  for (const key of ['exclude', 'ignore']) {
+    if (key === 'exclude' && !Array.isArray(config.exclude)) continue;
+    const current = Array.isArray(config[key]) ? (config[key] as unknown[]) : [];
+    if (current.some((entry) => normalize(entry) === PROJECT_ENV_DIR)) continue;
+    config[key] = [...current, PROJECT_ENV_DIR];
+    changed = true;
+  }
+  return changed;
+}
 
 /**
  * Whether a parsed config carries our generator's marker. Only configs we wrote
@@ -276,7 +311,8 @@ function applyVenv(
  * Ensure the generated `pyrightconfig.json` in `dir` is present and current.
  *
  * A missing config is written from the template. An existing config we
- * generated has its reachability setting updated and its `extraPaths` and
+ * generated has its reachability setting updated, `.pyneide` merged into its
+ * `exclude` and `ignore` lists, and its `extraPaths` and
  * index-rule severity reconciled to the provided options. A user-authored
  * config — anything without our fingerprint — is never touched. Returns true
  * when the file was written or changed.
@@ -312,6 +348,7 @@ export function ensurePyrightConfig(dir: string, opts: PyrightConfigOptions = {}
       config.enableReachabilityAnalysis = false;
       changed = true;
     }
+    if (applyEnvEntries(config)) changed = true;
     if (wantsExtraPaths) {
       const current = Array.isArray(config.extraPaths) ? config.extraPaths : undefined;
       if (!current || JSON.stringify(current) !== JSON.stringify(extraPaths)) {

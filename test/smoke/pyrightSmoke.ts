@@ -12,6 +12,9 @@
  *    genuine index error.
  *  - persistent state does not produce type-based unreachable hints, while
  *    statically false conditions, structural dead code and type errors remain.
+ *  - the project's `.pyneide` environment stays out of the file set, and its
+ *    installed sources, opened via Go to Definition, report nothing, while the
+ *    user's script is unaffected.
  * Usage: node dist/pyright-smoke.js
  */
 import { spawn } from 'node:child_process';
@@ -160,6 +163,30 @@ def main(aboveRange: bool, belowRange: bool, rewardRisk=2.0, unused=1.0) -> None
 const PYNECORE_LIB_STUB = `close: float = 0.0
 `;
 
+/** A user script that calls into the installed library and has one real error. */
+const ENV_SCRIPT = `"""
+@pyne
+"""
+from pynecore.lib import ta
+
+
+def main() -> None:
+    fast = ta.ema(1.0, 2)
+    wrong: str = fast
+    print(wrong)
+`;
+
+/** The shape of the installed pynecore `lib/ta.py` that trips the library rule. */
+const INSTALLED_TA = `from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pynecore.types.type_checker import *
+
+
+def ema(source: float, length: int) -> float:
+    return source
+`;
+
 interface PublishParams {
   uri: string;
   diagnostics: {
@@ -208,7 +235,175 @@ async function main(): Promise<void> {
   await checkPullDiagnostics(serverModule);
   await checkLibraryExports(serverModule);
   await checkReachability(serverModule);
+  await checkEnvironmentExclusion(serverModule);
   log('PYRIGHT SMOKE OK');
+}
+
+/**
+ * Go to Definition opens installed sources from the project-owned `.pyneide`
+ * environment. The generated config must keep that environment out of the
+ * project's file set and the checker quiet on the sources it opens, without
+ * changing what the user's own script reports or where the definition
+ * resolves to.
+ */
+async function checkEnvironmentExclusion(serverModule: string): Promise<void> {
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-env-ignore-'));
+  const configPath = path.join(workdir, 'pyrightconfig.json');
+  const read = (): Record<string, unknown> =>
+    JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  const venvDir = path.join(workdir, '.pyneide', 'venv');
+  const sitePackages = path.join(venvDir, 'lib', 'python3.14', 'site-packages');
+  fs.mkdirSync(path.join(venvDir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(venvDir, 'pyvenv.cfg'), 'version = 3.14.0\n');
+  for (const pkg of ['pynecore', 'pynecore/lib', 'pynecore/types']) {
+    fs.mkdirSync(path.join(sitePackages, pkg), { recursive: true });
+    fs.writeFileSync(path.join(sitePackages, pkg, '__init__.py'), '');
+  }
+  fs.writeFileSync(path.join(sitePackages, 'pynecore', 'types', 'type_checker.py'), 'TYPECHECKER = True\n');
+  fs.writeFileSync(path.join(sitePackages, 'pynecore', 'types', 'type_checker.pyi'), 'TYPECHECKER: bool\n');
+  const taPath = path.join(sitePackages, 'pynecore', 'lib', 'ta.py');
+  fs.writeFileSync(taPath, INSTALLED_TA);
+  const scriptPath = path.join(workdir, 'scripts', 'env.py');
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, ENV_SCRIPT);
+
+  ensurePyrightConfig(workdir, { pythonBin: path.join(venvDir, 'bin', 'python'), pythonVersion: '3.14.0' });
+  const generated = read();
+  const oldExclude = ['data', 'output', '**/__pycache__'];
+  if (JSON.stringify(generated.exclude) !== JSON.stringify([...oldExclude, '.pyneide']) ||
+      JSON.stringify(generated.ignore) !== JSON.stringify(['.pyneide'])) {
+    throw new Error(`new config does not cover the project environment: ${JSON.stringify(generated)}`);
+  }
+
+  // A config generated before the entries existed gets them merged in, after
+  // the entries already there; an equivalent spelling counts as present.
+  const legacy = { ...generated, exclude: oldExclude, ignore: ['scratch'] };
+  fs.writeFileSync(configPath, JSON.stringify(legacy));
+  if (!ensurePyrightConfig(workdir)) throw new Error('existing generated config was not migrated');
+  if (JSON.stringify(read().exclude) !== JSON.stringify([...oldExclude, '.pyneide']) ||
+      JSON.stringify(read().ignore) !== JSON.stringify(['scratch', '.pyneide'])) {
+    throw new Error(`migration did not merge the exclude/ignore lists: ${JSON.stringify(read())}`);
+  }
+  if (ensurePyrightConfig(workdir)) throw new Error('exclude/ignore migration is not idempotent');
+  fs.writeFileSync(configPath, JSON.stringify({ ...generated, exclude: ['./.pyneide/'], ignore: ['./.pyneide/'] }));
+  if (ensurePyrightConfig(workdir)) throw new Error('an equivalent exclude/ignore entry was duplicated');
+  // Without an exclude list pyright's own auto-excludes already cover the
+  // environment; creating one would switch them off.
+  const withoutExclude = { ...generated };
+  delete withoutExclude.exclude;
+  fs.writeFileSync(configPath, JSON.stringify(withoutExclude));
+  ensurePyrightConfig(workdir);
+  if ('exclude' in read()) throw new Error(`migration created an exclude list: ${JSON.stringify(read())}`);
+  const userConfig = { typeCheckingMode: 'basic', exclude: ['data'] };
+  fs.writeFileSync(configPath, JSON.stringify(userConfig));
+  if (ensurePyrightConfig(workdir) || fs.readFileSync(configPath, 'utf8') !== JSON.stringify(userConfig)) {
+    throw new Error('exclude/ignore migration touched a user-authored config');
+  }
+
+  fs.writeFileSync(configPath, JSON.stringify(legacy));
+  const before = await probeEnvironment(serverModule, workdir, scriptPath, taPath);
+  if (!before.library.some((d) => d.code === 'reportWildcardImportFromLibrary')) {
+    throw new Error(`missing reproduction of the library warning: ${JSON.stringify(before.library)}`);
+  }
+  // exclude alone shrinks the file set but does not cover an opened file.
+  const excludeOnly = { ...generated, ignore: [] };
+  fs.writeFileSync(configPath, JSON.stringify(excludeOnly));
+  const excluded = await probeEnvironment(serverModule, workdir, scriptPath, taPath);
+  if (!excluded.library.some((d) => d.code === 'reportWildcardImportFromLibrary')) {
+    throw new Error(`exclude alone already silenced the opened library: ${JSON.stringify(excluded.library)}`);
+  }
+  fs.writeFileSync(configPath, JSON.stringify(generated));
+  const after = await probeEnvironment(serverModule, workdir, scriptPath, taPath);
+  if (after.library.length !== 0) {
+    throw new Error(`installed library still reports diagnostics: ${JSON.stringify(after.library)}`);
+  }
+  // The script plus the six module files of the environment, then the script alone.
+  if (before.sourceFiles !== 7 || after.sourceFiles !== 1) {
+    throw new Error(`environment not excluded from the file set: ${before.sourceFiles} -> ${after.sourceFiles} source files`);
+  }
+  const summary = (items: PublishParams['diagnostics']): string =>
+    JSON.stringify(items.map((d) => [d.code, d.range.start.line, d.range.start.character]));
+  if (!after.script.some((d) => d.code === 'reportAssignmentType') ||
+      summary(after.script) !== summary(before.script)) {
+    throw new Error(`user script diagnostics changed: ${summary(before.script)} -> ${summary(after.script)}`);
+  }
+  const taUri = pathToFileURL(taPath).toString();
+  if (before.definition !== taUri || after.definition !== taUri) {
+    throw new Error(`definition did not resolve into the environment: ${before.definition} / ${after.definition}`);
+  }
+  fs.rmSync(workdir, { recursive: true, force: true });
+  log(`Environment exclude/ignore OK (${before.sourceFiles} -> ${after.sourceFiles} source files, installed ta.py quiet, script diagnostics and definition unchanged)`);
+}
+
+/**
+ * Open the installed `ta.py`, then the script, jump to `ta.ema`'s definition,
+ * and pull diagnostics for both. The library goes first because pyright keeps
+ * a file it already loaded as an import of an open script marked third-party,
+ * and so silent; the editor does reach the reporting state (seen in pyne-lab),
+ * and opening the library first reproduces it deterministically.
+ */
+async function probeEnvironment(
+  serverModule: string,
+  workdir: string,
+  scriptPath: string,
+  taPath: string
+): Promise<{
+  script: PublishParams['diagnostics'];
+  library: PublishParams['diagnostics'];
+  definition?: string;
+  sourceFiles?: number;
+}> {
+  const lsp = new LspStdio(process.execPath, [serverModule, '--stdio']);
+  const found = lsp.waitForNotification('window/logMessage', 30000, (params) =>
+    /^Found \d+ source files?$/.test((params as { message?: string }).message ?? '')
+  );
+  const registered = lsp.waitForNotification('client/registerCapability', 30000, (params) => {
+    const p = params as { registrations?: { method?: string }[] };
+    return (p.registrations ?? []).some((r) => r.method === 'textDocument/diagnostic');
+  });
+  await lsp.request('initialize', {
+    processId: process.pid,
+    rootUri: pathToFileURL(workdir).toString(),
+    workspaceFolders: [{ uri: pathToFileURL(workdir).toString(), name: 'env' }],
+    capabilities: { textDocument: { diagnostic: { dynamicRegistration: true } } },
+  });
+  lsp.notify('initialized', {});
+  await registered;
+  const pull = async (uri: string): Promise<PublishParams['diagnostics']> => {
+    const report = (await lsp.request('textDocument/diagnostic', { textDocument: { uri } }, 60000)) as {
+      kind?: string;
+      items?: PublishParams['diagnostics'];
+    };
+    if (report.kind !== 'full' || !report.items) {
+      throw new Error(`pull diagnostics: unexpected report ${JSON.stringify(report)}`);
+    }
+    return report.items;
+  };
+
+  const taUri = pathToFileURL(taPath).toString();
+  lsp.notify('textDocument/didOpen', {
+    textDocument: { uri: taUri, languageId: 'python', version: 1, text: INSTALLED_TA },
+  });
+  const library = await pull(taUri);
+
+  const scriptUri = pathToFileURL(scriptPath).toString();
+  lsp.notify('textDocument/didOpen', {
+    textDocument: { uri: scriptUri, languageId: 'pyne', version: 1, text: ENV_SCRIPT },
+  });
+  const script = await pull(scriptUri);
+  const lines = ENV_SCRIPT.split('\n');
+  const line = lines.findIndex((text) => text.includes('ta.ema('));
+  const locations = (await lsp.request('textDocument/definition', {
+    textDocument: { uri: scriptUri },
+    position: { line, character: lines[line].indexOf('ema(') + 1 },
+  })) as { uri?: string; targetUri?: string }[] | null;
+  const definition = locations?.[0]?.uri ?? locations?.[0]?.targetUri;
+  const count = /\d+/.exec((await found as { message: string }).message)?.[0];
+
+  await lsp.request('shutdown');
+  lsp.notify('exit');
+  await lsp.exited();
+  return { script, library, definition, sourceFiles: count === undefined ? undefined : Number(count) };
 }
 
 /** Persistent initialization is not a per-bar assignment; Python narrowing is unsound. */
