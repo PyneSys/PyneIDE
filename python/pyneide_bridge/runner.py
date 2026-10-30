@@ -220,6 +220,10 @@ _TRADE_FIELDS = (
     ("profit_percent", "profitPct"),
     ("cum_profit", "cumProfit"),
     ("cum_profit_percent", "cumProfitPct"),
+    ("max_runup", "maxRunup"),
+    ("max_runup_percent", "maxRunupPct"),
+    ("max_drawdown", "maxDrawdown"),
+    ("max_drawdown_percent", "maxDrawdownPct"),
 )
 
 

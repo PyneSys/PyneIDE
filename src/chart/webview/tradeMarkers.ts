@@ -148,7 +148,7 @@ export function buildTradeMarkerIndex(
           value: anchor,
           direction: long ? 'up' : 'down',
           tone: long ? 'long' : 'short',
-          title: entryTitle(long, trade.entryId),
+          title: entryTitle(long, trade.entryId ?? trade.entrySignal ?? null),
           detail: signedSize(trade.size),
         });
       }

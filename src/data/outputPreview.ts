@@ -163,8 +163,8 @@ function primitiveRecord(value: Record<string, unknown> | undefined): StartEvent
   return result;
 }
 
-/** Older native outputs keep trades only in the two-leg CSV. Fields absent
- * from that format (comments and commission) remain unknown. */
+/** CSV signals contain either a comment or an order ID, without distinguishing
+ * them. Keep the original signal; separate IDs/comments and commission are unknown. */
 function readTradeCsv(file: string, warnings: string[]): { closed: TradeRecord[]; open: TradeRecord[] } {
   const rows = parseCsv(fs.readFileSync(file, 'utf8'));
   const header = rows.shift();
@@ -195,12 +195,14 @@ function readTradeCsv(file: string, warnings: string[]): { closed: TradeRecord[]
     const isOpen = row[3] === 'Open';
     const contracts = numberOrNull(entry[6]);
     const trade: TradeRecord = {
-      entryId: entry[3], entryBar, entryTime, entryPrice: numberOrNull(entry[5]),
-      entryComment: null, exitId: isOpen ? null : row[3], exitBar, exitTime,
+      entryId: null, entrySignal: entry[3], entryBar, entryTime, entryPrice: numberOrNull(entry[5]),
+      entryComment: null, exitId: null, exitSignal: row[3], exitBar, exitTime,
       exitPrice: numberOrNull(row[5]), exitComment: null,
       size: contracts === null ? null : Math.abs(contracts) * (entry[2] === 'Entry short' ? -1 : 1),
       commission: null, profit: numberOrNull(row[7]), profitPct: numberOrNull(row[8]),
       cumProfit: numberOrNull(row[9]), cumProfitPct: numberOrNull(row[10]),
+      maxRunup: numberOrNull(row[11]), maxRunupPct: numberOrNull(row[12]),
+      maxDrawdown: numberOrNull(row[13]), maxDrawdownPct: numberOrNull(row[14]),
     };
     (isOpen ? open : closed).push(trade);
   }
@@ -345,6 +347,23 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   if (drawingList.length) events.push({ e: 'drawings', d: drawingList });
   if (start.scriptType === 'strategy') {
     const trades = savedTrades ?? (pair.trades ? readTradeCsv(pair.trades, warnings) : undefined);
+    // Older sidecars have full comments/IDs but omit the CSV's excursions.
+    if (savedTrades && pair.trades && [...savedTrades.closed, ...savedTrades.open].some(
+      (trade) => trade.maxRunup === undefined
+    )) {
+      const csv = readTradeCsv(pair.trades, warnings);
+      for (const kind of ['closed', 'open'] as const) {
+        savedTrades[kind].forEach((trade, i) => {
+          const row = csv[kind][i];
+          if (!row || row.entryTime !== trade.entryTime || row.exitTime !== trade.exitTime ||
+              row.entryBar !== trade.entryBar || row.exitBar !== trade.exitBar || row.size !== trade.size) return;
+          trade.maxRunup ??= row.maxRunup;
+          trade.maxRunupPct ??= row.maxRunupPct;
+          trade.maxDrawdown ??= row.maxDrawdown;
+          trade.maxDrawdownPct ??= row.maxDrawdownPct;
+        });
+      }
+    }
     if (trades?.closed.length) events.push({ e: 'trades', d: trades.closed });
     if (trades?.open.length) events.push({ e: 'openTrades', d: trades.open });
   }

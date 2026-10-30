@@ -61,6 +61,7 @@ import {
   type EquitySummary,
 } from './equityCurve';
 import { tradeAtTimestamp } from './tradeNavigation';
+import { closeTradeDetails, showTradeDetails } from './tradeDetails';
 import {
   DrawingStore,
   drawDrawings,
@@ -900,6 +901,7 @@ function unfreezeAfterPaint(): void {
 }
 
 function startRun(start: StartEvent): void {
+  closeTradeDetails();
   syncScriptLegend(start);
   selectedTradeIndex = undefined;
   performanceCrosshair?.reset();
@@ -2624,7 +2626,11 @@ function renderTrades(): string {
       return (
         `<tr class="clickable${selected ? ' selected' : ''}" data-trade-index="${i}" ` +
         `data-ts="${esc(String(t.entryTime))}"${selected ? ' aria-selected="true"' : ''}>` +
-        `<td>${i + 1} ${long ? '▲' : '▼'} ${esc(t.entryId ?? '')}</td>` +
+        `<td><button type="button" class="trade-details-button" data-trade-details="${i}" ` +
+        `title="Show all trade data" aria-label="Details for trade ${i + 1}" aria-haspopup="dialog">` +
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/>' +
+        '<path d="M8 7v4M8 4.5v.5"/></svg></button> ' +
+        `${i + 1} ${long ? '▲' : '▼'} ${esc(t.entryId ?? t.entrySignal ?? '')}</td>` +
         `<td>${fmtTime(t.entryTime)}</td><td>${fmt(t.entryPrice, d)}</td>` +
         `<td>${fmtTime(t.exitTime)}</td><td>${fmt(t.exitPrice, d)}</td>` +
         `<td>${fmt(Math.abs(t.size ?? 0), 4)}</td>` +
@@ -2705,6 +2711,13 @@ tabToggleEl?.addEventListener('click', () => {
 });
 strategyPropertiesEl?.addEventListener('click', () => vscode.postMessage({ type: 'editProperties' }));
 tabBodyEl?.addEventListener('click', (event) => {
+  const details = (event.target as Element).closest<HTMLButtonElement>('[data-trade-details]');
+  if (details) {
+    const index = Number(details.dataset.tradeDetails);
+    const trade = state?.trades[index];
+    if (trade) showTradeDetails(trade, index);
+    return;
+  }
   const row = (event.target as HTMLElement).closest('tr[data-ts]');
   const ts = row ? Number((row as HTMLElement).dataset.ts) : 0;
   if (ts > 0) state?.chart.scrollToTimestamp(ts, 200);

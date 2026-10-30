@@ -711,6 +711,51 @@ export class ChartPanel {
     color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-editor-foreground));
     outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
   }
+  .trade-details-button {
+    display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+    width: 22px; height: 22px; padding: 2px; border: none; border-radius: 3px;
+    color: var(--vscode-descriptionForeground); background: transparent; cursor: pointer;
+  }
+  .trade-details-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+  .trade-details-button:hover, #trade-details button:hover {
+    color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground, #333);
+  }
+  .trade-details-button:focus-visible, #trade-details button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
+  }
+  #trade-details {
+    box-sizing: border-box; width: min(640px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px); padding: 0; overflow: auto;
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4); font-size: 12px;
+  }
+  #trade-details::backdrop { background: rgba(0, 0, 0, 0.45); }
+  #trade-details header {
+    position: sticky; top: 0; display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; z-index: 1;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+  }
+  #trade-details h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 600; }
+  #trade-details button {
+    width: 28px; height: 28px; padding: 0; border: none; border-radius: 3px;
+    background: transparent; color: inherit; cursor: pointer; font-size: 22px;
+  }
+  .trade-details-content { padding: 0 16px; }
+  #trade-details h3 {
+    margin: 14px 0 8px; font-size: 12px; font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+  }
+  #trade-details dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); margin: 0; }
+  #trade-details dt, #trade-details dd {
+    margin: 0; padding: 5px 0; border-bottom: 1px solid var(--vscode-panel-border, #333);
+    overflow-wrap: anywhere;
+  }
+  #trade-details dt { padding-right: 12px; color: var(--vscode-descriptionForeground); }
+  #trade-details dd { white-space: pre-wrap; font-variant-numeric: tabular-nums; user-select: text; }
+  .trade-details-note { margin: 12px 16px; color: var(--vscode-descriptionForeground); }
   .performance-view {
     height: 100%; min-height: 0; display: flex; flex-direction: column;
     box-sizing: border-box; padding: 8px 10px 6px;

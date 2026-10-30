@@ -54,6 +54,13 @@ export interface TradeRecord {
   profitPct: number | null;
   cumProfit: number | null;
   cumProfitPct: number | null;
+  maxRunup?: number | null;
+  maxRunupPct?: number | null;
+  maxDrawdown?: number | null;
+  maxDrawdownPct?: number | null;
+  /** Legacy CSV signals combine comments and order IDs into one column. */
+  entrySignal?: string | null;
+  exitSignal?: string | null;
 }
 
 export interface StartEvent {

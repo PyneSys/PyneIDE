@@ -130,9 +130,9 @@ from pynecore.lib import script, strategy, close, open, plot
 def main():
     plot(close, "Price")
     if close > open:
-        strategy.entry("Long", strategy.long)
+        strategy.entry("Long", strategy.long, comment="Bullish candle entry")
     elif close < open:
-        strategy.entry("Short", strategy.short)
+        strategy.entry("Short", strategy.short, comment="Bearish candle entry")
 `;
 
 function fail(msg: string): never {
@@ -395,6 +395,12 @@ function assertNativeEquityFile(workdir: string, stem: string, liveEvents: Bridg
   const liveOpen = trades(liveEvents, 'openTrades');
   assert.ok(liveClosed.length > 0, 'strategy must exercise closed trades');
   assert.ok(liveOpen.length > 0, 'strategy must exercise open trades');
+  for (const trade of [...liveClosed, ...liveOpen]) {
+    assert.match(trade.entryComment ?? '', /^(Bullish|Bearish) candle entry$/);
+    for (const key of ['maxRunup', 'maxRunupPct', 'maxDrawdown', 'maxDrawdownPct'] as const) {
+      assert.equal(typeof trade[key], 'number', `${key} missing from bridge trade`);
+    }
+  }
   assert.deepEqual(trades(preview.events, 'trades'), liveClosed, 'closed trade replay differs from live');
   assert.deepEqual(trades(preview.events, 'openTrades'), liveOpen, 'open trade replay differs from live');
   assert.ok(start.outputs.trades && fs.existsSync(start.outputs.trades), 'trade CSV link missing');
@@ -422,6 +428,28 @@ function assertNativeEquityFile(workdir: string, stem: string, liveEvents: Bridg
       assert.equal(trade.exitTime, liveClosed[i].exitTime);
       assert.equal(trade.size, liveClosed[i].size);
       assert.equal(trade.profit, liveClosed[i].profit);
+      assert.equal(trade.entryId, null, 'legacy signal must not be misrepresented as an order ID');
+      assert.equal(trade.entrySignal, liveClosed[i].entryComment);
+      assert.equal(trade.maxRunup, liveClosed[i].maxRunup);
+      assert.equal(trade.maxDrawdown, liveClosed[i].maxDrawdown);
+    });
+    // Full records written before excursions were added still have the CSV values.
+    fs.writeFileSync(file, original.split('\n').map((line) => {
+      if (!line) return line;
+      const record = JSON.parse(line);
+      for (const trade of [...(record.trades ?? []), ...(record.openTrades ?? [])]) {
+        for (const key of ['maxRunup', 'maxRunupPct', 'maxDrawdown', 'maxDrawdownPct']) delete trade[key];
+      }
+      return JSON.stringify(record);
+    }).join('\n'));
+    const oldSidecar = buildOutputPreview(pair);
+    assert.equal(oldSidecar.warnings.length, 0);
+    const restored = trades(oldSidecar.events, 'trades');
+    restored.forEach((trade, i) => {
+      assert.equal(trade.entryId, liveClosed[i].entryId);
+      assert.equal(trade.entryComment, liveClosed[i].entryComment);
+      assert.equal(trade.maxRunup, liveClosed[i].maxRunup);
+      assert.equal(trade.maxDrawdown, liveClosed[i].maxDrawdown);
     });
   } finally {
     fs.writeFileSync(file, original);

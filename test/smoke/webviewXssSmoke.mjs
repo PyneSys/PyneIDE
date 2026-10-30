@@ -103,6 +103,9 @@ try {
   };
   const trade = {
     entryId: 'Buy & hold', entryTime: 1700000000000, exitTime: 1700000060000,
+    entryBar: 0, exitBar: 1, entryComment: 'Entry reason\nSecond line',
+    exitId: 'Close', exitComment: 'Take profit', commission: 0.25, cumProfitPct: 0.1,
+    maxRunup: 2.5, maxRunupPct: 2.49, maxDrawdown: 0.5, maxDrawdownPct: 0.49,
     entryPrice: 100.25, exitPrice: 101.25, size: 1, profit: 1, profitPct: 1, cumProfit: 1,
   };
   const legend = chart.locator('#script-legend');
@@ -131,20 +134,68 @@ try {
   assert.equal(await chart.locator('tr[data-ts]').getAttribute('data-ts'), String(trade.entryTime));
   assert.ok((await chart.locator('#tab-body').textContent()).includes(trade.entryId));
   await chart.locator('tr[data-ts]').click();
+  const detailsButton = chart.getByRole('button', { name: 'Details for trade 1', exact: true });
+  const dialog = chart.getByRole('dialog');
+  await detailsButton.click();
+  assert.equal(await dialog.isVisible(), true);
+  const detailValue = (section, label) => dialog.locator('section').filter({
+    has: chart.getByRole('heading', { name: section, exact: true }),
+  }).locator('dt').filter({ hasText: new RegExp(`^${label}$`) }).locator('+ dd');
+  assert.equal(await detailValue('Entry', 'Comment').textContent(), trade.entryComment);
+  assert.equal(await detailValue('Exit', 'Comment').textContent(), trade.exitComment);
+  assert.equal(await detailValue('Exit', 'Order ID').textContent(), trade.exitId);
+  assert.match(await detailValue('Entry', 'Time').textContent(), /2023-11-14 22:13:20.000 UTC/);
+  for (const [label, value] of [
+    ['Commission', trade.commission], ['Cumulative profit %', trade.cumProfitPct],
+    ['Run-up', trade.maxRunup], ['Run-up %', trade.maxRunupPct],
+    ['Drawdown', trade.maxDrawdown], ['Drawdown %', trade.maxDrawdownPct],
+  ]) assert.equal(await detailValue('Results', label).textContent(),
+    await chart.evaluate((value) => value.toLocaleString(), value));
+  await chart.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await detailsButton.evaluate((el) => el === document.activeElement), true);
+  await detailsButton.focus();
+  await chart.keyboard.press('Enter');
+  await dialog.getByRole('button', { name: 'Close trade details' }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await detailsButton.click();
+  await send(chart, { type: 'reset', start });
+  await dialog.waitFor({ state: 'detached' });
+  await send(chart, { type: 'trades', trades: [trade, {
+    ...trade, entryId: 'Second trade', entryComment: null, exitComment: null,
+    size: -0.0000000000000000000001, commission: null, maxRunup: undefined,
+  }] });
+  await chart.locator('#tab-trades').click();
+  await chart.getByRole('button', { name: 'Details for trade 2', exact: true }).click();
+  assert.equal(await dialog.getByRole('heading', { level: 2 }).textContent(), 'Trade 2 · Short');
+  assert.equal(await detailValue('Entry', 'Order ID').textContent(), 'Second trade');
+  assert.equal(await detailValue('Entry', 'Comment').textContent(), '—');
+  assert.equal(await detailValue('Results', 'Commission').textContent(), '—');
+  assert.equal(await detailValue('Results', 'Run-up').textContent(), '—');
+  assert.notEqual(await detailValue('Results', 'Position size \\(signed\\)').textContent(), '-0');
+  await chart.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
   for (const payload of payloads) {
     await send(chart, { type: 'reset', start: { ...start, scriptTitle: payload, scriptShortTitle: payload } });
     assert.equal(await legend.textContent(), payload);
     await assertSafe(chart, 'script legend');
-    await send(chart, { type: 'openTrades', trades: [{ ...trade, entryTime: payload, entryId: payload }] });
+    await send(chart, { type: 'openTrades', trades: [{ ...trade, entryTime: payload, entryId: payload,
+      entryComment: payload, exitComment: payload, exitId: payload }] });
     await chart.locator('#tab-trades').click();
     await assertSafe(chart, 'trade timestamp and id');
     assert.equal(await chart.locator('tr[data-ts]').getAttribute('data-ts'), payload);
     assert.ok((await chart.locator('#tab-body').textContent()).includes(payload));
+    await detailsButton.click();
+    assert.equal(await detailValue('Entry', 'Comment').textContent(), payload);
+    assert.equal(await detailValue('Exit', 'Comment').textContent(), payload);
+    await assertSafe(chart, 'trade details');
+    await chart.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached' });
     await send(chart, { type: 'stats', stats: { [payload]: 10, Trades: payload } });
     await chart.locator('#tab-stats').click();
     await assertSafe(chart, 'stats');
   }
-  console.log('Webview smoke passed: script legend names/tooltips/visibility, plugin list/details, trades/stats, and XSS safety.');
+  console.log('Webview smoke passed: script legend, plugins, trade details, keyboard dismissal/focus, reruns, trades/stats, and XSS safety.');
 } finally {
   await browser.close();
 }
