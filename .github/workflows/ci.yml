@@ -29,6 +29,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - run: npm run test:data-select
       - run: npm run test:grammar
       - run: npm run test:report
       - run: npm run test:agent-skills

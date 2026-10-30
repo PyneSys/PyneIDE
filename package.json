@@ -1486,6 +1486,7 @@
     ]
   },
   "scripts": {
+    "test:data-select": "node --test test/dataSelect.test.mjs",
     "test:runtime-error": "node --test test/runtimeError.test.mjs",
     "test:symbol-browser-download": "node --test test/symbolBrowserDownload.test.mjs",
     "test:download": "node --test test/download.test.mjs",

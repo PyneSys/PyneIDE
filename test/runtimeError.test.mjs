@@ -14,6 +14,8 @@ const bundled = await build({
   plugins: [{ name: 'bridge-fixture', setup(build) {
     build.onLoad({ filter: /\/run\/bridgeClient\.ts$/ }, () => ({ contents:
       'export const BridgeRun = {start: (options) => fixture.start(options)};' }));
+    build.onLoad({ filter: /\/data\/symbolBrowserPanel\.ts$/ }, () => ({ contents:
+      'export const SymbolBrowserPanel = {show: (...args) => fixture.showSymbolBrowser(...args)};' }));
   } }],
 });
 
@@ -31,6 +33,8 @@ function fixture(t) {
   const closedCharts = [];
   const state = new Map();
   const picks = [];
+  const browsers = [];
+  let pickDownload = false;
   const context = {
     extensionUri: { fsPath: process.cwd() },
     workspaceState: {
@@ -81,6 +85,7 @@ function fixture(t) {
       showWarningMessage: async (message, ...actions) => { notices.push({ severity: 'warning', message, actions }); return choice; },
       async showQuickPick(items) {
         picks.push(items);
+        if (pickDownload) return items.find((item) => item.action === 'download');
         return items.find((item) => item.name === 'replacement');
       },
       setStatusBarMessage() {},
@@ -90,6 +95,7 @@ function fixture(t) {
   vm.runInNewContext(bundled.outputFiles[0].text, {
     module, exports: module.exports, require: (name) => name === 'vscode' ? vscode : require(name),
     fixture: {
+      showSymbolBrowser(context, deps) { browsers.push({ context, deps }); },
       start(options) {
         return { exited: Promise.resolve().then(() => {
           if (event) options.onEvent(event);
@@ -105,9 +111,13 @@ function fixture(t) {
     closeChart: (key) => closedCharts.push(key),
   });
   return {
-    root, script, markers, notices, opened, logs, commands, closedCharts, state, picks,
+    root, script, markers, notices, opened, logs, commands, closedCharts, state, picks, browsers,
     remembered: (key = script) => module.exports.getRememberedData(context, root, key),
     selectData: (key = script) => module.exports.pickRunData(context, root, key, 'python', channel),
+    selectDownloadData: () => {
+      pickDownload = true;
+      return module.exports.pickRunData(context, root, script, 'python', channel);
+    },
     get logShows() { return logShows; },
     async run(frames, options = {}) {
       event = frames === null ? undefined : {
@@ -127,6 +137,20 @@ function fixture(t) {
 }
 
 const core = '/env/lib/python3.14/site-packages/pynecore';
+
+test('downloading from the data picker opens the Symbol Browser and aborts selection', async (t) => {
+  const f = fixture(t);
+  const bindings = { [f.script]: 'previous', 'other.py': 'other' };
+  f.state.set('pyneide.lastRunData', bindings);
+  assert.equal(await f.selectDownloadData(), undefined);
+  assert.equal(f.picks.length, 1, 'do not continue into the wizard or reopen the picker');
+  assert.equal(f.browsers.length, 1);
+  assert.equal(f.browsers[0].deps.workdir, f.root);
+  assert.equal(f.browsers[0].deps.pythonBin, 'python');
+  assert.equal(f.browsers[0].deps.bridgeRoot, path.join(process.cwd(), 'python'));
+  assert.equal(f.state.get('pyneide.lastRunData'), bindings, 'keep existing bindings unchanged');
+  assert.equal(f.commands.length, 0, 'do not restart the script');
+});
 
 test('failed runs forget only their own data binding and allow a fresh choice', async (t) => {
   const f = fixture(t);
