@@ -35,7 +35,7 @@ import { failures } from '../report/lastFailure';
 import { logHub } from '../report/logTee';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
-import { getRememberedData, pickRunData } from './dataSelect';
+import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
 import { runtimeErrorLocation } from './runtimeError';
 import {
   SecurityDataService,
@@ -1419,6 +1419,7 @@ export class RunService {
 
     if (errorMessage) {
       this.chartManager?.closeChart(chartKey);
+      await forgetRememberedData(this.context, chartKey);
       const source = runtimeErrorLocation(errorTraceback ?? '', opts.scriptPath, opts.workdir);
       let location = '';
       if (source) {

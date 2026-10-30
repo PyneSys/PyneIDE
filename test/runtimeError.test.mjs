@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 
 const require = createRequire(import.meta.url);
 const bundled = await build({
-  stdin: { contents: "export * from './src/run/runService';", resolveDir: process.cwd() },
+  stdin: { contents: "export * from './src/run/runService'; export * from './src/run/dataSelect';", resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'cjs', external: ['vscode'], write: false,
   plugins: [{ name: 'bridge-fixture', setup(build) {
     build.onLoad({ filter: /\/run\/bridgeClient\.ts$/ }, () => ({ contents:
@@ -29,6 +29,15 @@ function fixture(t) {
   const logs = [];
   const commands = [];
   const closedCharts = [];
+  const state = new Map();
+  const picks = [];
+  const context = {
+    extensionUri: { fsPath: process.cwd() },
+    workspaceState: {
+      get: (key, fallback) => state.get(key) ?? fallback,
+      async update(key, value) { state.set(key, value); },
+    },
+  };
   let event;
   let choice;
   let exitCode = 1;
@@ -70,6 +79,10 @@ function fixture(t) {
       },
       showErrorMessage: async (message, ...actions) => { notices.push({ severity: 'error', message, actions }); return choice; },
       showWarningMessage: async (message, ...actions) => { notices.push({ severity: 'warning', message, actions }); return choice; },
+      async showQuickPick(items) {
+        picks.push(items);
+        return items.find((item) => item.name === 'replacement');
+      },
       setStatusBarMessage() {},
     },
   };
@@ -86,13 +99,15 @@ function fixture(t) {
     },
     process, Buffer, console, setTimeout, clearTimeout,
   });
-  const service = new module.exports.RunService({ extensionUri: { fsPath: process.cwd() } }, {}, {});
+  const service = new module.exports.RunService(context, {}, {});
   service.attachChart({
     onEvent() {}, onFinished() {}, setDebugPosition() {}, reconcile() {},
     closeChart: (key) => closedCharts.push(key),
   });
   return {
-    root, script, markers, notices, opened, logs, commands, closedCharts,
+    root, script, markers, notices, opened, logs, commands, closedCharts, state, picks,
+    remembered: (key = script) => module.exports.getRememberedData(context, root, key),
+    selectData: (key = script) => module.exports.pickRunData(context, root, key, 'python', channel),
     get logShows() { return logShows; },
     async run(frames, options = {}) {
       event = frames === null ? undefined : {
@@ -112,6 +127,33 @@ function fixture(t) {
 }
 
 const core = '/env/lib/python3.14/site-packages/pynecore';
+
+test('failed runs forget only their own data binding and allow a fresh choice', async (t) => {
+  const f = fixture(t);
+  const otherScript = path.join(f.root, 'scripts', 'other.py');
+  fs.mkdirSync(path.join(f.root, 'data'));
+  for (const stem of ['demo', 'other', 'replacement']) {
+    fs.writeFileSync(path.join(f.root, 'data', `${stem}.ohlcv`), 'fixture');
+  }
+  f.state.set('pyneide.lastRunData', { [f.script]: 'demo', [otherScript]: 'other' });
+  assert.equal(f.remembered(), 'demo');
+  await f.run([[f.script, 3], [`${core}/lib/runtime.py`, 17, 'error']]);
+  assert.equal(f.remembered(), undefined);
+  assert.equal(f.remembered(otherScript), 'other');
+  assert.equal(await f.selectData(), 'replacement');
+  assert.equal(f.picks.length, 1);
+  assert.equal(f.remembered(), 'replacement');
+  await f.run(null, { exitCode: 0 });
+  assert.equal(f.remembered(), 'replacement', 'successful runs keep their data binding');
+});
+
+test('Pine errors clear the shared Pine/Python data binding', async (t) => {
+  const f = fixture(t);
+  const pine = f.script.replace(/\.py$/, '.pine');
+  f.state.set('pyneide.lastRunData', { [pine]: 'demo' });
+  await f.run([[f.script, 3]], { chartKey: pine });
+  assert.equal(Object.hasOwn(f.state.get('pyneide.lastRunData'), pine), false);
+});
 
 test('runtime.error is a script stop; selects the calling Pyne line without offering a report', async (t) => {
   const f = fixture(t);

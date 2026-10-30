@@ -82,6 +82,17 @@ export function getRememberedData(
   return fs.existsSync(path.join(workdir, 'data', `${name}.ohlcv`)) ? name : undefined;
 }
 
+/** Forget a failed script's data binding so the next run prompts again. */
+export async function forgetRememberedData(
+  context: vscode.ExtensionContext,
+  scriptKey: string
+): Promise<void> {
+  const lastMap = { ...context.workspaceState.get<Record<string, string>>(LAST_DATA_KEY, {}) };
+  if (!(scriptKey in lastMap)) return;
+  delete lastMap[scriptKey];
+  await context.workspaceState.update(LAST_DATA_KEY, lastMap);
+}
+
 /**
  * Pick (or download) the OHLCV data for a run. Returns the data name to pass
  * to the bridge (bare stem, resolved against `<workdir>/data`). The choice is
