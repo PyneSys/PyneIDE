@@ -1545,7 +1545,8 @@
   "overrides": {
     "@azure/identity": {
       "@azure/msal-node": "7.1.0"
-    }
+    },
+    "minimatch": "^11.0.3"
   },
   "allowScripts": {
     "esbuild@0.25.12": true,
