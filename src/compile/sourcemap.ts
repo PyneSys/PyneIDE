@@ -9,7 +9,10 @@
  * The IDE-written map additionally carries `py_sha256` (hash of the .py it was
  * generated with): the .py is free to edit, and a map that no longer matches
  * the file must not be trusted — a confidently wrong Pine line is worse than
- * no mapping.
+ * no mapping. With `pine_sha256` and `strict` it is also the compile stamp:
+ * proof that the .py is an unmodified compile of exactly that Pine source. The
+ * stamp travels with the files, so moving, copying or cloning the project
+ * keeps it, and deleting the files leaves nothing behind.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -19,6 +22,10 @@ import type { PineSourcemap } from '../api/client';
 export interface StoredSourcemap extends PineSourcemap {
   /** sha256 of the .py content the map belongs to (IDE-written maps only). */
   py_sha256?: string;
+  /** sha256 of the Pine source the .py was compiled from (IDE-written maps only). */
+  pine_sha256?: string;
+  /** Whether that compile was strict (IDE-written maps only). */
+  strict?: boolean;
   /**
    * True when the source was a Pine v4/v5 script the compiler internally
    * upgraded to v6: the mappings then point at converted v6 lines, not the
@@ -36,19 +43,46 @@ export function sourcemapPathFor(pyPath: string): string {
   return `${pyPath}.map`;
 }
 
+function readStoredSourcemap(pyPath: string): StoredSourcemap | undefined {
+  try {
+    return JSON.parse(fs.readFileSync(sourcemapPathFor(pyPath), 'utf8')) as StoredSourcemap;
+  } catch {
+    return undefined;
+  }
+}
+
+function pyMatchesStamp(pyPath: string, map: StoredSourcemap | undefined): boolean {
+  if (!map?.py_sha256) return false;
+  try {
+    return sha256(fs.readFileSync(pyPath, 'utf8')) === map.py_sha256;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the .py is exactly what the IDE last wrote there, i.e. not edited since. */
+export function isGeneratedOutput(pyPath: string): boolean {
+  return pyMatchesStamp(pyPath, readStoredSourcemap(pyPath));
+}
+
+/** Whether the .py is an unmodified compile of exactly this Pine source. */
+export function isCompiledFrom(pyPath: string, pine: string, strict: boolean): boolean {
+  const map = readStoredSourcemap(pyPath);
+  return (
+    map?.pine_sha256 === sha256(pine) &&
+    (map.strict ?? false) === strict &&
+    pyMatchesStamp(pyPath, map)
+  );
+}
+
 /**
  * Load and validate the sourcemap for a compiled .py. Returns undefined when
  * there is no map, it is malformed, or it carries a `py_sha256` that no
  * longer matches the current .py content (stale after a manual edit).
  */
 export function loadSourcemapFor(pyPath: string): StoredSourcemap | undefined {
-  const mapPath = sourcemapPathFor(pyPath);
-  let map: StoredSourcemap;
-  try {
-    map = JSON.parse(fs.readFileSync(mapPath, 'utf8')) as StoredSourcemap;
-  } catch {
-    return undefined;
-  }
+  const map = readStoredSourcemap(pyPath);
+  if (!map) return undefined;
   if (map.version !== 1 || !Array.isArray(map.mappings)) return undefined;
   // Mappings for a converted v4/v5 source point at internal v6 lines, not the
   // on-disk .pine — a confidently wrong Pine line is worse than no mapping.

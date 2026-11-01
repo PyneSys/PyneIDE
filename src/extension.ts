@@ -111,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
     ),
     vscode.commands.registerCommand('pyneide.createWorkspace', () =>
-      initProjectCommand(context, manager, compileService, output)
+      initProjectCommand(context, manager, output)
     ),
     // The walkthrough is otherwise only reachable from the Welcome page, which
     // most users never open again after the first launch.
@@ -644,7 +644,6 @@ async function ensurePyneCli(manager: EnvManager): Promise<string | undefined> {
 async function initProjectCommand(
   context: vscode.ExtensionContext,
   manager: EnvManager,
-  compile: CompileService,
   output: vscode.OutputChannel
 ): Promise<void> {
   const activeUri = vscode.window.activeTextEditor?.document.uri;
@@ -715,7 +714,7 @@ async function initProjectCommand(
       hideGeneratedFiles(folder.uri.fsPath, showAgentFiles);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       writeAgentSkills(folder.uri.fsPath, result.workdir);
-      await seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), compile, log);
+      seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), log);
       updateTerminalEnv(context, manager);
       const pylanceOff = await takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
@@ -752,7 +751,7 @@ async function initProjectCommand(
     hideGeneratedFiles(baseDir);
     ensurePyneSnippets(baseDir, context.extensionPath);
     writeAgentSkills(baseDir, result.workdir);
-    await seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), compile, log);
+    seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), log);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {
     void vscode.window.showErrorMessage(

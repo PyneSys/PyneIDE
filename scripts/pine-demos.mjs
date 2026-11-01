@@ -69,10 +69,20 @@ function syncDemos(sourceDir, monorepo) {
       const pyPath = path.join(compileRoot, `${name}.py`);
       fs.copyFileSync(path.join(sourceDir, source), pinePath);
       run(path.join(bin, 'pynecomp'), ['compile', pinePath, '-o', pyPath, '--sourcemap'], compileRoot);
+      const pine = fs.readFileSync(pinePath);
+      const py = fs.readFileSync(pyPath);
+      // The compile stamp the IDE writes after its own compiles (see
+      // src/compile/sourcemap.ts): it lets a seeded demo run without a key.
+      const map = {
+        ...JSON.parse(fs.readFileSync(`${pyPath}.map`, 'utf8')),
+        py_sha256: sha256(py),
+        pine_sha256: sha256(pine),
+        strict: false,
+      };
       const outputs = {
-        [`${name}.pine`]: fs.readFileSync(pinePath),
-        [`${name}.py`]: fs.readFileSync(pyPath),
-        [`${name}.sourcemap.json`]: fs.readFileSync(`${pyPath}.map`),
+        [`${name}.pine`]: pine,
+        [`${name}.py`]: py,
+        [`${name}.sourcemap.json`]: Buffer.from(JSON.stringify(map)),
       };
       for (const [file, content] of Object.entries(outputs)) {
         fs.writeFileSync(path.join(staging, file), content);

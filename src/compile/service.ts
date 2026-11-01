@@ -5,20 +5,21 @@ import * as vscode from 'vscode';
 
 import { PineAccessPanel } from '../api/accessPanel';
 import type { AuthService } from '../api/auth';
-import type { CompileResult, ConvertResult, PineSourcemap, PyneApiClient } from '../api/client';
+import type { CompileResult, ConvertResult, PyneApiClient } from '../api/client';
 import { apiTarget, describeNetworkError, flattenErrorMessage } from '../net/errors';
 import { showNetworkError } from '../net/notify';
 import { detectPineVersion } from '../pineVersion';
 import { failures } from '../report/lastFailure';
-import { sha256, sourcemapPathFor, type StoredSourcemap } from './sourcemap';
+import {
+  isCompiledFrom,
+  isGeneratedOutput,
+  sha256,
+  sourcemapPathFor,
+  type StoredSourcemap,
+} from './sourcemap';
 
-interface CacheEntry {
-  pineHash: string;
-  outHash: string;
-  strict: boolean;
-}
-
-const CACHE_KEY = 'pyneide.compileCache';
+/** Where releases up to 0.11 kept the compile cache; cleared on start. */
+const LEGACY_CACHE_KEY = 'pyneide.compileCache';
 const LOCK_RETRY_MS = 1500;
 const LOCK_RETRIES = 3;
 /** `//@version` sits in the head of the file; no need to scan the whole text. */
@@ -26,7 +27,7 @@ const VERSION_HEAD_CHARS = 4096;
 
 /**
  * Compiles .pine documents through the PyneSys API: serial queue (the API
- * holds a per-user compile lock), content-hash cache, diagnostics, quota
+ * holds a per-user compile lock), content-hash stamp in the .py.map, diagnostics, quota
  * messages. Running a .pine always compiles it in the background; the
  * generated .py sits next to it and is free to edit — the only guard is the
  * overwrite prompt when a compile would clobber manual edits.
@@ -43,6 +44,7 @@ export class CompileService {
   ) {}
 
   register(): void {
+    void this.context.globalState.update(LEGACY_CACHE_KEY, undefined);
     this.context.subscriptions.push(
       this.diagnostics,
       // Compile diagnostics are a snapshot of one API response, not a live
@@ -82,19 +84,9 @@ export class CompileService {
     this.output.appendLine(message);
   };
 
-  private cache(): Record<string, CacheEntry> {
-    return this.context.globalState.get<Record<string, CacheEntry>>(CACHE_KEY, {});
-  }
-
-  private async updateCache(outputPath: string, entry: CacheEntry): Promise<void> {
-    const cache = this.cache();
-    cache[outputPath] = entry;
-    await this.context.globalState.update(CACHE_KEY, cache);
-  }
-
   /**
    * Make sure a fresh .py exists for a .pine document; returns its path.
-   * Compiles in the background (the content-hash cache skips the API when
+   * Compiles in the background (the compile stamp skips the API when
    * nothing changed) and only reports success when the output is fresh —
    * e.g. a declined overwrite prompt aborts the run.
    */
@@ -102,24 +94,15 @@ export class CompileService {
     await this.enqueueCompile(doc, 'run');
 
     const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
-    const strict = vscode.workspace
-      .getConfiguration('pyneide', doc.uri)
-      .get<boolean>('strictCompile', false);
-    const pineHash = sha256(`${strict}:${doc.getText()}`);
-    const cached = this.cache()[outputPath];
-    if (cached && cached.pineHash === pineHash && fs.existsSync(outputPath)) {
-      return outputPath;
-    }
-    return undefined;
+    return this.isCompiledFrom(doc) ? outputPath : undefined;
   }
 
   /** Whether the .py next to a .pine document was compiled from exactly its current text. */
   isCompiledFrom(doc: vscode.TextDocument): boolean {
-    const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
     const strict = vscode.workspace
       .getConfiguration('pyneide', doc.uri)
       .get<boolean>('strictCompile', false);
-    return this.cache()[outputPath]?.pineHash === sha256(`${strict}:${doc.getText()}`);
+    return isCompiledFrom(doc.uri.fsPath.replace(/\.pine$/, '.py'), doc.getText(), strict);
   }
 
   private async compileActiveEditor(): Promise<void> {
@@ -274,19 +257,15 @@ export class CompileService {
     const config = vscode.workspace.getConfiguration('pyneide', doc.uri);
     const strict = config.get<boolean>('strictCompile', false);
     const script = doc.getText();
-    const pineHash = sha256(`${strict}:${script}`);
     const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
-    const cached = this.cache()[outputPath];
 
-    // Local content-hash cache: skip the API when nothing changed.
-    if (cached && cached.pineHash === pineHash && fs.existsSync(outputPath)) {
-      if (sha256(fs.readFileSync(outputPath, 'utf8')) === cached.outHash) {
-        this.log(`Cache hit, skipping compile: ${outputPath}`);
-        if (trigger === 'manual') {
-          vscode.window.setStatusBarMessage('$(check) Pine output is up-to-date', 3000);
-        }
-        return;
+    // The compile stamp in the .py.map: skip the API when nothing changed.
+    if (isCompiledFrom(outputPath, script, strict)) {
+      this.log(`Cache hit, skipping compile: ${outputPath}`);
+      if (trigger === 'manual') {
+        vscode.window.setStatusBarMessage('$(check) Pine output is up-to-date', 3000);
       }
+      return;
     }
 
     // Only an actual compile needs the API: an up-to-date local output runs
@@ -298,9 +277,7 @@ export class CompileService {
     // that was modified since we generated it (the .py is free to edit and
     // may have become the user's source).
     if (fs.existsSync(outputPath)) {
-      const outHash = sha256(fs.readFileSync(outputPath, 'utf8'));
-      const editedByUser = !cached || cached.outHash !== outHash;
-      if (editedByUser) {
+      if (!isGeneratedOutput(outputPath)) {
         const choice = await vscode.window.showWarningMessage(
           `PyneIDE: ${path.basename(outputPath)} already exists and was not generated by the ` +
             'last compilation (it may contain manual edits). Overwrite it?',
@@ -329,8 +306,7 @@ export class CompileService {
 
     this.diagnostics.delete(doc.uri);
     await vscode.workspace.fs.writeFile(vscode.Uri.file(outputPath), Buffer.from(result.code, 'utf8'));
-    await this.writeSourcemap(outputPath, result, convertedSource);
-    await this.updateCache(outputPath, { pineHash, outHash: sha256(result.code), strict });
+    await this.writeSourcemap(outputPath, result, { pine: script, strict, convertedSource });
     this.log(`Compiled OK: ${outputPath}`);
     vscode.window.setStatusBarMessage(`$(check) Pine compiled: ${path.basename(outputPath)}`, 5000);
 
@@ -345,23 +321,6 @@ export class CompileService {
           if (choice === 'Convert to v6') void this.convertActiveToV6(doc);
         });
     }
-  }
-
-  /**
-   * Place an output compiled elsewhere (a bundled demo) next to its .pine and
-   * record it in the content-hash cache as a non-strict compile, exactly as
-   * if this IDE had compiled it: running it then needs no API key.
-   */
-  async adoptPrecompiled(pinePath: string, code: string, sourcemap: PineSourcemap): Promise<void> {
-    const outputPath = vscode.Uri.file(pinePath).fsPath.replace(/\.pine$/, '.py');
-    const pine = fs.readFileSync(pinePath, 'utf8');
-    await vscode.workspace.fs.writeFile(vscode.Uri.file(outputPath), Buffer.from(code, 'utf8'));
-    await this.writeSourcemap(outputPath, { ok: true, code, sourcemap }, false);
-    await this.updateCache(outputPath, {
-      pineHash: sha256(`false:${pine}`),
-      outHash: sha256(code),
-      strict: false,
-    });
   }
 
   /** The API serializes compiles per user; retry briefly when the lock is busy. */
@@ -383,21 +342,24 @@ export class CompileService {
 
   /**
    * Persist the compiler's sourcemap next to the output as `<output>.map`,
-   * stamped with the .py content hash so a later manual edit of the .py
-   * invalidates it. A response without a sourcemap (older server) removes any
-   * existing map instead — a stale map must not outlive the code it mapped.
+   * stamped with the .py and Pine source hashes: a later manual edit of the
+   * .py invalidates it, and an unchanged pair skips the next compile. A
+   * response without a sourcemap (older server) removes any existing map
+   * instead — a stale map must not outlive the code it mapped.
    */
   private async writeSourcemap(
     outputPath: string,
     result: Extract<CompileResult, { ok: true }>,
-    convertedSource: boolean
+    source: { pine: string; strict: boolean; convertedSource: boolean }
   ): Promise<void> {
     const mapPath = sourcemapPathFor(outputPath);
     if (result.sourcemap) {
       const stored: StoredSourcemap = {
         ...result.sourcemap,
         py_sha256: sha256(result.code),
-        ...(convertedSource ? { converted_source: true } : {}),
+        pine_sha256: sha256(source.pine),
+        strict: source.strict,
+        ...(source.convertedSource ? { converted_source: true } : {}),
       };
       await vscode.workspace.fs.writeFile(
         vscode.Uri.file(mapPath),
