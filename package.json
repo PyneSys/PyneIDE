@@ -1,7 +1,7 @@
 {
   "name": "pyneide",
   "displayName": "PyneIDE: Pine Script Debugger and Backtester",
-  "description": "Pine Script and Pyne in VS Code: highlighting, completion and inline diagnostics for .pine files, a step-through Pine debugger, one-click compile and run, and an interactive backtest chart. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
+  "description": "Debug Pine Script bar by bar with breakpoints, run it on an interactive backtest chart, and write it with a real language server: diagnostics, completion and hover for .pine files. Pyne (Python) scripts too. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
   "version": "0.11.2",
   "preview": true,
   "publisher": "pynesys",
