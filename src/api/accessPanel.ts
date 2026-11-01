@@ -29,6 +29,9 @@ export interface AccessOptions {
 
 const SUBSCRIPTION_URL = `${APP_URL}/subscription`;
 const API_KEYS_URL = `${APP_URL}/api-keys`;
+/** Signs in when needed, then highlights the plan on the subscription page. */
+const signupUrl = (plan: string): string =>
+  `${APP_URL}/signup?plan=${encodeURIComponent(plan.toLowerCase())}`;
 
 type InMessage =
   | { type: 'open'; url: string }
@@ -196,7 +199,8 @@ export class PineAccessPanel {
       const cliKey = this.auth.cliKey() !== undefined;
       parts.push(
         '<ol class="steps">',
-        '<li><b>Choose a plan</b> from the list below.</li>',
+        '<li><b>Choose a plan</b> from the list below. The PyneSys web app opens in your ' +
+          'browser to sign in and pay; this panel stays open for the next steps.</li>',
         `<li><b>Create an API key</b> on the <a data-url="${API_KEYS_URL}">API Keys page</a>.</li>`,
         '<li><b>Paste the key here</b>:',
         '<div class="key-row">',
@@ -239,7 +243,7 @@ export class PineAccessPanel {
         `<li>Scripts up to ${plan.maxScriptSizeKB} KB</li>`,
         '</ul>',
         `<p class="desc">${escapeHtml(plan.description)}</p>`,
-        `<button class="${plan.primary ? '' : 'secondary'}" data-url="${SUBSCRIPTION_URL}">Choose ${name}</button>`,
+        `<button class="${plan.primary ? '' : 'secondary'}" data-url="${signupUrl(plan.name)}">Choose ${name}</button>`,
         '</div>',
       ].join('\n');
     });
