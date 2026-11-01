@@ -67,6 +67,7 @@ export interface PricingPlan {
   dailyLimit: number;
   hourlyLimit: number;
   maxScriptSizeKB: number;
+  apiKeys: number;
   description: string;
   /** The plan the pricing page recommends. */
   primary: boolean;

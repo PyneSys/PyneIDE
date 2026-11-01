@@ -33,6 +33,39 @@ const API_KEYS_URL = `${APP_URL}/api-keys`;
 const signupUrl = (plan: string): string =>
   `${APP_URL}/signup?plan=${encodeURIComponent(plan.toLowerCase())}`;
 
+/*
+ * Seed and Sprout are for bringing Pine over to Pyne code, Grower and Forest for developing
+ * in Pine every day; the hourly limits draw that line. Same grouping as on pynesys.io and in
+ * the web app.
+ */
+const PLAN_GROUPS = [
+  {
+    title: 'Bring your Pine over',
+    text: 'Convert a few scripts, then keep working on the Pyne code for free.',
+    plans: ['Seed', 'Sprout'],
+  },
+  {
+    title: 'Keep developing in Pine',
+    text: 'For running and debugging Pine Script in PyneIDE every day.',
+    plans: ['Grower', 'Forest'],
+  },
+];
+
+/**
+ * Split the plans into the use-case groups; plans that no group lists are kept in a trailing
+ * untitled group, so a new plan from the API never disappears from the panel.
+ */
+function groupPlans(plans: PricingPlan[]): { title: string; text: string; plans: PricingPlan[] }[] {
+  const groups = PLAN_GROUPS.map((group) => ({
+    ...group,
+    plans: plans.filter((plan) => group.plans.includes(plan.name)),
+  })).filter((group) => group.plans.length > 0);
+  const grouped = new Set(PLAN_GROUPS.flatMap((group) => group.plans));
+  const rest = plans.filter((plan) => !grouped.has(plan.name));
+  if (rest.length > 0) groups.push({ title: '', text: '', plans: rest });
+  return groups;
+}
+
 type InMessage =
   | { type: 'open'; url: string }
   | { type: 'connect'; key: string }
@@ -231,7 +264,7 @@ export class PineAccessPanel {
         ` See them on the <a data-url="${SUBSCRIPTION_URL}">subscription page</a>.</p>`
       );
     }
-    const cards = this.plans.map((plan) => {
+    const card = (plan: PricingPlan): string => {
       const name = escapeHtml(plan.name);
       return [
         `<div class="plan${plan.primary ? ' primary' : ''}">`,
@@ -246,8 +279,45 @@ export class PineAccessPanel {
         `<button class="${plan.primary ? '' : 'secondary'}" data-url="${signupUrl(plan.name)}">Choose ${name}</button>`,
         '</div>',
       ].join('\n');
-    });
-    return `<div class="plans">${cards.join('\n')}</div>`;
+    };
+    const groups = groupPlans(this.plans).map((group) =>
+      [
+        '<div class="group">',
+        group.title ? `<h3>${escapeHtml(group.title)}</h3><p class="muted">${escapeHtml(group.text)}</p>` : '',
+        `<div class="plans">${group.plans.map(card).join('\n')}</div>`,
+        '</div>',
+      ].join('\n')
+    );
+    return `<div class="groups">${groups.join('\n')}</div>` + this.comparisonHtml(this.plans);
+  }
+
+  /** The plan comparison table and its notes, as on pynesys.io. */
+  private comparisonHtml(plans: PricingPlan[]): string {
+    const row = (label: string, value: (plan: PricingPlan) => string): string =>
+      `<tr><th scope="row">${label}</th>` +
+      plans.map((plan) => `<td${plan.primary ? ' class="primary"' : ''}>${value(plan)}</td>`).join('') +
+      '</tr>';
+    return [
+      '<h2>Plan comparison</h2>',
+      '<table class="compare">',
+      '<thead><tr><th scope="col" aria-label="Feature"></th>' +
+        plans.map((plan) => `<th scope="col"${plan.primary ? ' class="primary"' : ''}>${escapeHtml(plan.name)}</th>`).join('') +
+        '</tr></thead>',
+      '<tbody>',
+      row('Price', (plan) => `${escapeHtml(plan.priceDisplay)}/month`),
+      row('Pine compiles per day', (plan) => String(plan.dailyLimit)),
+      row('Pine compiles per hour', (plan) => String(plan.hourlyLimit)),
+      row('API keys', (plan) => String(plan.apiKeys)),
+      row('Max script size', (plan) => `${plan.maxScriptSizeKB} KB`),
+      '</tbody>',
+      '</table>',
+      '<ul class="notes muted">',
+      '<li>Each run of a changed <code>.pine</code> file is one compile. Unchanged scripts come from ' +
+        'the cache and don’t count.</li>',
+      '<li>Converting a Pine v4 or v5 script to v6 doesn’t use your quota.</li>',
+      '<li>The generated Pyne code is yours to read, edit and keep.</li>',
+      '</ul>',
+    ].join('\n');
   }
 
   private html(body: string): string {
@@ -265,7 +335,7 @@ export class PineAccessPanel {
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
     font-size: 13px; line-height: 1.5;
-    max-width: 980px; margin: 0 auto; padding: 20px 24px 40px;
+    max-width: 1080px; margin: 0 auto; padding: 20px 24px 40px;
   }
   h1 { font-size: 20px; margin: 4px 0 6px; }
   h2 {
@@ -301,7 +371,22 @@ export class PineAccessPanel {
   }
   .message { min-height: 1em; margin: 6px 0 0; }
   .message.error { color: var(--vscode-errorForeground, #f48771); }
-  .plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  /* The groups sit side by side when both fit, as on pynesys.io, and stack otherwise. */
+  .groups { display: flex; flex-wrap: wrap; gap: 18px 24px; }
+  .group { flex: 1 1 440px; display: flex; flex-direction: column; }
+  .group h3 { font-size: 14px; margin: 0 0 2px; }
+  .group > p { margin: 0 0 10px; }
+  .plans { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  .compare { border-collapse: collapse; width: 100%; max-width: 760px; }
+  .compare th, .compare td {
+    padding: 6px 10px; text-align: center;
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+  }
+  .compare th[scope="row"] { text-align: left; font-weight: 400; color: var(--vscode-descriptionForeground); }
+  .compare thead th { font-weight: 600; }
+  .compare .primary { background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1)); }
+  .notes { padding-left: 18px; margin: 10px 0 0; max-width: 760px; }
+  .notes li { margin: 3px 0; }
   .plan {
     display: flex; flex-direction: column; gap: 4px; padding: 14px;
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 6px;
