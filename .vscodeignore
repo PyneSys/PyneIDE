@@ -24,11 +24,4 @@ CLA.md
 # from the package. media/walkthrough/*.svg is used at runtime and stays.
 media/*.png
 media/*.gif
-dist/env-smoke.js
-dist/pinels-smoke.js
-dist/pyright-smoke.js
-dist/checker-smoke.js
-dist/edge-corpus-smoke.js
-dist/agent-skills-smoke.js
-dist/chart-breakpoint-condition-smoke.js
-dist/bridge-profile-smoke.js
+dist/*-smoke.js
