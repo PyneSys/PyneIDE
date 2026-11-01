@@ -17,6 +17,10 @@
   <img src="https://img.shields.io/badge/telemetry-none-2ea043.svg" alt="No telemetry" />
 </p>
 
+![Stepping bar by bar in a paused Pine script: the Pyne scope updates, the chart grows one candle at a time, and a series unfolds into its own history](media/debug.gif)
+
+*A Pine script paused in the debugger: Next bar, one candle at a time — the live **Pyne** scope, and `fastMa` unfolded into its series history.*
+
 ---
 
 PyneIDE is a full development environment for **Pine Script** and **Pyne** in Visual
@@ -37,6 +41,9 @@ You don't need to know any Python. Open a `.pine` file and PyneIDE checks it as 
 type, compiles and runs it on a real chart, and lets you **debug it** — set
 breakpoints, step bar by bar, inspect every value. Everything happens in Pine
 terms; the Python underneath stays out of your way.
+
+New projects come with two Pine demos you can run and debug right away, with no
+account. Compiling your own Pine needs a PyneSys plan.
 
 </td>
 <td width="50%" valign="top">
@@ -90,10 +97,6 @@ and watch series history such as `close[1]` right in the Watch panel.
   on the chart.
 
 It works the same whether you wrote Pine or Pyne code.
-
-![Stepping bar by bar in a paused Pine script: the Pyne scope updates, the chart grows one candle at a time, and a series unfolds into its own history](media/debug.gif)
-
-*Next bar, one candle at a time — the live **Pyne** scope, and `fastMa` unfolded into its series history.*
 
 ![Choose Bar on Chart: pick a bar directly on the candlestick chart and the debugger pauses on exactly that bar](media/chart-breakpoint.gif)
 
@@ -293,16 +296,20 @@ view keeps your Scripts, Data, and Output in one place.
 
 1. **Install** PyneIDE from the Marketplace.
 2. Open a folder and run **PyneIDE: Initialize Pyne Project** — it scaffolds a
-   runnable demo plus sample data, and the agent files described above.
+   runnable Pyne demo, two precompiled Pine demos (`demo_sma_cross.pine` and
+   `demo_rsi_strategy.pine`), sample data, and the agent files described above.
 3. When prompted, let PyneIDE **set up the Python environment** (a one-time ~80 MB
    download of `uv` + Python + PyneCore, with a separate environment for the project).
    It stays there when the extension is uninstalled, so **PyneIDE: Remove
    Environment** is there to delete it again and give the disk space back;
    **PyneIDE: Reveal Environment Folder** shows where it lives.
-4. Press **Run** on the demo and watch the chart appear.
-5. To run your own **Pine**: open a `.pine` file, **Sign In** with your PyneSys API
-   key when prompted, then Run — it compiles in the cloud and runs like any other
-   script. To debug, set a breakpoint and press **Debug**.
+4. Press **Run** on a demo and watch the chart appear. The Pine demos are already
+   compiled: set a breakpoint in one and press **Debug** to step through it, no
+   account needed.
+5. To run your own **Pine**: open a `.pine` file and press Run. The first compile
+   opens the **Pine Script in PyneIDE** panel with the plans and the steps to
+   connect your PyneSys API key; after that it compiles in the cloud and runs like
+   any other script.
 
 ## Requirements
 
@@ -310,10 +317,11 @@ view keeps your Scripts, Data, and Output in one place.
 - An internet connection for initial setup, downloading updates or plugins, and
   Pine compilation. Every Run and Debug of a `.pine` file goes through the cloud
   compiler unless the file is unchanged since the last compile.
-- For **Pine** compilation: a **PyneSys account and API key**
-  ([app.pynesys.io](https://app.pynesys.io)). Writing, running and debugging **Pyne
-  code** needs no account — it runs entirely on your machine on the open-source
-  PyneCore runtime.
+- For **Pine** compilation: a **PyneSys plan and API key**
+  ([app.pynesys.io](https://app.pynesys.io)). The bundled Pine demos run without
+  one, and so does a Pine script that is unchanged since its last compile. Writing,
+  running and debugging **Pyne code** needs no account — it runs entirely on your
+  machine on the open-source PyneCore runtime.
 
 ## What is Pyne?
 
