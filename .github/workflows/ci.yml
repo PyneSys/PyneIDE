@@ -12,13 +12,17 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same ref supersedes the previous run.
+# A newer push to the same ref supersedes the previous run. The daily run has
+# its own group, so it never cancels a push run on the same ref.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
+    # The daily run only watches the latest PyneCore release; the build is
+    # covered by every push.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +54,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        core: ['6.11.1', latest]
+        # 6.11.1 is the oldest supported Core: a released package that only an
+        # IDE change can break, so the daily run tests the latest release alone.
+        core: ${{ github.event_name == 'schedule' && fromJSON('["latest"]') || fromJSON('["6.11.1", "latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
