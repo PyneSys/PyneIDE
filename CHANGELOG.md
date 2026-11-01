@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-01
+
+### Added
+
+- **Initialize Pyne Project** adds two precompiled Pine Script demos to
+  `scripts/` (`demo_sma_cross.pine` and `demo_rsi_strategy.pine`), with their
+  generated Pyne code. They run and debug on their Pine lines without an
+  account or API key; only editing one needs a compile.
+- A **Pine Script in PyneIDE** panel opens wherever a Pine compile needs an
+  account: no API key, no active plan, or a reached compile limit. It shows the
+  current PyneSys plans in the same groups as pynesys.io, a plan comparison
+  table, and the steps to get a key. **Choose** opens the web app with that
+  plan selected; the key is connected in the panel, and the blocked script can
+  be run again from there. It is also available as **PyneIDE: Pine Script Plans
+  and API Key**, from the walkthrough and from the status bar while signed out.
+- The web app's **Copy and open in PyneIDE** button connects PyneIDE with the
+  copied API key. VS Code installs PyneIDE first if it is missing. A copied key
+  is also filled into the panel's key field when you switch back to it.
+- The chart's trade list has a details button for each trade, showing all of
+  its entry and exit data.
+- The data picker offers **Download new data…**, which opens the Symbol
+  Browser.
+
+### Changed
+
+- An unchanged Pine script that was already compiled runs and debugs without
+  signing in. The compile check is stored in the `.py.map` file next to the
+  generated code, so it moves with the project and leaves nothing behind when
+  the files are deleted.
+- A runtime error now also marks the failing line of a Pyne script in the
+  Problems panel and opens it in the editor, as it already did for Pine. An
+  error raised inside a library or runtime call points to the script line that
+  made the call.
+- After a failed run, the next run of that script asks for its data again
+  instead of reusing the same choice.
+- Run, Debug and the chart of the same script share one open data picker
+  instead of each opening their own.
+- The Debug Console no longer opens automatically for Pyne debug sessions.
+- Pylance and Pyright no longer analyze the packages in the project's
+  `.pyneide` environment as project files.
+
 ## [0.11.0] - 2026-10-29
 
 ### Added
