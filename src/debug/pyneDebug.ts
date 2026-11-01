@@ -88,6 +88,7 @@ export function registerPyneDebug(
         folder,
         config
       ): Promise<vscode.DebugConfiguration | null> {
+        config.internalConsoleOptions ??= 'neverOpen';
         if (config.request === 'attach') return config;
         return runService.resolveDebugLaunch(folder, config);
       },
