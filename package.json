@@ -48,7 +48,8 @@
     "onLanguage:pine",
     "onDebugDynamicConfigurations:pyne",
     "onCustomEditor:pyneide.ohlcvTable",
-    "onLanguage:pyne"
+    "onLanguage:pyne",
+    "onUri"
   ],
   "capabilities": {
     "untrustedWorkspaces": {

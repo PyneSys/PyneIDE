@@ -135,7 +135,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.showPineAccess', () =>
       PineAccessPanel.show(context, auth, { reason: 'browse' })
     ),
-    vscode.commands.registerCommand('pyneide.signOut', () => auth.signOut())
+    vscode.commands.registerCommand('pyneide.signOut', () => auth.signOut()),
+    // `<scheme>://pynesys.pyneide/connect` from the web app's "Copy and open in
+    // PyneIDE" button; the key comes from the clipboard, never from the URI.
+    vscode.window.registerUriHandler({
+      handleUri: (uri) => {
+        if (uri.path === '/connect') void PineAccessPanel.connectFromClipboard(context, auth);
+      },
+    })
   );
   const compileService = new CompileService(context, auth, compileOutput, pineLs);
   compileService.register();

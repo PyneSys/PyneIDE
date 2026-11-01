@@ -28,10 +28,27 @@ export interface AccessOptions {
 }
 
 const SUBSCRIPTION_URL = `${APP_URL}/subscription`;
-const API_KEYS_URL = `${APP_URL}/api-keys`;
+
+/**
+ * Tells the web app which editor its "Copy and open in PyneIDE" button opens; the app
+ * remembers it in that browser. Only a desktop editor has a scheme the browser can open.
+ */
+const ideParam = (): string =>
+  vscode.env.uiKind === vscode.UIKind.Desktop ? `ide=${encodeURIComponent(vscode.env.uriScheme)}` : '';
+
+const apiKeysUrl = (): string => {
+  const ide = ideParam();
+  return `${APP_URL}/api-keys${ide ? `?${ide}` : ''}`;
+};
+
 /** Signs in when needed, then highlights the plan on the subscription page. */
-const signupUrl = (plan: string): string =>
-  `${APP_URL}/signup?plan=${encodeURIComponent(plan.toLowerCase())}`;
+const signupUrl = (plan: string): string => {
+  const ide = ideParam();
+  return `${APP_URL}/signup?plan=${encodeURIComponent(plan.toLowerCase())}${ide ? `&${ide}` : ''}`;
+};
+
+/** PyneSys API keys are JWTs. */
+const looksLikeApiKey = (text: string): boolean => /^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(text);
 
 /*
  * Seed and Sprout are for bringing Pine over to Pyne code, Grower and Forest for developing
@@ -67,10 +84,16 @@ function groupPlans(plans: PricingPlan[]): { title: string; text: string; plans:
 }
 
 type InMessage =
+  | { type: 'ready'; render: number }
   | { type: 'open'; url: string }
   | { type: 'connect'; key: string }
   | { type: 'useCliKey' }
   | { type: 'run' };
+
+type OutMessage =
+  | { type: 'busy' }
+  | { type: 'error'; message: string }
+  | { type: 'prefill'; key: string };
 
 const compiles = (count: number): string => `${count} compile${count === 1 ? '' : 's'}`;
 
@@ -85,8 +108,15 @@ export class PineAccessPanel {
   private plans: PricingPlan[] | undefined;
   private plansError: string | undefined;
   private connected: { expiry?: Date } | undefined;
+  private signedIn = false;
+  /** The key field's page posts `ready` once loaded; messages before that wait in `queue`. */
+  private renderId = 0;
+  private ready = false;
+  private queue: OutMessage[] = [];
+  /** The clipboard key already put into the key field, so switching back does not repeat it. */
+  private prefilled: string | undefined;
 
-  static show(context: vscode.ExtensionContext, auth: AuthService, options: AccessOptions): void {
+  static show(context: vscode.ExtensionContext, auth: AuthService, options: AccessOptions): PineAccessPanel {
     const existing = PineAccessPanel.current;
     if (existing) {
       // Opened again from a menu: the blocked script is still worth offering.
@@ -94,9 +124,27 @@ export class PineAccessPanel {
       existing.connected = undefined;
       existing.panel.reveal(vscode.ViewColumn.Active);
       void existing.render();
-      return;
+      return existing;
     }
     PineAccessPanel.current = new PineAccessPanel(context, auth, options);
+    return PineAccessPanel.current;
+  }
+
+  /**
+   * The web app's "Copy and open in PyneIDE" button: it copies the key and opens
+   * `<scheme>://pynesys.pyneide/connect`, which never carries the key itself.
+   */
+  static async connectFromClipboard(context: vscode.ExtensionContext, auth: AuthService): Promise<void> {
+    const text = (await vscode.env.clipboard.readText()).trim();
+    const panel = PineAccessPanel.show(context, auth, { reason: 'browse' });
+    if (looksLikeApiKey(text)) {
+      await panel.connect(text);
+    } else {
+      panel.post({
+        type: 'error',
+        message: 'There is no PyneSys API key on the clipboard. Copy it on the API Keys page, then paste it here.',
+      });
+    }
   }
 
   private constructor(
@@ -117,12 +165,23 @@ export class PineAccessPanel {
       this.disposables
     );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    // A key copied in the browser is filled in when the user comes back to the panel.
+    this.panel.onDidChangeViewState(
+      (e) => e.webviewPanel.active && void this.offerClipboardKey(),
+      null,
+      this.disposables
+    );
+    vscode.window.onDidChangeWindowState(
+      (state) => state.focused && this.panel.visible && void this.offerClipboardKey(),
+      null,
+      this.disposables
+    );
     void this.render();
   }
 
   private async render(): Promise<void> {
     if (!this.plans) {
-      this.panel.webview.html = this.html('<p class="muted">Loading plans…</p>');
+      this.setHtml('<p class="muted">Loading plans…</p>', false);
       try {
         this.plans = await this.auth.pricing();
         this.plansError = undefined;
@@ -130,12 +189,44 @@ export class PineAccessPanel {
         this.plansError = flattenErrorMessage(err);
       }
     }
-    const signedIn = (await this.auth.getKey()) !== undefined;
-    this.panel.webview.html = this.html(this.body(signedIn));
+    this.signedIn = (await this.auth.getKey()) !== undefined;
+    this.setHtml(this.body(this.signedIn));
+    this.prefilled = undefined;
+    await this.offerClipboardKey();
+  }
+
+  /**
+   * Messages wait for the next page that has the key field: a placeholder page (`live`
+   * false) never reports ready, so an error raised while the plans load is not lost on it.
+   */
+  private setHtml(body: string, live = true): void {
+    this.renderId++;
+    this.ready = false;
+    this.panel.webview.html = this.html(body, live ? this.renderId : 0);
+  }
+
+  private post(msg: OutMessage): void {
+    if (this.ready) void this.panel.webview.postMessage(msg);
+    else this.queue.push(msg);
+  }
+
+  /** Fill the key field from the clipboard; connecting stays the user's click. */
+  private async offerClipboardKey(): Promise<void> {
+    if (this.signedIn || this.connected) return;
+    const text = (await vscode.env.clipboard.readText()).trim();
+    if (!looksLikeApiKey(text) || text === this.prefilled) return;
+    this.prefilled = text;
+    this.post({ type: 'prefill', key: text });
   }
 
   private async onMessage(msg: InMessage): Promise<void> {
     switch (msg.type) {
+      case 'ready':
+        // A message from a page an earlier render already replaced is stale.
+        if (msg.render !== this.renderId) break;
+        this.ready = true;
+        for (const queued of this.queue.splice(0)) void this.panel.webview.postMessage(queued);
+        break;
       case 'open':
         // Only the PyneSys app pages this panel links to.
         if (msg.url.startsWith(`${APP_URL}/`)) {
@@ -162,23 +253,20 @@ export class PineAccessPanel {
 
   private async connect(key: string): Promise<void> {
     if (!key) {
-      void this.panel.webview.postMessage({ type: 'error', message: 'Paste an API key first.' });
+      this.post({ type: 'error', message: 'Paste an API key first.' });
       return;
     }
-    void this.panel.webview.postMessage({ type: 'busy' });
+    this.post({ type: 'busy' });
     try {
       const verification = await this.auth.verifyKey(key);
       if (!verification.valid) {
-        void this.panel.webview.postMessage({
-          type: 'error',
-          message: `This API key is not valid: ${verification.message}`,
-        });
+        this.post({ type: 'error', message: `This API key is not valid: ${verification.message}` });
         return;
       }
       this.connected = { expiry: await this.auth.storeKey(key, verification) };
       await this.render();
     } catch (err) {
-      void this.panel.webview.postMessage({
+      this.post({
         type: 'error',
         message: `Could not reach PyneSys to check the key: ${flattenErrorMessage(err)}`,
       });
@@ -234,7 +322,7 @@ export class PineAccessPanel {
         '<ol class="steps">',
         '<li><b>Choose a plan</b> from the list below. The PyneSys web app opens in your ' +
           'browser to sign in and pay; this panel stays open for the next steps.</li>',
-        `<li><b>Create an API key</b> on the <a data-url="${API_KEYS_URL}">API Keys page</a>.</li>`,
+        `<li><b>Create an API key</b> on the <a data-url="${apiKeysUrl()}">API Keys page</a>.</li>`,
         '<li><b>Paste the key here</b>:',
         '<div class="key-row">',
         '<input id="key" type="password" placeholder="PyneSys API key" autocomplete="off" spellcheck="false">',
@@ -320,7 +408,7 @@ export class PineAccessPanel {
     ].join('\n');
   }
 
-  private html(body: string): string {
+  private html(body: string, renderId: number): string {
     const nonce = crypto.randomBytes(16).toString('base64');
     return `<!DOCTYPE html>
 <html lang="en">
@@ -428,8 +516,15 @@ ${body}
     } else if (msg.type === 'error') {
       if (button) button.disabled = false;
       if (message) { message.className = 'message error'; message.textContent = msg.message; }
+    } else if (msg.type === 'prefill' && key) {
+      key.value = msg.key;
+      if (message) {
+        message.className = 'message muted';
+        message.textContent = 'The API key you copied is filled in. Click Connect.';
+      }
     }
   });
+  if (${renderId}) vscode.postMessage({ type: 'ready', render: ${renderId} });
 </script>
 </body>
 </html>`;
