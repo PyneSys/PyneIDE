@@ -1,0 +1,11 @@
+{
+  "pynecompVersion": "6.0.80",
+  "files": {
+    "demo_sma_cross.pine": "e489955803c36ffa385539f229a452370cd4cf058d8473f025d7c5af0e2c3d6c",
+    "demo_sma_cross.py": "45e645b06b99e528fc1f6ae5edf1dc9ea96e95e8b59ed0f061b51067da0983d0",
+    "demo_sma_cross.sourcemap.json": "7d406bb932da0c44b8a9926c342ce393c005a67cbbb5d47551a550cb233c9bdf",
+    "demo_rsi_strategy.pine": "489b68921f21829b65a3988ad951f59e6ec14873bcff8cc111ebbf494965bcda",
+    "demo_rsi_strategy.py": "f696c5725614ab185964b1865959ce6da3fd237c702cc42c7d75058f0d923f74",
+    "demo_rsi_strategy.sourcemap.json": "db195a49aec1dc467171a6cbaf7d7f88c695bcf9ae202dd864b748f7448b6cbe"
+  }
+}

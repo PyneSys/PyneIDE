@@ -3,8 +3,9 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { PineAccessPanel } from '../api/accessPanel';
 import type { AuthService } from '../api/auth';
-import type { CompileResult, ConvertResult, PyneApiClient } from '../api/client';
+import type { CompileResult, ConvertResult, PineSourcemap, PyneApiClient } from '../api/client';
 import { apiTarget, describeNetworkError, flattenErrorMessage } from '../net/errors';
 import { showNetworkError } from '../net/notify';
 import { detectPineVersion } from '../pineVersion';
@@ -270,9 +271,6 @@ export class CompileService {
   }
 
   private async compileDocument(doc: vscode.TextDocument, trigger: 'manual' | 'run'): Promise<void> {
-    const client = await this.auth.requireClient();
-    if (!client) return;
-
     const config = vscode.workspace.getConfiguration('pyneide', doc.uri);
     const strict = config.get<boolean>('strictCompile', false);
     const script = doc.getText();
@@ -290,6 +288,11 @@ export class CompileService {
         return;
       }
     }
+
+    // Only an actual compile needs the API: an up-to-date local output runs
+    // signed out too, it is already on disk as plain Pyne code.
+    const client = await this.auth.requireClient(doc.uri);
+    if (!client) return;
 
     // Overwrite protection: never destroy an output we did not generate or
     // that was modified since we generated it (the .py is free to edit and
@@ -342,6 +345,23 @@ export class CompileService {
           if (choice === 'Convert to v6') void this.convertActiveToV6(doc);
         });
     }
+  }
+
+  /**
+   * Place an output compiled elsewhere (a bundled demo) next to its .pine and
+   * record it in the content-hash cache as a non-strict compile, exactly as
+   * if this IDE had compiled it: running it then needs no API key.
+   */
+  async adoptPrecompiled(pinePath: string, code: string, sourcemap: PineSourcemap): Promise<void> {
+    const outputPath = vscode.Uri.file(pinePath).fsPath.replace(/\.pine$/, '.py');
+    const pine = fs.readFileSync(pinePath, 'utf8');
+    await vscode.workspace.fs.writeFile(vscode.Uri.file(outputPath), Buffer.from(code, 'utf8'));
+    await this.writeSourcemap(outputPath, { ok: true, code, sourcemap }, false);
+    await this.updateCache(outputPath, {
+      pineHash: sha256(`false:${pine}`),
+      outHash: sha256(code),
+      strict: false,
+    });
   }
 
   /** The API serializes compiles per user; retry briefly when the lock is busy. */
@@ -433,13 +453,11 @@ export class CompileService {
       return;
     }
     if (status === 402) {
-      const choice = await vscode.window.showErrorMessage(
-        `PyneIDE: ${detail.error}`,
-        'Open PyneSys'
-      );
-      if (choice === 'Open PyneSys') {
-        void vscode.env.openExternal(vscode.Uri.parse('https://app.pynesys.io'));
-      }
+      PineAccessPanel.show(this.context, this.auth, {
+        reason: 'subscription',
+        script: doc.uri,
+        detail: detail.error,
+      });
       return;
     }
     if (status === 429) {
@@ -448,9 +466,18 @@ export class CompileService {
         : '';
       const choice = await vscode.window.showWarningMessage(
         `PyneIDE: ${detail.error}${wait}`,
+        'See Plans',
         'Show Compile Usage'
       );
-      if (choice === 'Show Compile Usage') await this.showUsage();
+      if (choice === 'See Plans') {
+        PineAccessPanel.show(this.context, this.auth, {
+          reason: 'limit',
+          script: doc.uri,
+          detail: detail.error,
+        });
+      } else if (choice === 'Show Compile Usage') {
+        await this.showUsage();
+      }
       return;
     }
     // 413 and anything else: the API message is already human-readable.

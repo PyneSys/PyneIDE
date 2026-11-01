@@ -146,6 +146,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.showPineAccess",
+        "title": "Pine Script Plans and API Key",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.signOut",
         "title": "Sign Out from PyneSys",
         "category": "PyneIDE"
@@ -1024,7 +1029,7 @@
           {
             "id": "run",
             "title": "Run it on a chart",
-            "description": "Open a script and press Run above its entry point, or use the Run action in the Pyne view. The run streams onto a candlestick chart with faithful Pine plots; strategies also get trade markers, an equity curve and Trades / Stats tables.\n[Open the Pyne View](command:workbench.view.extension.pyneide)",
+            "description": "Open a script and press Run above its entry point, or use the Run action in the Pyne view. The Pine demos in scripts/ (demo_rsi_strategy.pine, demo_sma_cross.pine) run without an account. The run streams onto a candlestick chart with faithful Pine plots; strategies also get trade markers, an equity curve and Trades / Stats tables.\n[Open the Pyne View](command:workbench.view.extension.pyneide)",
             "media": {
               "svg": "media/walkthrough/run.svg",
               "altText": "A script in the editor next to a candlestick chart with an overlay plot, volume bars and a results table."
@@ -1056,6 +1061,20 @@
             ]
           },
           {
+            "id": "pine",
+            "title": "Compile your own Pine Script",
+            "description": "The demo scripts come precompiled. Your own Pine Script, or an edited demo, compiles through the PyneSys cloud compiler, which needs a plan and an API key; the result is cached, so unchanged scripts never re-compile. Pyne code runs locally without one. Older sources get a free v4/v5 to v6 conversion.\n[See Plans and Connect](command:pyneide.showPineAccess)",
+            "media": {
+              "svg": "media/walkthrough/pine.svg",
+              "altText": "A .pine file compiled through the PyneSys cloud compiler into a chart, with the API key input below."
+            },
+            "completionEvents": [
+              "onContext:pyneide.signedIn",
+              "onCommand:pyneide.signIn",
+              "onCommand:pyneide.compilePine"
+            ]
+          },
+          {
             "id": "script",
             "title": "Write your own script",
             "description": "Create an indicator, strategy or library — as Pine Script (.pine) or as Pyne code (a @pyne .py file). Both run on the same PyneCore runtime, and libraries land in the TradingView-compatible versioned layout.\n[New Script…](command:pyneide.workspace.createScript)",
@@ -1078,20 +1097,6 @@
             "completionEvents": [
               "onCommand:pyneide.dataDownloadWizard",
               "onCommand:pyneide.openSymbolBrowser"
-            ]
-          },
-          {
-            "id": "pine",
-            "title": "Compile Pine Script",
-            "description": "Running a .pine file compiles it through the PyneSys cloud compiler and caches the result, so unchanged scripts never re-compile. That needs a PyneSys API key; Pyne code runs locally without one. Older sources get a free v4/v5 to v6 conversion.\n[Sign In to PyneSys](command:pyneide.signIn)",
-            "media": {
-              "svg": "media/walkthrough/pine.svg",
-              "altText": "A .pine file compiled through the PyneSys cloud compiler into a chart, with the API key input below."
-            },
-            "completionEvents": [
-              "onContext:pyneide.signedIn",
-              "onCommand:pyneide.signIn",
-              "onCommand:pyneide.compilePine"
             ]
           }
         ]
@@ -1495,6 +1500,8 @@
     "test:create-script": "node --test test/createScript.test.mjs",
     "docs:check": "node scripts/pynecore-docs.mjs",
     "docs:sync": "node scripts/pynecore-docs.mjs --sync",
+    "demos:check": "node scripts/pine-demos.mjs",
+    "demos:sync": "node scripts/pine-demos.mjs --sync",
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "check": "tsc --noEmit",

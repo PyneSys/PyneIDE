@@ -1,0 +1,13 @@
+//@version=6
+indicator("Pyne Demo: SMA Cross", overlay=true)
+
+fastLength = input.int(9, "Fast Length", minval=1)
+slowLength = input.int(21, "Slow Length", minval=1)
+
+fast = ta.sma(close, fastLength)
+slow = ta.sma(close, slowLength)
+
+plot(fast, color=color.teal, title="Fast SMA")
+plot(slow, color=color.orange, title="Slow SMA")
+plotshape(ta.crossover(fast, slow), title="Bullish Cross", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(ta.crossunder(fast, slow), title="Bearish Cross", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)

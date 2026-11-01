@@ -6,10 +6,16 @@ import * as vscode from 'vscode';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { apiTarget, flattenErrorMessage } from '../net/errors';
 import { showNetworkError } from '../net/notify';
-import { DEFAULT_API_BASE_URL, PyneApiClient, type TokenVerification } from './client';
+import { PineAccessPanel } from './accessPanel';
+import {
+  APP_URL,
+  DEFAULT_API_BASE_URL,
+  PyneApiClient,
+  type PricingPlan,
+  type TokenVerification,
+} from './client';
 
 const SECRET_KEY = 'pynesys.apiKey';
-const KEYS_PAGE_URL = 'https://app.pynesys.io';
 
 /** Decode a JWT payload locally (no verification) to read the expiry claim. */
 export function jwtExpiry(token: string): Date | undefined {
@@ -49,14 +55,14 @@ function promptForApiKey(initialValue: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     const input = vscode.window.createInputBox();
     input.title = 'PyneSys API Key';
-    input.prompt = `Paste your PyneSys API key — no key yet? Create one at ${KEYS_PAGE_URL}`;
+    input.prompt = `Paste your PyneSys API key — no key yet? Create one at ${APP_URL}`;
     input.value = initialValue;
     input.password = true;
     input.ignoreFocusOut = true;
     input.buttons = [
       {
         iconPath: new vscode.ThemeIcon('link-external'),
-        tooltip: `Create an API key at ${KEYS_PAGE_URL}`,
+        tooltip: `Create an API key at ${APP_URL}`,
       },
     ];
     let accepted: string | undefined;
@@ -64,7 +70,7 @@ function promptForApiKey(initialValue: string): Promise<string | undefined> {
       input.validationMessage = value.trim() ? undefined : 'API key must not be empty';
     });
     input.onDidTriggerButton(() => {
-      void vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
+      void vscode.env.openExternal(vscode.Uri.parse(APP_URL));
     });
     input.onDidAccept(() => {
       if (!input.value.trim()) {
@@ -83,8 +89,6 @@ function promptForApiKey(initialValue: string): Promise<string | undefined> {
 }
 
 export class AuthService {
-  private signInPrompt: Promise<void> | undefined;
-
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly output: vscode.OutputChannel
@@ -148,8 +152,7 @@ export class AuthService {
    */
   async signIn(): Promise<boolean> {
     let initialValue = '';
-    const workdir = resolveWorkspaceWorkdir();
-    const cliKey = workdir?.exists ? readApiTomlKey(workdir.path) : undefined;
+    const cliKey = this.cliKey();
     if (cliKey) {
       const choice = await vscode.window.showInformationMessage(
         'PyneIDE: found an API key in workdir/config/api.toml (pyne CLI). Use it?',
@@ -164,7 +167,6 @@ export class AuthService {
     if (!key) return false;
 
     const trimmed = key.trim();
-    const client = new PyneApiClient(trimmed, this.baseUrl(), this.log);
     const target = apiTarget('Sign-in', this.baseUrl());
     // Retried in place rather than by restarting sign-in: an unreachable API
     // says nothing about the key the user just pasted, so asking for it again
@@ -174,7 +176,7 @@ export class AuthService {
       try {
         verification = await vscode.window.withProgress(
           { location: vscode.ProgressLocation.Notification, title: 'PyneIDE: validating API key…' },
-          () => client.verifyToken(trimmed)
+          () => this.verifyKey(trimmed)
         );
       } catch (err) {
         this.log(`Key validation failed: ${flattenErrorMessage(err)}`);
@@ -198,15 +200,34 @@ export class AuthService {
       return false;
     }
 
-    await this.context.secrets.store(SECRET_KEY, trimmed);
-    const expiry = verification.expiresAt
-      ? new Date(verification.expiresAt)
-      : jwtExpiry(trimmed);
+    const expiry = await this.storeKey(trimmed, verification);
     void vscode.window.showInformationMessage(
       'PyneIDE: signed in to PyneSys.' +
         (expiry ? ` API key expires ${expiry.toISOString().slice(0, 10)}.` : '')
     );
     return true;
+  }
+
+  /** The key the pyne CLI keeps in this workspace's workdir/config/api.toml, if any. */
+  cliKey(): string | undefined {
+    const workdir = resolveWorkspaceWorkdir();
+    return workdir?.exists ? readApiTomlKey(workdir.path) : undefined;
+  }
+
+  /** Server-side validation of a key that is not stored yet; network failures throw. */
+  verifyKey(key: string): Promise<TokenVerification> {
+    return new PyneApiClient(key, this.baseUrl(), this.log).verifyToken(key);
+  }
+
+  /** Store a key that passed {@link verifyKey}; returns its expiry when known. */
+  async storeKey(key: string, verification: TokenVerification): Promise<Date | undefined> {
+    await this.context.secrets.store(SECRET_KEY, key);
+    return verification.expiresAt ? new Date(verification.expiresAt) : jwtExpiry(key);
+  }
+
+  /** Public plans; needs no key. */
+  pricing(): Promise<PricingPlan[]> {
+    return new PyneApiClient('', this.baseUrl(), this.log).pricing();
   }
 
   async signOut(): Promise<void> {
@@ -221,7 +242,7 @@ export class AuthService {
         detail:
           'The stored API key is removed from this machine. It is write-only, so ' +
           'signing back in means pasting the full key again — make sure you still ' +
-          `have it, or create a new one at ${KEYS_PAGE_URL}.`,
+          `have it, or create a new one at ${APP_URL}.`,
       },
       'Sign Out'
     );
@@ -230,32 +251,15 @@ export class AuthService {
     void vscode.window.showInformationMessage('PyneIDE: signed out, API key removed.');
   }
 
-  /** A missing key aborts this request; sign-in actions never retain a run slot. */
-  async requireClient(): Promise<PyneApiClient | undefined> {
+  /**
+   * A missing key aborts this request and opens the Pine access panel, which
+   * offers to run `script` again once a key is stored. The panel is not
+   * awaited, so a run never waits on the user's decision.
+   */
+  async requireClient(script?: vscode.Uri): Promise<PyneApiClient | undefined> {
     const existing = await this.client();
     if (existing) return existing;
-    if (this.signInPrompt) return undefined;
-    this.signInPrompt = this.offerSignIn().finally(() => { this.signInPrompt = undefined; });
+    PineAccessPanel.show(this.context, this, { reason: 'signin', script });
     return undefined;
-  }
-
-  private async offerSignIn(): Promise<void> {
-    try {
-      const choice = await vscode.window.showInformationMessage(
-        'PyneIDE: compiling Pine Script requires a PyneSys API key. Pyne scripts run ' +
-          'locally without one. Sign in, then run the command again.',
-        'Sign In',
-        'Create API Key'
-      );
-      if (choice === 'Create API Key') {
-        await vscode.env.openExternal(vscode.Uri.parse(KEYS_PAGE_URL));
-      } else if (choice !== 'Sign In') {
-        return;
-      }
-      await this.signIn();
-    } catch (error) {
-      this.log(`Sign-in failed: ${flattenErrorMessage(error)}`);
-      void vscode.window.showErrorMessage(`PyneIDE: sign-in failed: ${flattenErrorMessage(error)}`);
-    }
   }
 }

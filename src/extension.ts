@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import * as vscode from 'vscode';
 
+import { PineAccessPanel } from './api/accessPanel';
 import { AuthService } from './api/auth';
 import { ChartManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
@@ -60,6 +61,7 @@ import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
 import { LibraryCallDiagnostics } from './workspace/libraryDiagnostics';
+import { seedPineDemos } from './workspace/pineDemos';
 import { registerLibraryHelp } from './workspace/libraryHelp';
 import { registerWorkspaceView } from './workspace/tree';
 
@@ -109,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
     ),
     vscode.commands.registerCommand('pyneide.createWorkspace', () =>
-      initProjectCommand(context, manager, output)
+      initProjectCommand(context, manager, compileService, output)
     ),
     // The walkthrough is otherwise only reachable from the Welcome page, which
     // most users never open again after the first launch.
@@ -130,6 +132,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     compileOutput,
     vscode.commands.registerCommand('pyneide.signIn', () => auth.signIn()),
+    vscode.commands.registerCommand('pyneide.showPineAccess', () =>
+      PineAccessPanel.show(context, auth, { reason: 'browse' })
+    ),
     vscode.commands.registerCommand('pyneide.signOut', () => auth.signOut())
   );
   const compileService = new CompileService(context, auth, compileOutput, pineLs);
@@ -639,6 +644,7 @@ async function ensurePyneCli(manager: EnvManager): Promise<string | undefined> {
 async function initProjectCommand(
   context: vscode.ExtensionContext,
   manager: EnvManager,
+  compile: CompileService,
   output: vscode.OutputChannel
 ): Promise<void> {
   const activeUri = vscode.window.activeTextEditor?.document.uri;
@@ -709,6 +715,7 @@ async function initProjectCommand(
       hideGeneratedFiles(folder.uri.fsPath, showAgentFiles);
       ensurePyneSnippets(folder.uri.fsPath, context.extensionPath);
       writeAgentSkills(folder.uri.fsPath, result.workdir);
+      await seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), compile, log);
       updateTerminalEnv(context, manager);
       const pylanceOff = await takeOverPythonAnalysis();
       const doc = await vscode.workspace.openTextDocument(result.demoScript);
@@ -745,6 +752,7 @@ async function initProjectCommand(
     hideGeneratedFiles(baseDir);
     ensurePyneSnippets(baseDir, context.extensionPath);
     writeAgentSkills(baseDir, result.workdir);
+    await seedPineDemos(context.extensionPath, path.join(result.workdir, 'scripts'), compile, log);
     await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(baseDir));
   } catch (err) {
     void vscode.window.showErrorMessage(

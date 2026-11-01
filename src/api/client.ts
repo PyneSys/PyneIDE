@@ -15,6 +15,8 @@
 import { REPORT_CLIENT_HEADER, REPORT_CLIENT_KEY } from '../report/payload';
 
 export const DEFAULT_API_BASE_URL = 'https://api.pynesys.io';
+/** The PyneSys web app: account, subscription and API key pages. */
+export const APP_URL = 'https://app.pynesys.io';
 
 export interface CompileErrorDetail {
   error: string;
@@ -56,6 +58,18 @@ export interface UsagePeriod {
 export interface Usage {
   daily: UsagePeriod;
   hourly: UsagePeriod;
+}
+
+/** A public subscription plan, as `/system/pricing` serves it (the fields the IDE shows). */
+export interface PricingPlan {
+  name: string;
+  priceDisplay: string;
+  dailyLimit: number;
+  hourlyLimit: number;
+  maxScriptSizeKB: number;
+  description: string;
+  /** The plan the pricing page recommends. */
+  primary: boolean;
 }
 
 export type SubmitReportResult =
@@ -250,6 +264,18 @@ export class PyneApiClient {
       resetAt: p.reset_at,
     });
     return { daily: period(data.daily), hourly: period(data.hourly) };
+  }
+
+  /** Public subscription plans; the same source the website and the web app use. */
+  async pricing(): Promise<PricingPlan[]> {
+    const res = await this.request('GET', '/system/pricing', { auth: false });
+    if (res.status !== 200) {
+      throw new Error(
+        `Failed to fetch pricing (HTTP ${res.status}): ` +
+          PyneApiClient.parseErrorDetail(res.text, res.status).error
+      );
+    }
+    return PyneApiClient.parseJson<{ plans: PricingPlan[] }>(res, 'system/pricing').plans;
   }
 
   /**

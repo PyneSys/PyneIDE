@@ -1,0 +1,18 @@
+//@version=6
+strategy("Pyne Demo: RSI Strategy", overlay=false, initial_capital=10000)
+
+rsiLength = input.int(14, "RSI Length", minval=1)
+entryLevel = input.float(30.0, "Entry Level")
+exitLevel = input.float(70.0, "Exit Level")
+
+rsiValue = ta.rsi(close, rsiLength)
+
+if ta.crossover(rsiValue, entryLevel)
+    strategy.entry("Long", strategy.long)
+
+if ta.crossunder(rsiValue, exitLevel)
+    strategy.close("Long")
+
+plot(rsiValue, title="RSI", color=color.purple)
+plot(entryLevel, title="Entry Level", color=color.green)
+plot(exitLevel, title="Exit Level", color=color.red)

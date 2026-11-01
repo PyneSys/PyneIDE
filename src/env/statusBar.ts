@@ -404,8 +404,8 @@ export class EnvStatusBar {
       if (usageState.kind === 'signed-out') {
         items.push({
           label: '$(sign-in) Sign In to PyneSys',
-          description: 'Store your PyneSys API key',
-          action: () => void vscode.commands.executeCommand('pyneide.signIn'),
+          description: 'Plans and API key for compiling Pine Script',
+          action: () => void vscode.commands.executeCommand('pyneide.showPineAccess'),
         });
       } else if (usageState.kind !== 'loading') {
         items.push({
