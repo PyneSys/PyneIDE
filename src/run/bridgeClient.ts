@@ -119,7 +119,10 @@ export interface PlotMetaRecord {
   trackprice?: boolean;
   offset?: number;
   show_last?: number;
-  display?: string;
+  /** The chart locations the plot shows in ('pane', 'data_window',
+   * 'price_scale', 'status_line', 'pine_screener'); pynecore < 6.12.1 wrote
+   * one name instead, 'all' for every location. */
+  display?: string[] | string;
   format?: string;
   precision?: number;
   force_overlay?: boolean;

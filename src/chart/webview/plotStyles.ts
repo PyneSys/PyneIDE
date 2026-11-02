@@ -43,11 +43,14 @@ const TRANSPARENT = '#00000000';
  * absent means "before the first change" (use the static color). */
 export type PlotDatum = Record<string, number | string | null | undefined>;
 
-/** Pane-visibility of a `display` name: Pine's display.* is "show only
- * here", so anything except 'all'/'pane' hides the plot from the chart pane
- * (data_window/status_line/price_scale belong to F9C UI surfaces). */
-function paneVisible(display: string | undefined): boolean {
-  return display === undefined || display === 'all' || display === 'pane';
+/** Whether a plot's `display` covers a chart location. Pine's display.* is a
+ * set of locations: a plot shows only where its set says. No `display` is
+ * Pine's default, display.all; the single-name form comes from
+ * pynecore < 6.12.1. */
+export function displayIn(display: PlotMetaRecord['display'], place: string): boolean {
+  if (display === undefined) return true;
+  if (Array.isArray(display)) return display.includes(place);
+  return display === 'all' || display === place;
 }
 
 /** Which pane a plot renders in; 'hidden' = not rendered at all. A key
@@ -58,7 +61,7 @@ export function paneFor(
   scriptOverlay: boolean
 ): PaneTarget {
   if (!meta) return scriptOverlay ? 'overlay' : 'pane';
-  if (!RENDERABLE_KINDS.has(meta.kind) || !paneVisible(meta.display)) return 'hidden';
+  if (!RENDERABLE_KINDS.has(meta.kind) || !displayIn(meta.display, 'pane')) return 'hidden';
   return meta.force_overlay || scriptOverlay ? 'overlay' : 'pane';
 }
 
@@ -105,7 +108,7 @@ export function buildFigure(
   meta: PlotMetaRecord | undefined,
   key: string,
   colorKey: string,
-  title: string,
+  title: string | undefined,
   fallbackColor: string
 ): PlotFigureSpec {
   const linewidth = meta?.linewidth ?? 1;

@@ -201,7 +201,9 @@ function assertVizStream(events: BridgeEvent[]): void {
   if (metas.get('hist')?.style !== 'histogram') fail('hist style');
   if (metas.get('circ')?.style !== 'circles') fail('circ style');
   if (metas.get('onprice')?.force_overlay !== true) fail('onprice force_overlay');
-  if (metas.get('hidden')?.display !== 'none') fail('hidden display');
+  const hidden = metas.get('hidden')?.display;
+  // pynecore < 6.12.1 names display.none, later releases list no location.
+  if (!(hidden === 'none' || (Array.isArray(hidden) && hidden.length === 0))) fail('hidden display');
   if (metas.get('bgcolor#0')?.kind !== 'bgcolor') fail('bgcolor kind');
 
   // A2 metas: stepline + offset/show_last, hline price/linestyle, shape/char.

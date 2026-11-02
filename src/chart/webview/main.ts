@@ -65,6 +65,7 @@ import { closeTradeDetails, showTradeDetails } from './tradeDetails';
 import {
   DrawingStore,
   drawDrawings,
+  hasTextStyle,
   makeXResolver,
   sizePx,
   type TableCellState,
@@ -82,6 +83,7 @@ import {
   drawPlotCandles,
   drawSteplines,
   drawTrackprices,
+  displayIn,
   paneFor,
   panePrecision,
   type ArrowItem,
@@ -1328,11 +1330,13 @@ function rebuildPlotIndicators(st: RunState): void {
       if (meta?.trackprice === true) {
         trackItems.push({ plotIndex: i, meta, fallbackColor });
       }
+      // The tooltip legend is the chart's status line: a plot whose display
+      // leaves out status_line is drawn but gets no legend value.
       return buildFigure(
         meta,
         figureKey(i),
         colorKey(i),
-        `${meta?.title ?? st.plotKeys[i]}: `,
+        displayIn(meta?.display, 'status_line') ? `${meta?.title ?? st.plotKeys[i]}: ` : undefined,
         fallbackColor
       );
     });
@@ -1771,6 +1775,8 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
         `text-align:${cell?.text_halign ?? 'center'};` +
         `vertical-align:${cell?.text_valign === 'top' ? 'top' : cell?.text_valign === 'bottom' ? 'bottom' : 'middle'};` +
         `color:${cell?.text_color ?? 'inherit'};` +
+        `font-style:${hasTextStyle(cell?.text_formatting, 'italic') ? 'italic' : 'normal'};` +
+        `font-weight:${hasTextStyle(cell?.text_formatting, 'bold') ? 'bold' : 'normal'};` +
         `background:${cell?.bgcolor ?? 'transparent'};`;
       if (table.border_color && (table.border_width ?? 0) > 0) {
         td.style.border = `${table.border_width}px solid ${table.border_color}`;

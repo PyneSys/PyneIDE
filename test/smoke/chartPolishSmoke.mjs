@@ -42,4 +42,16 @@ drawDrawings(env, store, xres, false);
 assert.deepEqual(painted, ['updated entry'], 'showing must use updates received while hidden');
 assert.equal(store.hasCanvasFor(true, false), true);
 assert.equal(store.hasCanvasFor(false, false), false, 'force_overlay routing must stay intact');
-console.log('CHART POLISH SMOKE OK: initial/saved brokers, reversible labels, hidden updates, pane routing');
+
+const fonts = [];
+ctx.fillText = (text) => { fonts.push([text, ctx.font]); };
+store.apply([
+  { i: 2, op: 'update', obj: 'label', id: 1, s: { id: 1, x: 1, y: 11, text: 'both', style: 'none',
+    force_overlay: true, text_formatting: ['bold', 'italic'] } },
+  { i: 2, op: 'create', obj: 'label', id: 2, s: { id: 2, x: 1, y: 11, text: 'plain', style: 'none',
+    force_overlay: true, text_formatting: [] } },
+]);
+drawDrawings(env, store, xres, false);
+assert.deepEqual(fonts, [['both', 'italic bold 14px sans-serif'], ['plain', '14px sans-serif']],
+  'text_formatting must style the label font');
+console.log('CHART POLISH SMOKE OK: initial/saved brokers, reversible labels, hidden updates, pane routing, text styles');

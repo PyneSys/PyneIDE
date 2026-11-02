@@ -46,6 +46,8 @@ export interface LabelState {
   size?: string | number | null;
   textalign?: string | null;
   tooltip?: string | null;
+  /** Text styles ('bold', 'italic'); [] is text.format_none. */
+  text_formatting?: string[] | null;
   force_overlay?: boolean;
 }
 
@@ -67,6 +69,8 @@ export interface BoxState {
   text_halign?: string | null;
   text_valign?: string | null;
   text_wrap?: string | null;
+  /** Text styles ('bold', 'italic'); [] is text.format_none. */
+  text_formatting?: string[] | null;
   force_overlay?: boolean;
 }
 
@@ -82,6 +86,8 @@ export interface TableCellState {
   text_size?: string | number | null;
   bgcolor?: string | null;
   tooltip?: string | null;
+  /** Text styles ('bold', 'italic'); [] is text.format_none. */
+  text_formatting?: string[] | null;
   /** [start_col, start_row, end_col, end_row]; only the range's top-left
    * cell renders, the others are hidden by it. */
   merge?: [number, number, number, number];
@@ -290,6 +296,18 @@ export function sizePx(size: string | number | null | undefined, base: number): 
   }
 }
 
+/** Whether a drawing's text_formatting holds a style ('bold' or 'italic').
+ * Also used by the HTML table layer in main.ts. */
+export function hasTextStyle(formatting: string[] | null | undefined, style: string): boolean {
+  return Array.isArray(formatting) && formatting.includes(style);
+}
+
+/** The canvas font prefix of a drawing's text styles: 'italic bold ' for
+ * both, '' for none. */
+function textStyle(formatting: string[] | null | undefined): string {
+  return `${hasTextStyle(formatting, 'italic') ? 'italic ' : ''}${hasTextStyle(formatting, 'bold') ? 'bold ' : ''}`;
+}
+
 interface Pt {
   x: number;
   y: number;
@@ -487,7 +505,7 @@ function drawBoxText(
 ): void {
   const { ctx } = env;
   const px = sizePx(b.text_size, 12);
-  ctx.font = `${px}px sans-serif`;
+  ctx.font = `${textStyle(b.text_formatting)}${px}px sans-serif`;
   ctx.fillStyle = b.text_color ?? '#000000FF';
   const pad = 4;
   // Wrap into the box width ('auto' wrap), or keep the author's lines.
@@ -649,7 +667,7 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
     ctx.fillText(glyph, x, y + dir * (px / 2));
     if (lines.length) {
       const tpx = Math.max(9, px - 3);
-      ctx.font = `${tpx}px sans-serif`;
+      ctx.font = `${textStyle(la.text_formatting)}${tpx}px sans-serif`;
       ctx.fillStyle = la.textcolor ?? color;
       let ty = y + dir * (px + tpx / 2 + 2);
       for (const line of dir === 1 ? lines : [...lines].reverse()) {
@@ -662,7 +680,7 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
 
   if (style === 'none' || style === 'text_outline') {
     if (!lines.length) return;
-    ctx.font = `${px}px sans-serif`;
+    ctx.font = `${textStyle(la.text_formatting)}${px}px sans-serif`;
     ctx.textAlign = la.textalign === 'left' ? 'left' : la.textalign === 'right' ? 'right' : 'center';
     ctx.textBaseline = 'middle';
     let ty = y - ((lines.length - 1) * px * 1.25) / 2;
@@ -683,7 +701,7 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
   // Bubble label (label_up/down/left/right/...): rounded rect + pointer at
   // the anchor, offset away from it in the pointer's direction.
   const pointer = LABEL_POINTERS[style] ?? 'down';
-  ctx.font = `${px}px sans-serif`;
+  ctx.font = `${textStyle(la.text_formatting)}${px}px sans-serif`;
   const pad = Math.max(4, px * 0.4);
   const lineH = px * 1.25;
   let textW = px; // minimum bubble for an empty label
