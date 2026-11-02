@@ -979,11 +979,19 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 emitter.emit({"e": "openTrades", "d": open_trades})
             try:
                 from pynecore.core.strategy_stats import calculate_strategy_statistics
-                stats = calculate_strategy_statistics(
-                    position, runner.script.initial_capital,
-                    runner.equity_curve if runner.equity_curve else None,
-                    runner.first_price, runner.last_price,
-                )
+                if hasattr(runner, "equity_curve"):
+                    # pynecore < 6.12.1: Sharpe/Sortino from the per-bar equity curve
+                    stats = calculate_strategy_statistics(
+                        position, runner.script.initial_capital,
+                        runner.equity_curve if runner.equity_curve else None,
+                        runner.first_price, runner.last_price,
+                    )
+                else:
+                    stats = calculate_strategy_statistics(
+                        position, runner.script.initial_capital,
+                        runner.first_price, runner.last_price,
+                        risk_free_rate=runner.script.risk_free_rate,
+                    )
                 emitter.emit({
                     "e": "stats",
                     "d": {k: sanitize(v) for k, v in stats.to_dict().items()},
