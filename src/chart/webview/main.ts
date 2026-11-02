@@ -55,6 +55,15 @@ import type { ChartDebugPosition, ChartBreakpointTarget, ChartInMessage, ChartOu
 import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../priceScale';
 import { ColorTrack } from './colorTrack';
 import {
+  DataWindowView,
+  formatBarTime,
+  formatPlotValue,
+  type DataWindowMode,
+  type DataWindowModel,
+  type DataWindowRow,
+  type DataWindowSection,
+} from './dataWindow';
+import {
   calculateEquitySummary,
   drawEquityCurve,
   EquityCrosshair,
@@ -74,6 +83,7 @@ import {
 import {
   buildFigure,
   buildHlineFigure,
+  buildStatusFigure,
   drawAreas,
   drawArrows,
   drawBackgrounds,
@@ -86,6 +96,7 @@ import {
   displayIn,
   paneFor,
   panePrecision,
+  statusOnlyPane,
   type ArrowItem,
   type BarcolorShape,
   type CandleItem,
@@ -450,9 +461,8 @@ const scriptLegendEl = document.getElementById('script-legend');
 
 function syncScriptLegend(start: StartEvent): void {
   if (!scriptLegendEl) return;
-  const filename = start.script.split(/[\\/]/).pop() ?? '';
   const title = start.scriptTitle?.trim();
-  const name = start.scriptShortTitle?.trim() || title || filename.replace(/\.[^.]+$/, '');
+  const name = scriptDisplayName(start);
   scriptLegendEl.textContent = name;
   scriptLegendEl.title = [title || name, start.script].filter(Boolean).join('\n');
   scriptLegendEl.hidden = !legendVisible || !!start.dataOnly || !name;
@@ -1161,6 +1171,11 @@ function colorKey(index: number): string {
   return `c${index}`;
 }
 
+/** Datum field carrying status-line-only plot `index`'s formatted value. */
+function statusKey(index: number): string {
+  return `s${index}`;
+}
+
 /** Fixed pane id for the separate plots pane, so the marker layer can be
  * stacked onto the same pane (an unknown paneId makes KLineChart create the
  * pane on demand). */
@@ -1259,6 +1274,18 @@ function rebuildPlotIndicators(st: RunState): void {
   const overlayGroup = splitGroup(overlayIdx);
   const paneGroup = splitGroup(paneIdx);
 
+  // Plots kept off the chart whose display still holds status_line: their
+  // value goes into the status line of the pane they belong to.
+  const overlayStatus: number[] = [];
+  const paneStatus: number[] = [];
+  for (let i = 0; i < st.plotKeys.length; i++) {
+    const meta = metaForKey(st, st.plotKeys[i]);
+    if (!meta || st.hidden.has(meta.id)) continue;
+    const target = statusOnlyPane(meta, st.start.overlay);
+    if (target === 'overlay') overlayStatus.push(i);
+    else if (target === 'pane') paneStatus.push(i);
+  }
+
   // fills route to the pane of their first referenced plot/hline; a fill
   // whose own display hides it (or whose references are unresolvable) is
   // skipped. Sources resolve to plot columns (their own offset/show_last
@@ -1301,13 +1328,14 @@ function rebuildPlotIndicators(st: RunState): void {
     groupHlines: PlotMetaRecord[],
     precision: number,
     candles: CandleItem[],
-    fills: FillItem[]
+    fills: FillItem[],
+    statusIdx: number[]
   ) => {
     // Dynamic plots resolve their per-bar color in calc (ColorTrack lookups
     // are amortized O(1) over ascending bar indices); the figures' styles
     // callbacks then just read the resolved datum field.
     const dynChannel = new Map<number, string>();
-    for (const i of lineIdx) {
+    for (const i of [...lineIdx, ...statusIdx]) {
       const meta = st.plotMeta.get(st.plotKeys[i]);
       if (meta?.dynamic) dynChannel.set(i, meta.id);
     }
@@ -1341,6 +1369,23 @@ function rebuildPlotIndicators(st: RunState): void {
       );
     });
     figures.push(...groupHlines.map((m, n) => buildHlineFigure(m, `h${n}`)));
+    const statusPrecision = new Map<number, number>();
+    for (const [n, i] of statusIdx.entries()) {
+      const meta = metaForKey(st, st.plotKeys[i]);
+      if (!meta) continue;
+      statusPrecision.set(i, meta.precision ?? precision);
+      figures.push(
+        buildStatusFigure(
+          meta,
+          statusKey(i),
+          colorKey(i),
+          `${meta.title ?? st.plotKeys[i]}: `,
+          PLOT_COLORS[(lineIdx.length + n) % PLOT_COLORS.length]
+        )
+      );
+    }
+    const thousands = st.chart.getThousandsSeparator();
+    const decimalFold = st.chart.getDecimalFold();
     // plotcandle/plotbar columns feed the y-axis range through figures with
     // an unregistered type and no attrs: the range pass reads every figure
     // key's value, but the paint pass silently skips an unknown figure class.
@@ -1350,6 +1395,7 @@ function rebuildPlotIndicators(st: RunState): void {
     );
     const valueIdx = [...lineIdx, ...candleIdx];
     const futureBars = Math.max(0, ...valueIdx.map((i) => metaForKey(st, st.plotKeys[i])?.offset ?? 0));
+    const datumIdx = [...valueIdx, ...statusIdx];
     return {
       name,
       shortName: 'Plots',
@@ -1358,7 +1404,7 @@ function rebuildPlotIndicators(st: RunState): void {
       calc: (dataList: PyneBar[]) =>
         Array.from({ length: dataList.length + futureBars }, (_d, barIndex) => {
           const out: PlotDatum = {};
-          for (const i of valueIdx) {
+          for (const i of datumIdx) {
             const meta = metaForKey(st, st.plotKeys[i]);
             // offset shifts the series right (value seen offset bars ago);
             // show_last blanks everything before the last N bars.
@@ -1367,7 +1413,14 @@ function rebuildPlotIndicators(st: RunState): void {
             if (meta?.show_last !== undefined && src < dataList.length - meta.show_last) {
               v = null;
             }
-            out[figureKey(i)] = v;
+            const statusDigits = statusPrecision.get(i);
+            if (statusDigits === undefined) {
+              out[figureKey(i)] = v;
+            } else {
+              // Same text KLineChart makes from a numeric legend value.
+              out[statusKey(i)] =
+                v === null ? null : decimalFold.format(thousands.format(v.toFixed(statusDigits)));
+            }
             const channel = dynChannel.get(i);
             if (channel !== undefined && src >= 0 && src < dataList.length) {
               const enc = st.colorTrack.colorAt(channel, src);
@@ -1461,7 +1514,7 @@ function rebuildPlotIndicators(st: RunState): void {
 
   // Overlay group: plots stacked on the candle pane, markers above them.
   if (overlayGroup.lineIdx.length || overlayHlines.length || overlayGroup.candles.length ||
-      overlayFills.length) {
+      overlayFills.length || overlayStatus.length) {
     const pricePrecision = mintickDecimals(st.start.syminfo.mintick);
     registerIndicator(
       makeDefinition(
@@ -1470,7 +1523,8 @@ function rebuildPlotIndicators(st: RunState): void {
         overlayHlines,
         pricePrecision,
         overlayGroup.candles,
-        overlayFills
+        overlayFills,
+        overlayStatus
       ) as never
     );
     if (st.overlayIndicatorId) st.chart.removeIndicator({ id: st.overlayIndicatorId });
@@ -1515,7 +1569,7 @@ function rebuildPlotIndicators(st: RunState): void {
   // The plots indicator is created first WITHOUT stacking (wiping the pane
   // clean), then the marker layer stacks on top of it.
   if (paneGroup.lineIdx.length || paneHlines.length || paneGroup.candles.length ||
-      paneFills.length) {
+      paneFills.length || paneStatus.length) {
     const precision = panePrecision(
       [...paneGroup.lineIdx.map((i) => st.plotMeta.get(st.plotKeys[i])), ...paneHlines],
       2
@@ -1527,7 +1581,8 @@ function rebuildPlotIndicators(st: RunState): void {
         paneHlines,
         precision,
         paneGroup.candles,
-        paneFills
+        paneFills,
+        paneStatus
       ) as never
     );
     if (st.paneIndicatorId) st.chart.removeIndicator({ id: st.paneIndicatorId });
@@ -2366,6 +2421,7 @@ function uiTick(): void {
     ensureDrawingIndicators(st);
     syncBreakpointOverlays(st);
     if (!isFrozen()) renderDrawingTables(st);
+    refreshDataWindow();
     elapsed = performance.now() - t0;
   }
   setTimeout(uiTick, Math.max(UI_TICK_MS, elapsed * 3));
@@ -2991,6 +3047,179 @@ tbLegendEl?.addEventListener('click', () => {
   applyLegendVisibility();
 });
 
+// --- Data Window ------------------------------------------------------------
+// Bar shown: the hovered one; once the pointer leaves the chart, the last
+// hovered one stays (held) so a value can be reached and copied; otherwise
+// the bar the debugger is paused on, else the newest bar. Open/closed is
+// module-level so it survives re-runs, like the other toolbar toggles.
+
+const tbDataWindowEl = document.getElementById('tb-datawindow') as HTMLButtonElement | null;
+const dataWindowEl = document.getElementById('data-window');
+const dataWindowView = dataWindowEl
+  ? new DataWindowView(dataWindowEl, {
+      release: () => {
+        dataWindowHeld = undefined;
+        refreshDataWindow();
+      },
+      copy: async (text) => {
+        vscode.postMessage({ type: 'copyText', text });
+        return true;
+      },
+    })
+  : undefined;
+let dataWindowOpen = false;
+let dataWindowHover: number | undefined;
+let dataWindowHeld: number | undefined;
+let dataWindowFrame: number | undefined;
+
+/** Plot kinds that carry a per-bar value worth listing. */
+const DATA_WINDOW_KINDS = new Set(['plot', 'shape', 'char', 'arrow', 'candle', 'bar']);
+
+function scriptDisplayName(start: StartEvent): string {
+  const filename = start.script.split(/[\\/]/).pop() ?? '';
+  return start.scriptShortTitle?.trim() || start.scriptTitle?.trim() ||
+    filename.replace(/\.[^.]+$/, '');
+}
+
+function dataWindowModel(st: RunState): DataWindowModel | undefined {
+  const last = st.bars.length - 1;
+  if (last < 0) return undefined;
+  let mode: DataWindowMode;
+  let index: number;
+  if (dataWindowHover !== undefined) {
+    mode = 'cursor';
+    index = dataWindowHover;
+  } else if (dataWindowHeld !== undefined) {
+    mode = 'held';
+    index = dataWindowHeld;
+  } else if (debugPosition && debugPosition.barIndex <= last) {
+    mode = 'paused';
+    index = debugPosition.barIndex;
+  } else {
+    mode = 'latest';
+    index = last;
+  }
+  index = Math.min(Math.max(0, index), last);
+  const bar = st.bars[index];
+  const priceDigits = mintickDecimals(st.start.syminfo.mintick);
+  const price = (v: number): DataWindowRow['text'] => formatPlotValue(v, priceDigits, undefined);
+  const num = (label: string, v: number | null | undefined, text: (v: number) => string) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? { label, text: text(v), copy: String(v) }
+      : { label, text: 'na', na: true };
+
+  const sections: DataWindowSection[] = [];
+  const barRows: DataWindowRow[] = [
+    num('Open', bar.open, price),
+    num('High', bar.high, price),
+    num('Low', bar.low, price),
+    num('Close', bar.close, price),
+  ];
+  const prevClose = index > 0 ? st.bars[index - 1].close : undefined;
+  if (typeof prevClose === 'number' && prevClose !== 0) {
+    const change = bar.close - prevClose;
+    const pct = (change / prevClose) * 100;
+    barRows.push({
+      label: 'Change',
+      text: `${change > 0 ? '+' : ''}${price(change)} (${change > 0 ? '+' : ''}${pct.toFixed(2)}%)`,
+      copy: String(change),
+      tone: change > 0 ? 'pos' : change < 0 ? 'neg' : undefined,
+    });
+  }
+  if (typeof bar.volume === 'number' && Number.isFinite(bar.volume)) {
+    barRows.push(num('Volume', bar.volume, (v) => formatPlotValue(v, 2, 'volume')));
+  }
+  const ticker = st.start.syminfo.ticker;
+  sections.push({ title: typeof ticker === 'string' && ticker ? ticker : 'Price', rows: barRows });
+
+  if (!st.start.dataOnly) {
+    const plotRows: DataWindowRow[] = [];
+    for (let i = 0; i < st.plotKeys.length; i++) {
+      const key = st.plotKeys[i];
+      const meta = metaForKey(st, key);
+      if (meta && (!DATA_WINDOW_KINDS.has(meta.kind) || !displayIn(meta.display, 'data_window'))) {
+        continue;
+      }
+      // The value drawn at this bar: offset shifts a series right.
+      const src = index - (meta?.offset ?? 0);
+      const v = src >= 0 && src <= last ? st.bars[src].plots?.[i] ?? null : null;
+      let color: string | null = meta?.color ?? PLOT_COLORS[i % PLOT_COLORS.length];
+      if (meta?.kind === 'arrow' && typeof v === 'number') {
+        color = (v < 0 ? meta.colordown : meta.colorup) ?? color;
+      }
+      if (meta?.dynamic && src >= 0 && src <= last) {
+        const enc = st.colorTrack.colorAt(meta.id, src);
+        if (typeof enc === 'string') color = enc;
+        else if (enc === null) color = null;
+      }
+      const label = meta && meta.kind !== 'candle' && meta.kind !== 'bar' ? meta.title ?? key : key;
+      const digits = meta?.precision ?? priceDigits;
+      plotRows.push({
+        ...num(label, v, (x) => formatPlotValue(x, digits, meta?.format)),
+        color,
+      });
+    }
+    if (plotRows.length) sections.push({ title: scriptDisplayName(st.start), rows: plotRows });
+    if (st.start.scriptType === 'strategy' && typeof bar.equity === 'number') {
+      sections.push({
+        title: 'Strategy',
+        rows: [num('Equity', bar.equity, (v) => formatPlotValue(v, 2, undefined))],
+      });
+    }
+  }
+  const tz = st.start.syminfo.timezone;
+  return {
+    barIndex: index,
+    time: formatBarTime(bar.timestamp, typeof tz === 'string' ? tz : undefined),
+    mode,
+    sections,
+  };
+}
+
+/** Repaint the panel on the next frame (hover moves arrive faster). */
+function refreshDataWindow(): void {
+  if (!dataWindowOpen || !dataWindowView || dataWindowFrame !== undefined) return;
+  dataWindowFrame = requestAnimationFrame(() => {
+    dataWindowFrame = undefined;
+    dataWindowView.render(state ? dataWindowModel(state) : undefined);
+  });
+}
+
+function setDataWindowOpen(open: boolean): void {
+  dataWindowOpen = open && !!dataWindowEl;
+  if (dataWindowEl) dataWindowEl.hidden = !dataWindowOpen;
+  tbDataWindowEl?.classList.toggle('active', dataWindowOpen);
+  tbDataWindowEl?.setAttribute('aria-pressed', String(dataWindowOpen));
+  refreshDataWindow();
+}
+
+/** Data index under a pointer, or undefined off the bars. */
+function barIndexAt(event: PointerEvent): number | undefined {
+  if (!state) return undefined;
+  const bounds = container.getBoundingClientRect();
+  const converted = state.chart.convertFromPixel(
+    [{ x: event.clientX - bounds.left }],
+    { paneId: 'candle_pane' }
+  );
+  const point = Array.isArray(converted) ? converted[0] : converted;
+  return typeof point?.dataIndex === 'number' ? point.dataIndex : undefined;
+}
+
+tbDataWindowEl?.addEventListener('click', () => setDataWindowOpen(!dataWindowOpen));
+container.addEventListener('pointermove', (event) => {
+  if (!dataWindowOpen) return;
+  const index = barIndexAt(event);
+  if (index === dataWindowHover) return;
+  dataWindowHover = index;
+  refreshDataWindow();
+});
+container.addEventListener('pointerleave', () => {
+  if (dataWindowHover === undefined) return;
+  dataWindowHeld = dataWindowHover;
+  dataWindowHover = undefined;
+  refreshDataWindow();
+});
+
 tbBreakpointsEl?.addEventListener('click', (event) => {
   event.stopPropagation();
   if (breakpointsPopupEl?.hidden) openBreakpointsPopup();
@@ -3176,7 +3405,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   const msg = event.data;
   switch (msg.type) {
     case 'reset':
+      dataWindowHover = undefined;
+      dataWindowHeld = undefined;
       startRun(msg.start);
+      refreshDataWindow();
       break;
     case 'bars': {
       if (!state) break;
@@ -3222,6 +3454,8 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       break;
     case 'debugPosition': {
       debugPosition = msg.position;
+      dataWindowHeld = undefined;
+      refreshDataWindow();
       const badge = document.getElementById('debug-position');
       if (badge) {
         badge.hidden = !debugPosition;
@@ -3278,6 +3512,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         }
         renderTables();
         syncToolbar();
+        refreshDataWindow();
         // The new chart is complete: swap the held picture for it.
         unfreezeAfterPaint();
       }

@@ -354,6 +354,13 @@ export class ChartPanel {
         this.breakpointSelectionLabel = undefined;
         this.onCancelBreakpointSelection?.();
         break;
+      case 'copyText':
+        if (typeof msg.text === 'string') {
+          void vscode.env.clipboard.writeText(msg.text).then(() =>
+            vscode.window.setStatusBarMessage(`Copied ${msg.text}`, 2000)
+          );
+        }
+        break;
     }
   }
 
@@ -608,7 +615,78 @@ export class ChartPanel {
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #script-legend[hidden] { display: none; }
-  #chart-area { flex: 1; min-height: 0; position: relative; }
+  #chart-row { flex: 1; min-height: 0; display: flex; }
+  #chart-area { flex: 1; min-width: 0; min-height: 0; position: relative; }
+  /* Data Window: every value of one bar, docked right of the chart. */
+  #data-window {
+    flex: 0 0 auto; width: 232px; max-width: 45%; min-width: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+    border-left: 1px solid var(--vscode-panel-border, #444);
+    background: var(--vscode-editor-background);
+    color: var(--vscode-foreground); font-size: 11px; user-select: none;
+  }
+  #data-window[hidden] { display: none; }
+  #data-window .dw-header {
+    display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px 5px;
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+  }
+  #data-window .dw-where { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  #data-window .dw-bar { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #data-window .dw-time {
+    color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #data-window .dw-mode {
+    flex: 0 0 auto; margin-top: 1px; padding: 1px 7px; border-radius: 9px;
+    border: 1px solid var(--vscode-panel-border, #444); background: transparent;
+    color: var(--vscode-descriptionForeground); font: inherit; font-size: 10px;
+    white-space: nowrap;
+  }
+  #data-window .dw-mode[hidden] { display: none; }
+  #data-window .dw-mode:disabled { cursor: default; }
+  #data-window .dw-mode[data-mode="held"] {
+    cursor: pointer; color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+    border-color: var(--vscode-button-background, #0e639c);
+  }
+  #data-window .dw-mode[data-mode="held"]:hover {
+    background: var(--vscode-button-hoverBackground, var(--vscode-button-background, #0e639c));
+  }
+  #data-window .dw-mode[data-mode="paused"] {
+    color: var(--vscode-editorWarning-foreground, #cca700); border-color: currentColor;
+  }
+  #data-window .dw-body { flex: 1; min-height: 0; overflow: auto; padding: 0 0 6px; }
+  #data-window .dw-section {
+    padding: 8px 8px 2px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--vscode-descriptionForeground);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #data-window .dw-row {
+    display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: center;
+    column-gap: 6px; width: 100%; box-sizing: border-box; padding: 2px 8px;
+    border: 0; border-radius: 0; background: transparent; color: inherit;
+    font: inherit; text-align: left; cursor: copy;
+  }
+  #data-window .dw-row.dw-plain { grid-template-columns: minmax(0, 1fr) auto; }
+  #data-window .dw-row:hover:not(:disabled) { background: var(--vscode-list-hoverBackground, #333); }
+  #data-window .dw-row:disabled { cursor: default; }
+  #data-window .dw-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
+  }
+  #data-window .dw-row.dw-copied {
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+    background: var(--vscode-list-activeSelectionBackground, #094771);
+  }
+  #data-window .dw-swatch { width: 9px; height: 9px; border-radius: 2px; }
+  #data-window .dw-swatch.dw-hollow {
+    box-shadow: inset 0 0 0 1px var(--vscode-descriptionForeground, #999);
+  }
+  #data-window .dw-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #data-window .dw-value {
+    font-family: var(--vscode-editor-font-family, monospace); font-variant-numeric: tabular-nums;
+    white-space: nowrap; text-align: right;
+  }
+  #data-window .dw-value.dw-na { color: var(--vscode-descriptionForeground); font-style: italic; }
   #chart { position: absolute; inset: 0; }
   #breakpoint-pick {
     position: absolute; z-index: 12; top: 8px; left: 50%; transform: translateX(-50%);
@@ -842,6 +920,13 @@ export class ChartPanel {
         <path class="slash" d="M4 16 16 4"></path>
       </svg>
     </button>
+    <button id="tb-datawindow" class="icon-button" title="Data Window: every value of a bar"
+            aria-label="Data Window" aria-pressed="false" aria-controls="data-window">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="2.5" y="3.5" width="15" height="13" rx="1.5"></rect>
+        <path d="M10.5 3.5v13M12.5 7h3M12.5 10h3M12.5 13h3M5 7h3M5 10h1.5"></path>
+      </svg>
+    </button>
   </div>
   <span class="sep"></span>
   <div class="toolbar-group">
@@ -890,6 +975,7 @@ export class ChartPanel {
   </div>
 </div>
 <div id="script-legend" hidden></div>
+<div id="chart-row">
 <div id="chart-area">
   <div id="chart"></div>
   <div id="chart-busy" role="progressbar" aria-label="Recomputing the chart" hidden></div>
@@ -910,6 +996,8 @@ export class ChartPanel {
     <button id="sc-percent" title="Percent price scale"
             aria-label="Percent price scale" aria-pressed="false">%</button>
   </div>
+</div>
+<aside id="data-window" aria-label="Data Window" hidden></aside>
 </div>
 <div id="panel-splitter" role="separator" aria-orientation="horizontal"
      aria-label="Resize chart and bottom panel" tabindex="0" hidden></div>

@@ -65,6 +65,47 @@ export function paneFor(
   return meta.force_overlay || scriptOverlay ? 'overlay' : 'pane';
 }
 
+/** The pane whose status line shows a plot that is NOT drawn there — a
+ * display holding status_line without pane (Pine's
+ * `display.status_line + display.data_window`, for instance). Undefined for
+ * every other plot. Only value-carrying line plots qualify: markers and
+ * candles have no single status-line value. */
+export function statusOnlyPane(
+  meta: PlotMetaRecord | undefined,
+  scriptOverlay: boolean
+): Exclude<PaneTarget, 'hidden'> | undefined {
+  if (!meta || meta.kind !== 'plot' || displayIn(meta.display, 'pane')) return undefined;
+  if (!displayIn(meta.display, 'status_line')) return undefined;
+  return meta.force_overlay || scriptOverlay ? 'overlay' : 'pane';
+}
+
+/**
+ * A legend-only figure for a status-line-only plot. Its datum holds the
+ * value already formatted as a STRING: KLineChart's y-axis range, coordinate
+ * and paint passes all skip non-numeric values (and the unregistered type
+ * paints nothing), while the tooltip legend prints a string verbatim — so
+ * the value shows in the status line without moving the scale.
+ */
+export function buildStatusFigure(
+  meta: PlotMetaRecord,
+  key: string,
+  colorKey: string,
+  title: string,
+  fallbackColor: string
+): PlotFigureSpec {
+  const staticColor = meta.color ?? fallbackColor;
+  return {
+    key,
+    title,
+    type: 'none',
+    styles: ({ data }) => {
+      if (meta.dynamic !== true) return { color: staticColor };
+      const c = data.current?.[colorKey];
+      return { color: typeof c === 'string' ? c : staticColor };
+    },
+  };
+}
+
 /** Highest declared precision among the pane's members (fallback when none
  * of them declares one). */
 export function panePrecision(
