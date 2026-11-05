@@ -2,7 +2,7 @@
   "name": "pyneide",
   "displayName": "PyneIDE: Pine Script Debugger and Backtester",
   "description": "Debug Pine Script bar by bar with breakpoints, run it on an interactive backtest chart, and write it with a real language server: diagnostics, completion and hover for .pine files. Pyne (Python) scripts too. Pine Script is a trademark of TradingView; PyneIDE is not a TradingView product and is not affiliated with TradingView.",
-  "version": "0.11.2",
+  "version": "0.13.0",
   "preview": true,
   "publisher": "pynesys",
   "icon": "icon.png",
@@ -1341,7 +1341,7 @@
             "scope": "resource",
             "order": 0,
             "pattern": "^$|^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$",
-            "markdownDescription": "PyneCore version for this project (minimum 6.11.1). Leave empty to automatically update to the latest stable release. Set an exact version, such as `6.11.1`, to keep this project on that release. Each project has its own environment in `.pyneide/venv`. Applies to managed environments; external environments are checked but never modified."
+            "markdownDescription": "PyneCore version for this project (minimum 6.12.1). Leave empty to automatically update to the latest stable release. Set an exact version, such as `6.12.1`, to keep this project on that release. Each project has its own environment in `.pyneide/venv`. Applies to managed environments; external environments are checked but never modified."
           },
           "pyneide.pythonPath": {
             "type": "string",
@@ -1499,8 +1499,6 @@
     "release:check": "node scripts/release.mjs",
     "test:release": "node --test test/release.test.mjs",
     "test:create-script": "node --test test/createScript.test.mjs",
-    "docs:check": "node scripts/pynecore-docs.mjs",
-    "docs:sync": "node scripts/pynecore-docs.mjs --sync",
     "demos:check": "node scripts/pine-demos.mjs",
     "demos:sync": "node scripts/pine-demos.mjs --sync",
     "build": "node esbuild.mjs",

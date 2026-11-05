@@ -17,7 +17,7 @@ its relevant references. Claude and Cursor also have copies in their native
 skill directories.
 
 Each skill's `references/project.json` records the actual workdir, interpreter,
-CLI and bundled PyneCore documentation paths. The workdir can be this folder or
+CLI and PyneCore documentation paths. The workdir can be this folder or
 its `workdir/` subfolder. Read the local PyneCore documentation without a network
 request; use the Pine skill's topic index for external Pine references.
 

@@ -3,9 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { verifyPineDemos } from './scripts/pine-demos.mjs';
-import { verifyPyneCoreDocs } from './scripts/pynecore-docs.mjs';
 
-verifyPyneCoreDocs();
 verifyPineDemos();
 
 const watch = process.argv.includes('--watch');

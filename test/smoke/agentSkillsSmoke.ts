@@ -1,4 +1,5 @@
 import * as assert from 'node:assert/strict';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -11,6 +12,10 @@ const extensionPath = path.resolve(__dirname, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-agent-skills-'));
 const roots = ['.agents/skills', '.claude/skills', '.cursor/skills'];
 const names = ['pine-development', 'pyne-development', 'pyneide-workflow'];
+const pynecoreDocs = path.join(temp, 'site-packages', 'pynecore', 'docs');
+fs.mkdirSync(path.join(pynecoreDocs, 'reference'), { recursive: true });
+fs.writeFileSync(path.join(pynecoreDocs, 'README.md'), '# PyneCore Documentation\n');
+fs.writeFileSync(path.join(pynecoreDocs, 'reference/types.md'), '# Types\n');
 
 function options(projectRoot: string, workdir = projectRoot): AgentSkillsOptions {
   fs.mkdirSync(projectRoot, { recursive: true });
@@ -18,7 +23,7 @@ function options(projectRoot: string, workdir = projectRoot): AgentSkillsOptions
     projectRoot, workdir, extensionPath, extensionVersion: '0.1.0',
     pythonBin: path.join(temp, 'external env', 'python'),
     pyneBin: path.join(temp, 'external env', 'pyne'),
-    runtimeVersion: PYNECORE_VERSION, log: () => {},
+    runtimeVersion: PYNECORE_VERSION, pynecoreDocs, log: () => {},
   };
 }
 
@@ -35,7 +40,7 @@ async function main(): Promise<void> {
       const workdir = subfolder ? path.join(root, 'workdir') : root;
       const opts = options(root, workdir);
       const generated = ensureProjectAgentSkills(opts);
-      assert.equal(generated.created, 27);
+      assert.equal(generated.created, 24);
       const guide = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
       for (const name of names) assert.ok(guide.includes(name));
       assert.ok(guide.includes('AGENT_RULES.md'));
@@ -51,24 +56,14 @@ async function main(): Promise<void> {
           assert.equal(project.workdir, workdir);
           assert.equal(project.projectRoot, root);
           assert.equal(project.pythonBin, opts.pythonBin);
-          assert.equal(project.documentationVersion, PYNECORE_VERSION);
-          assert.ok(fs.existsSync(path.join(project.pynecoreDocs, 'reference/types.md')));
+          assert.equal(project.pynecoreDocs, pynecoreDocs);
+          assert.equal(project.documentationVersion, undefined);
           assert.ok(fs.existsSync(project.extensionReadme));
         }
       }
-      const index = fs.readFileSync(path.join(
-        root, roots[0], 'pyne-development/references/documentation.md'
-      ), 'utf8');
-      const docs = readProject(root).pynecoreDocs;
-      const paths = [...index.matchAll(/\| `([^`]+\.md)`\s*\|/g)].map((match) => match[1]);
-      const docsManifest = JSON.parse(fs.readFileSync(
-        path.join(extensionPath, 'resources/pynecore/manifest.json'), 'utf8'
-      ));
-      const expectedDocs = Object.keys(docsManifest.files).filter((file) =>
-        file.startsWith('docs/') && file.endsWith('.md'));
-      assert.equal(paths.length, expectedDocs.length);
-      for (const file of paths) assert.ok(fs.existsSync(path.join(docs, file)), file);
-      assert.deepEqual(ensureProjectAgentSkills(opts), { created: 0, updated: 0, preserved: 0 });
+      assert.ok(!fs.existsSync(path.join(root, roots[0], 'pyne-development/references/documentation.md')));
+      assert.deepEqual(ensureProjectAgentSkills(opts),
+        { created: 0, updated: 0, removed: 0, preserved: 0 });
 
       const rules = path.join(root, 'AGENT_RULES.md');
       const preferences = '# My preferences\n\nExplain edits in Hungarian.\n';
@@ -87,7 +82,6 @@ async function main(): Promise<void> {
       assert.equal(refreshed.preserved, 1);
       assert.equal(fs.readFileSync(edited, 'utf8'), userText);
       assert.equal(readProject(root).runtimeVersion, '99.0.0');
-      assert.equal(readProject(root).documentationVersion, PYNECORE_VERSION);
       assert.equal(fs.readFileSync(rules, 'utf8'), preferences);
       assert.equal(fs.readFileSync(agents, 'utf8'), customGuide);
       hideGeneratedFiles(root);
@@ -143,7 +137,7 @@ async function main(): Promise<void> {
     const packagedMetadata = readProject(packagedProject);
     assert.equal(path.basename(packagedMetadata.extensionReadme), 'readme.md');
     assert.ok(fs.existsSync(packagedMetadata.extensionReadme));
-    assert.ok(packagedMetadata.pynecoreDocs.startsWith(packaged + path.sep));
+    assert.equal(packagedMetadata.pynecoreDocs, pynecoreDocs);
 
     const packagedAgents = path.join(packagedProject, 'AGENTS.md');
     const originalPackagedGuide = fs.readFileSync(packagedAgents, 'utf8');
@@ -156,6 +150,32 @@ async function main(): Promise<void> {
     assert.ok(fs.readFileSync(packagedAgents, 'utf8').startsWith('Custom instructions before the IDE guide.\n\n'));
     assert.ok(fs.readFileSync(packagedAgents, 'utf8').includes('Use the project data files for checks.'));
     assert.equal(fs.readFileSync(packagedRules, 'utf8'), 'My own development rules.\n');
+
+    // A file an earlier release generated and this one no longer does is removed,
+    // unless it was edited; the manifest stops tracking it either way.
+    const retired = path.join(temp, 'retired files');
+    const retiredOptions = options(retired);
+    ensureProjectAgentSkills(retiredOptions);
+    const manifestFile = path.join(retired, '.agents/pyneide-skills.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const sha = (text: string): string => crypto.createHash('sha256').update(text).digest('hex');
+    const index = 'pyne-development/references/documentation.md';
+    const generatedIndex = '# Bundled PyneCore documentation contents\n';
+    for (const skillRoot of roots) {
+      fs.writeFileSync(path.join(retired, skillRoot, index), generatedIndex);
+      manifest.files[`${skillRoot}/${index}`] = sha(generatedIndex);
+    }
+    fs.appendFileSync(path.join(retired, roots[2], index), 'My own notes.\n');
+    manifest.files['.agents/skills/../../outside.md'] = sha('x');
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest));
+    const retiredResult = ensureProjectAgentSkills(retiredOptions);
+    assert.equal(retiredResult.removed, 2);
+    assert.equal(retiredResult.preserved, 1);
+    assert.ok(!fs.existsSync(path.join(retired, roots[0], index)));
+    assert.ok(!fs.existsSync(path.join(retired, roots[1], index)));
+    assert.ok(fs.existsSync(path.join(retired, roots[2], index)));
+    const tracked = Object.keys(JSON.parse(fs.readFileSync(manifestFile, 'utf8')).files);
+    assert.ok(!tracked.some((file) => file.endsWith(index) || file.includes('..')));
 
     const unknown = path.join(temp, 'unknown manifest');
     const unknownOptions = options(unknown);
@@ -196,8 +216,8 @@ async function main(): Promise<void> {
       }
       console.log('Real Pyne CLI scaffolding + skills passed for root and workdir/ layouts');
     }
-    console.log('Agent skills: all three hosts, both layouts, offline index, reinitialization, ' +
-      'metadata refresh and user-file preservation passed');
+    console.log('Agent skills: all three hosts, both layouts, Core docs path, reinitialization, ' +
+      'metadata refresh, retired-file removal and user-file preservation passed');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

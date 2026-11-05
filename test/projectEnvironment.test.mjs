@@ -62,7 +62,7 @@ function fixture(t, initialFolder = 0) {
   const notices = [];
   const packages = [];
   const runtime = {
-    actual, installs, packages, latest: '6.11.2', fail: false,
+    actual, installs, packages, latest: '6.12.2', fail: false,
     async verify(pythonBin) {
       return { ok: true, pythonVersion: '3.14.0', pynecoreVersion: versions.get(pythonBin), debugpyVersion: '1.8.21' };
     },
@@ -133,11 +133,11 @@ function fixture(t, initialFolder = 0) {
 
 test('project venvs have separate Core selections and leave the legacy venv untouched', async (t) => {
   const f = fixture(t);
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.11.1';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   await f.production.setup();
   await f.development.setup();
-  assert.equal(f.production.state.verify.pynecoreVersion, '6.11.1');
-  assert.equal(f.development.state.verify.pynecoreVersion, '6.11.2');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.12.1');
+  assert.equal(f.development.state.verify.pynecoreVersion, '6.12.2');
   assert.notEqual(f.production.state.pythonBin, f.development.state.pythonBin);
   assert.equal(f.installs[0].storageDir, f.installs[1].storageDir);
   assert.equal(fs.readFileSync(f.legacy, 'utf8'), 'legacy environment');
@@ -156,16 +156,16 @@ test('resource lookup selects the script project and editor changes select the m
 
 test('a fixed Core never automatically upgrades; an empty selection follows latest', async (t) => {
   const f = fixture(t);
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.11.1';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   await f.production.setup();
   await f.development.setup();
   f.age(f.production); f.age(f.development);
-  f.runtime.latest = '6.12.0';
+  f.runtime.latest = '6.13.0';
   await f.production.autoUpdateCheck();
   await f.development.autoUpdateCheck();
   assert.equal(f.installs.length, 3);
-  assert.equal(f.production.state.verify.pynecoreVersion, '6.11.1');
-  assert.equal(f.development.state.verify.pynecoreVersion, '6.12.0');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.12.1');
+  assert.equal(f.development.state.verify.pynecoreVersion, '6.13.0');
   await f.development.autoUpdateCheck();
   assert.equal(f.installs.length, 3);
 });
@@ -202,18 +202,18 @@ test('fixed selection changes can downgrade and clearing it re-enables automatic
   const f = fixture(t);
   await f.production.setup();
   const config = f.configs.get(f.folders[0].uri.toString());
-  config['pynecore.version'] = '6.11.1';
+  config['pynecore.version'] = '6.12.1';
   assert.equal((await f.production.check()).cause, 'outdated');
   await f.production.setup();
-  assert.equal(f.production.state.verify.pynecoreVersion, '6.11.1');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.12.1');
   config['pynecore.version'] = '';
   await f.production.setup();
-  assert.equal(f.production.state.verify.pynecoreVersion, '6.11.2');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.12.2');
 });
 
 test('unsupported and malformed versions cannot reach the installer', async (t) => {
   const f = fixture(t);
-  for (const version of ['6.11.0', '6.12.0rc1', '6.11.1 --index-url https://example.com']) {
+  for (const version of ['6.12.0', '6.13.0rc1', '6.12.1 --index-url https://example.com']) {
     f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = version;
     await f.production.setup();
     assert.equal(f.production.state.kind, 'error');
@@ -227,7 +227,7 @@ test('plugin operations preserve the installed Core and captured project despite
   f.select(1);
   await f.production.installPackages(['a-plugin==1.0.0'], 'Install');
   assert.equal(f.packages[0].pythonBin, f.production.state.pythonBin);
-  assert.equal(f.packages[0].pynecoreVersion, '6.11.2');
+  assert.equal(f.packages[0].pynecoreVersion, '6.12.2');
 });
 
 test('external interpreters are checked against the project selection without installing', async (t) => {
@@ -237,8 +237,8 @@ test('external interpreters are checked against the project selection without in
   const python = actual.venvPythonPath(path.join(f.globalDir, 'venv'));
   fs.mkdirSync(path.dirname(python), { recursive: true });
   fs.writeFileSync(python, 'external interpreter');
-  f.versions.set(python, '6.11.2');
-  config['pynecore.version'] = '6.11.1';
+  f.versions.set(python, '6.12.2');
+  config['pynecore.version'] = '6.12.1';
   await f.production.setup();
   assert.equal(f.production.state.kind, 'error');
   assert.equal(f.installs.length, 0);
@@ -248,12 +248,12 @@ test('external interpreters are checked against the project selection without in
 
 test('manual changes cannot silently violate a fixed selection', async (t) => {
   const f = fixture(t);
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.11.1';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   await f.production.setup();
-  f.versions.set(f.production.state.pythonBin, '6.12.0');
+  f.versions.set(f.production.state.pythonBin, '6.13.0');
   const state = await f.production.check();
   assert.equal(state.kind, 'needs-setup');
-  assert.match(state.reason, /selects PyneCore 6.11.1/);
+  assert.match(state.reason, /selects PyneCore 6.12.1/);
 });
 
 test('removing one project environment retains shared Python, legacy venv and the other project', async (t) => {
@@ -340,7 +340,7 @@ test('scripts outside all project folders do not borrow another project environm
 
 test('an older asynchronous check cannot overwrite a new project selection', async (t) => {
   const f = fixture(t);
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.11.1';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   await f.production.setup();
   const original = f.runtime.verify;
   let release;
@@ -351,7 +351,7 @@ test('an older asynchronous check cannot overwrite a new project selection', asy
   };
   const olderCheck = f.production.check();
   await new Promise((resolve) => setImmediate(resolve));
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.0';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.13.0';
   assert.equal((await f.production.check()).cause, 'outdated');
   release();
   await olderCheck;
@@ -362,11 +362,11 @@ test('changing a project version setting applies it only to its existing environ
   const f = fixture(t);
   await f.production.setup(); await f.development.setup();
   f.select(1);
-  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.11.1';
+  f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   f.change(0);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(f.production.state.verify.pynecoreVersion, '6.11.1');
-  assert.equal(f.development.state.verify.pynecoreVersion, '6.11.2');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.12.1');
+  assert.equal(f.development.state.verify.pynecoreVersion, '6.12.2');
   assert.equal(f.installs.length, 3);
 });
 

@@ -42,6 +42,8 @@ export interface VerifyResult {
    * import-hook editable finder, so this is fed to pyrightconfig.json extraPaths.
    */
   pynecoreRoot?: string;
+  /** The Core's own Markdown documentation (`pynecore.docs_path()`). */
+  pynecoreDocs?: string;
   error?: string;
 }
 
@@ -74,6 +76,12 @@ const VERIFY_SCRIPT = [
   '        return None',
   '    f = getattr(pynecore, "__file__", None)',
   '    return os.path.dirname(os.path.dirname(f)) if f else None',
+  'def pynecore_docs():',
+  '    try:',
+  '        import pynecore',
+  '        return str(pynecore.docs_path())',
+  '    except Exception:',
+  '        return None',
   'def pyvenv_cfg():',
   '    p = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), "pyvenv.cfg")',
   '    try:',
@@ -86,6 +94,7 @@ const VERIFY_SCRIPT = [
   '    "pynecore": ver("pynesys-pynecore"),',
   '    "debugpy": ver("debugpy"),',
   '    "pynecoreRoot": pynecore_root(),',
+  '    "pynecoreDocs": pynecore_docs(),',
   '    "prefix": sys.prefix,',
   '    "basePrefix": sys.base_prefix,',
   '    "executable": sys.executable,',
@@ -99,6 +108,7 @@ interface VerifyInfo {
   pynecore: string | null;
   debugpy: string | null;
   pynecoreRoot: string | null;
+  pynecoreDocs: string | null;
   prefix: string;
   basePrefix: string;
   executable: string;
@@ -230,6 +240,7 @@ export async function verifyPython(
       pynecoreVersion: info.pynecore,
       debugpyVersion: info.debugpy,
       pynecoreRoot,
+      pynecoreDocs: info.pynecoreDocs ?? undefined,
     };
   } catch (err) {
     return { ok: false, error: String(err) };

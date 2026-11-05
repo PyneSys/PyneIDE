@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { PYNECORE_VERSION, type Logger } from '../env/constants';
+import type { Logger } from '../env/constants';
 
 const SKILL_NAMES = ['pine-development', 'pyne-development', 'pyneide-workflow'] as const;
 const SKILL_ROOTS = ['.agents/skills', '.claude/skills', '.cursor/skills'] as const;
@@ -16,12 +16,6 @@ interface GeneratedManifest {
   sections?: Record<string, string>;
 }
 
-interface DocsManifest {
-  pynecoreVersion: string;
-  sourceCommit: string;
-  files: Record<string, string>;
-}
-
 export interface AgentSkillsOptions {
   projectRoot: string;
   workdir: string;
@@ -30,12 +24,15 @@ export interface AgentSkillsOptions {
   pythonBin: string;
   pyneBin: string;
   runtimeVersion?: string;
+  /** The selected Core's own documentation directory (`pynecore.docs_path()`). */
+  pynecoreDocs: string;
   log: Logger;
 }
 
 export interface AgentSkillsResult {
   created: number;
   updated: number;
+  removed: number;
   preserved: number;
 }
 
@@ -144,26 +141,24 @@ function ensureLocalDirectory(projectRoot: string, relative: string): void {
   }
 }
 
-function documentationIndex(docsRoot: string, manifest: DocsManifest): string {
-  const entries = Object.keys(manifest.files).filter((file) => file.startsWith('docs/') &&
-    file.endsWith('.md')).sort().map((file) => {
-    const relative = file.slice('docs/'.length);
-    const content = fs.readFileSync(path.join(docsRoot, relative), 'utf8');
-    const title = /^# (.+)$/m.exec(content)?.[1] ?? relative;
-    return [title.replaceAll('|', '\\|'), `\`${relative}\``];
-  });
-  const widths = [0, 1].map((column) => Math.max(
-    ['Topic', 'Local document'][column].length, ...entries.map((entry) => entry[column].length)
-  ));
-  const row = (cells: string[]): string =>
-    `| ${cells.map((cell, column) => cell.padEnd(widths[column])).join(' | ')} |`;
-  return [
-    '# Bundled PyneCore documentation contents', '',
-    `Snapshot: PyneCore ${manifest.pynecoreVersion}, source commit ${manifest.sourceCommit}.`,
-    'All paths are relative to `pynecoreDocs` in `project.json`. Read them from the local filesystem.',
-    '', row(['Topic', 'Local document']), row(widths.map((width) => '-'.repeat(width))),
-    ...entries.map(row), '',
-  ].join('\n');
+/** The path of a generated file, if it lies in a skill directory of the project itself. */
+function generatedFilePath(root: string, relativePath: string): string | undefined {
+  const parts = relativePath.split('/');
+  if (!SKILL_ROOTS.some((skillRoot) => relativePath.startsWith(`${skillRoot}/`)) ||
+      parts.some((part) => !part || part === '.' || part === '..')) {
+    return undefined;
+  }
+  const target = path.join(root, ...parts);
+  try {
+    // Linked directories can lead to global skills: never touch files through them.
+    const directory = fs.realpathSync(path.dirname(target));
+    if (directory !== path.join(fs.realpathSync(root), ...parts.slice(0, -1))) return undefined;
+    return fs.lstatSync(target).isFile() ? target : undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    return undefined;
+  }
 }
 
 /** Write project-local skills only during explicit project initialization. */
@@ -172,12 +167,6 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
   // Check parents before reading or writing: agent directories can link to global skills.
   for (const skillRoot of SKILL_ROOTS) ensureLocalDirectory(root, skillRoot);
   const previous = readManifest(root);
-  const docsBundle = path.join(options.extensionPath, 'resources', 'pynecore');
-  const docs = JSON.parse(fs.readFileSync(path.join(docsBundle, 'manifest.json'), 'utf8')) as DocsManifest;
-  if (docs.pynecoreVersion !== PYNECORE_VERSION) {
-    throw new Error('Bundled PyneCore documentation does not match the extension pin');
-  }
-  const docsRoot = path.join(docsBundle, 'docs');
   const readme = fs.readdirSync(options.extensionPath).find((file) =>
     file.toLowerCase() === 'readme.md');
   if (!readme) throw new Error('Bundled PyneIDE README is missing');
@@ -190,9 +179,7 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
     extensionPath: options.extensionPath,
     extensionVersion: options.extensionVersion,
     extensionReadme: path.join(options.extensionPath, readme),
-    pynecoreDocs: docsRoot,
-    documentationVersion: docs.pynecoreVersion,
-    documentationSourceCommit: docs.sourceCommit,
+    pynecoreDocs: options.pynecoreDocs,
     userRules: path.join(root, AGENT_RULES_FILE),
   }, null, 2) + '\n';
 
@@ -205,15 +192,13 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
       templates.set(`${name}/references/documentation.md`, fs.readFileSync(
         path.join(directory, 'references', 'documentation.md'), 'utf8'
       ));
-    } else if (name === 'pyne-development') {
-      templates.set(`${name}/references/documentation.md`, documentationIndex(docsRoot, docs));
     }
   }
 
   const files = { ...previous.files };
   const sections = { ...previous.sections };
   const result: AgentSkillsResult = {
-    created: ensureAgentRulesFile(root, options.extensionPath) ? 1 : 0, updated: 0, preserved: 0,
+    created: ensureAgentRulesFile(root, options.extensionPath) ? 1 : 0, updated: 0, removed: 0, preserved: 0,
   };
   for (const [file, template] of [['AGENTS.md', 'project.md'], ['CLAUDE.md', 'claude.md']]) {
     const content = fs.readFileSync(path.join(options.extensionPath, 'resources/agent-project', template), 'utf8');
@@ -248,9 +233,26 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
       files[relativePath] = hash(content);
     }
   }
+  const current = new Set(SKILL_ROOTS.flatMap((skillRoot) =>
+    [...templates.keys()].map((relative) => `${skillRoot}/${relative}`)));
+  // A file an earlier release generated and this one no longer does goes away,
+  // unless it was edited since.
+  for (const [relativePath, recorded] of Object.entries(previous.files)) {
+    if (current.has(relativePath)) continue;
+    delete files[relativePath];
+    const target = generatedFilePath(root, relativePath);
+    if (!target) continue;
+    if (hash(fs.readFileSync(target, 'utf8')) === recorded) {
+      fs.unlinkSync(target);
+      result.removed++;
+    } else {
+      result.preserved++;
+      options.log(`Agent skills: preserved user-edited ${relativePath}`);
+    }
+  }
   const manifest: GeneratedManifest = { generator: GENERATOR, format: 1, files, sections };
   fs.writeFileSync(path.join(root, MANIFEST_PATH), JSON.stringify(manifest, null, 2) + '\n');
   options.log(`Agent skills: ${result.created} created, ${result.updated} updated, ` +
-    `${result.preserved} user files preserved`);
+    `${result.removed} removed, ${result.preserved} user files preserved`);
   return result;
 }

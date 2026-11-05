@@ -670,6 +670,14 @@ async function initProjectCommand(
   const log = (msg: string): void => output.appendLine(msg);
   const environment = manager.state;
   if (environment.kind !== 'ready') return;
+  const pynecoreDocs = environment.verify.pynecoreDocs;
+  if (!pynecoreDocs) {
+    void vscode.window.showErrorMessage(
+      `PyneIDE: PyneCore ${environment.verify.pynecoreVersion ?? ''} in ${environment.pythonBin} ` +
+        'has no documentation (pynecore.docs_path()). Reinstall PyneCore, then initialize the project again.'
+    );
+    return;
+  }
   const writeAgentSkills = (projectRoot: string, workdir: string): void => {
     ensureProjectAgentSkills({
       projectRoot,
@@ -679,6 +687,7 @@ async function initProjectCommand(
       pythonBin: environment.pythonBin,
       pyneBin,
       runtimeVersion: environment.verify.pynecoreVersion,
+      pynecoreDocs,
       log,
     });
   };

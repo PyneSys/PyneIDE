@@ -6,7 +6,7 @@ description: Run, debug and inspect Pine or Pyne projects with PyneIDE. Locates 
 # PyneIDE project workflow
 
 Read `references/project.json` for the initialized project root, workdir, selected Python
-and `pyne` CLI, extension location and bundled PyneCore documentation. The workdir can be
+and `pyne` CLI, extension location and PyneCore documentation. The workdir can be
 the workspace folder itself or its `workdir/` child. Resolve files from the recorded workdir.
 Use the application's available UI tools for rendered-state checks; use the CLI when those
 tools are unavailable or the task is a code/runtime check. Instructions do not supply UI tools.
@@ -83,14 +83,14 @@ different. Use the `pyneBin` path and explicit `--workdir` recorded in `project.
 ```
 
 Pass arguments separately through a process tool, or quote paths correctly in the shell.
-`<script>` and `<data>` can be names within the workdir; consult the bundled `cli/run.md`
+`<script>` and `<data>` can be names within the workdir; consult `cli/run.md` in `pynecoreDocs`
 for flags and output behavior. Prefer an existing local data file for a reproducible check.
 
 ## Internal documentation contents
 
 All paths below are relative to the `pynecoreDocs` filesystem directory in `project.json`.
 
-| Task                          | Bundled document                                      |
+| Task                          | Local document                                        |
 | ----------------------------- | ----------------------------------------------------- |
 | Workdir layout                | `overview/project-structure.md`                       |
 | CLI flags and configuration   | `cli/basics.md`, `overview/configuration.md`          |

@@ -44,7 +44,6 @@ downloads/
 eggs/
 .eggs/
 lib/
-!resources/pynecore/docs/reference/lib/
 lib64/
 parts/
 sdist/

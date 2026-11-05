@@ -54,9 +54,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        # 6.11.1 is the oldest supported Core: a released package that only an
+        # 6.12.1 is the oldest supported Core: a released package that only an
         # IDE change can break, so the daily run tests the latest release alone.
-        core: ${{ github.event_name == 'schedule' && fromJSON('["latest"]') || fromJSON('["6.11.1", "latest"]') }}
+        core: ${{ github.event_name == 'schedule' && fromJSON('["latest"]') || fromJSON('["6.12.1", "latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

@@ -1,24 +1,22 @@
 ---
 name: pyne-development
-description: Write, debug or review Pyne code, indicators, strategies and libraries using the project's PyneCore runtime. Provides Pyne programming basics and an offline topic index into the IDE's bundled documentation.
+description: Write, debug or review Pyne code, indicators, strategies and libraries using the project's PyneCore runtime. Provides Pyne programming basics and an offline topic index into the documentation of the project's PyneCore version.
 ---
 
 # Pyne development
 
 Read `references/project.json` first. `pynecoreDocs` is the absolute filesystem directory
-of the PyneCore Markdown documentation bundled with this IDE. Use ordinary file reads;
-no network or additional documentation server is needed. The snapshot version is
-`documentationVersion`; `runtimeVersion` records the environment selected at initialization.
-If those differ, check the installed API before using a version-specific feature.
+of the Markdown documentation that ships inside the project's PyneCore package, so it
+describes the installed runtime. Use ordinary file reads; no network or additional
+documentation server is needed. `runtimeVersion` records the Core selected at initialization.
 
-If an IDE update or a project move made the recorded path stale, locate the installed
-`pynesys.pyneide` extension through the editor's extension registry or, where available,
-`code --locate-extension pynesys.pyneide`. Its docs are under `resources/pynecore/docs`;
-read the neighboring `manifest.json` for their version. Do not fetch an online copy as a
-substitute for a missing local snapshot without the user's request.
+If the recorded directory is missing, for example after a Core update or a project move,
+run the recorded `pythonBin` with `-c "import pynecore; print(pynecore.docs_path())"` to
+find the current one. Do not fetch an online copy as a substitute for missing local
+documentation without the user's request.
 
-Paths in the contents below are relative to `pynecoreDocs`. The complete file inventory
-is in `references/documentation.md`. Read only the pages relevant to the task.
+Paths in the contents below are relative to `pynecoreDocs`. Its `README.md` links every
+documentation section. Read only the pages relevant to the task.
 
 ## Pyne basics
 

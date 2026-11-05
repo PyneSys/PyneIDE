@@ -72,5 +72,6 @@ In rows with multiple files, abbreviated names share the first file's directory.
 For exact symbols, start with the namespace's `_index.md` and read one member page.
 The full repository index is `INDEX.md`; avoid loading it when a direct path suffices.
 
-Use PyneCore's bundled compatibility documentation for what the project's pinned runtime
-supports; current TradingView documentation can describe features newer than that runtime.
+Use the compatibility documentation of the project's PyneCore (`overview/compatibility.md`
+in `pynecoreDocs`) for what its runtime supports; current TradingView documentation can
+describe features newer than that runtime.

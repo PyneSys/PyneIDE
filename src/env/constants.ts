@@ -1,11 +1,15 @@
-/** Shared toolchain versions and the bundled Core documentation baseline. */
+/** Shared toolchain versions. */
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-export const PYNECORE_VERSION = '6.11.1';
+/** Core release installed when no project selection is given. */
+export const PYNECORE_VERSION = '6.12.1';
 export const DEBUGPY_VERSION = '1.8.21';
 
-/** Oldest supported Core release; independent of future documentation updates. */
-export const PYNECORE_MIN_VERSION = '6.11.1';
+/**
+ * Oldest supported Core release. From 6.12.1 the Core ships its own docs
+ * (`pynecore.docs_path()`), which the agent skills read.
+ */
+export const PYNECORE_MIN_VERSION = '6.12.1';
 
 /** Bump when the managed environment LAYOUT changes (forces a venv rebuild). */
 export const ENV_SCHEMA_VERSION = 2;

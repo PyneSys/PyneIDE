@@ -67,7 +67,7 @@ model; PyneIDE ships analysis built for it.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
 - ✓ A line-by-line profiler that shows where a script spends its time, on Pine and Pyne code alike.
 - ✓ First-class **Pyne code** support with analysis that understands `Series` history, `na`, and persistent state.
-- ✓ Set up for **AI coding agents**: new projects get `AGENTS.md` and skills that point the agent at the bundled PyneCore docs and a Pine documentation index.
+- ✓ Set up for **AI coding agents**: new projects get `AGENTS.md` and skills that point the agent at the docs of the project's PyneCore version and a Pine documentation index.
 - ✓ Runs on the open-source **PyneCore** runtime — no lock-in — with a self-configuring Python environment and **no automatic telemetry**.
 
 ## Full Pine Script language support
@@ -205,9 +205,9 @@ When you initialize a project, PyneIDE also sets it up for coding agents. It wri
 Pyne code, and one for running and debugging in PyneIDE.
 
 The skills tell the agent where things live in your project: the workdir, the Python
-environment and the `pyne` CLI. The PyneCore documentation ships inside the extension,
-and the agent reads it from disk without a network request. The project references
-record the documentation version separately from the runtime version. For Pine,
+environment and the `pyne` CLI. The PyneCore documentation ships inside the PyneCore
+package, so the agent reads the docs of the exact Core version the project runs, from
+disk and without a network request. For Pine,
 the agent gets the v6 basics and a topic index into the Pine documentation, so it
 opens the page for the API it needs. The skills also tell the agent
 to edit only the `.pine` source, leave the compiled Python to PyneIDE, and report which
@@ -235,11 +235,11 @@ project's `.vscode/settings.json`:
 
 ```json
 {
-  "pyneide.pynecore.version": "6.11.1"
+  "pyneide.pynecore.version": "6.12.1"
 }
 ```
 
-The minimum supported release is 6.11.1. A selected version stays in place until
+The minimum supported release is 6.12.1. A selected version stays in place until
 you change or clear the setting, including when the environment is rebuilt.
 You can switch back to an older supported Core by setting its exact version.
 Different projects can use different Core versions and plugins, including

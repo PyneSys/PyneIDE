@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the minimum supported PyneCore release is now 6.12.1. A
+  project environment on an older Core is updated automatically when the
+  project follows the latest release. A project whose
+  `pyneide.pynecore.version` selects an older release, and an external
+  environment with an older Core, have to be moved to 6.12.1 or later.
+- The agent skills read the documentation that ships inside the project's
+  PyneCore package, so it always matches the Core the project runs. The
+  extension no longer carries its own copy. Initializing a project again
+  removes the generated documentation index of earlier releases, unless it
+  was edited.
+
 ## [0.11.1] - 2026-11-01
 
 ### Added
