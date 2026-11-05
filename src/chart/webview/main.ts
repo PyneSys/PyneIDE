@@ -19,7 +19,7 @@ import {
   registerOverlay,
   utils,
   type CandleAreaStyle,
-  type CandleBarColor,
+  type CandleBarColorCallback,
   type Chart,
   type KLineData,
   type DeepPartial,
@@ -39,7 +39,6 @@ import type {
 import {
   CANDLE_STYLE_OPTIONS,
   DEFAULT_CANDLE_STYLE,
-  isPriceLineStyle,
   type CandleStyleId,
 } from '../candleStyle';
 import {
@@ -87,7 +86,7 @@ import {
   drawAreas,
   drawArrows,
   drawBackgrounds,
-  drawBarcolors,
+  barcolorAt,
   drawFills,
   drawMarkers,
   drawPlotCandles,
@@ -98,7 +97,6 @@ import {
   panePrecision,
   statusOnlyPane,
   type ArrowItem,
-  type BarcolorShape,
   type CandleItem,
   type FillItem,
   type FillSource,
@@ -387,7 +385,8 @@ interface RunState {
   /** [trades.length, bars.length] the index above was built from. */
   tradeMarkersBuiltFor?: [number, number];
   tradeMarkerIndicatorId?: string;
-  barcolorIndicatorId?: string;
+  /** Visible barcolor plots, read by the candle color callback at draw time. */
+  barcolorMetas: PlotMetaRecord[];
   showVolume: boolean;
   volumeIndicatorId?: string;
   breakpointOverlays: Map<number, { id: string; enabled: boolean; count: number }>;
@@ -582,7 +581,7 @@ function refreshLegendLayout(st: RunState): void {
  * the first setStyles. setStyles only ever MERGES, so switching away from Line
  * has to write the defaults back explicitly — there is no "unset" — and
  * hardcoding them here would silently drift on a lib bump. The candle BAR
- * colors need no such capture: every branch writes all nine from the palette.
+ * colors need no such capture: every branch writes a fresh color callback.
  * Line/area is left alone on purpose — it plots one undirected close series, so
  * a scheme about up and down has nothing to say about it. */
 let candleDefaults: { area: CandleAreaStyle } | undefined;
@@ -596,37 +595,54 @@ function captureCandleDefaults(chart: Chart): void {
   };
 }
 
-/** barcolor paints over the chart's own bars, so it has to follow their shape;
- * read at draw time, so a style switch needs no indicator rebuild. */
-function barcolorShape(): BarcolorShape {
-  if (isPriceLineStyle(candleStyleId)) return 'none';
-  if (candleStyleId === 'bars') return 'bar';
-  return candleStyleId === 'hollow' || candleStyleId === 'mono' ? 'hollow' : 'candle';
-}
-
-/** Every bar/wick/border color set to the editor foreground: up bars stay
- * distinguishable through the hollow/filled shape instead of hue. */
-function monochromeBar(): DeepPartial<CandleBarColor> {
-  const fg = cssVar('--vscode-editor-foreground', isDark() ? '#d4d4d4' : '#333333');
-  return {
-    upColor: fg, downColor: fg, noChangeColor: fg,
-    upBorderColor: fg, downBorderColor: fg, noChangeBorderColor: fg,
-    upWickColor: fg, downWickColor: fg, noChangeWickColor: fg,
-  };
-}
-
 /** Bars whose open and close match exactly have no direction to color, so they
  * stay on KLineChart's neutral grey in every scheme. */
 const NO_CHANGE_COLOR = '#76808f';
 
-/** The nine candle-bar colors of the current scheme. Written in full by every
- * style branch, because setStyles merges: coming back from Monochrome has to
- * overwrite all nine, not just the ones that happen to differ. */
-function paletteBar(p: ChartPalette): DeepPartial<CandleBarColor> {
-  return {
-    upColor: p.up, downColor: p.down, noChangeColor: NO_CHANGE_COLOR,
-    upBorderColor: p.up, downBorderColor: p.down, noChangeBorderColor: NO_CHANGE_COLOR,
-    upWickColor: p.up, downWickColor: p.down, noChangeWickColor: NO_CHANGE_COLOR,
+interface DirectionColors {
+  up: string;
+  down: string;
+  noChange: string;
+}
+
+/** The candle colors of the current scheme. Monochrome sets every direction
+ * to the editor foreground: up bars stay distinguishable through the
+ * hollow/filled shape instead of hue. */
+function directionColors(): DirectionColors {
+  if (candleStyleId === 'mono') {
+    const fg = cssVar('--vscode-editor-foreground', isDark() ? '#d4d4d4' : '#333333');
+    return { up: fg, down: fg, noChange: fg };
+  }
+  const p = palette();
+  return { up: p.up, down: p.down, noChange: NO_CHANGE_COLOR };
+}
+
+/**
+ * KLineChart's per-bar candle color callback: the direction color of the
+ * scheme (close against open, the library's `current_open` rule), replaced by
+ * the script's barcolor where one applies. KLineChart draws the bar itself, so
+ * barcolor follows every candle style (hollow, OHLC bars) with no shape logic
+ * of our own. Always a callback, never the color object: setStyles merges, and
+ * swapping a callback for a partial object would drop the compare rule.
+ * barcolor is read from `state` at draw time, so a plot or visibility change
+ * only needs a repaint, not new styles.
+ */
+function candleBarColors(): CandleBarColorCallback {
+  const dir = directionColors();
+  return ({ current }) => {
+    let color = dir.noChange;
+    if (current) {
+      if (current.close > current.open) color = dir.up;
+      else if (current.close < current.open) color = dir.down;
+      const st = state;
+      if (st && st.barcolorMetas.length) {
+        const barIndex = st.tsToIndex.get(current.timestamp);
+        if (barIndex !== undefined) {
+          color = barcolorAt(st.barcolorMetas, barIndex, st.bars.length, st.colorTrack) ?? color;
+        }
+      }
+    }
+    return { color, borderColor: color, wickColor: color };
   };
 }
 
@@ -634,7 +650,7 @@ function paletteBar(p: ChartPalette): DeepPartial<CandleBarColor> {
  * restates the full palette so switching between styles in any order lands on
  * the same picture. */
 function candleStyles(): DeepPartial<Styles> {
-  const bar = paletteBar(palette());
+  const bar = candleBarColors();
   // Spread copy, never the captured object itself: setStyles merges its
   // argument into the live styles, and an empty object is simply a no-op if the
   // defaults were somehow never captured.
@@ -645,7 +661,7 @@ function candleStyles(): DeepPartial<Styles> {
     case 'bars':
       return { candle: { type: 'ohlc', bar } };
     case 'mono':
-      return { candle: { type: 'candle_up_stroke', bar: { ...bar, ...monochromeBar() } } };
+      return { candle: { type: 'candle_up_stroke', bar } };
     case 'line':
       // 'area' with a fully transparent fill — v10 has no separate line type.
       return { candle: { type: 'area', bar, area: { ...area, backgroundColor: 'rgba(0,0,0,0)' } } };
@@ -964,6 +980,7 @@ function startRun(start: StartEvent): void {
     plotMeta: new Map(),
     colorTrack: new ColorTrack(),
     tsToIndex: new Map(),
+    barcolorMetas: [],
     drawings: new DrawingStore(hiddenDrawings),
     renderedTableVersion: -1,
     renderedTableLayout: '',
@@ -1487,30 +1504,17 @@ function rebuildPlotIndicators(st: RunState): void {
     },
   });
 
-  // barcolor always targets the candle pane (it recolors the chart's own
-  // bars). Created BEFORE the overlay plots indicator: same zLevel, so the
-  // paint order is creation order and the plot lines stay on top.
+  // barcolor recolors the chart's own bars, so it always targets the candle
+  // pane. KLineChart paints them through the candle color callback, which
+  // reads this list at draw time; a changed list only needs a repaint.
   const barcolorMetas = [...st.plotMeta.values()]
     .filter((m) => m.kind === 'barcolor' && !st.hidden.has(m.id) && paneFor(m, true) !== 'hidden')
     .sort((a, b) => a.id.localeCompare(b.id));
-  if (barcolorMetas.length) {
-    registerIndicator({
-      name: 'PyneBarcolor',
-      shortName: NO_LEGEND,
-      figures: [],
-      calc: () => [],
-      draw: (params: IndicatorDrawParams) => {
-        drawBarcolors(drawEnv(st, params, true), barcolorMetas, barcolorShape());
-        return false;
-      },
-    } as never);
-    if (st.barcolorIndicatorId) st.chart.removeIndicator({ id: st.barcolorIndicatorId });
-    st.barcolorIndicatorId =
-      st.chart.createIndicator({ name: 'PyneBarcolor', paneId: 'candle_pane' }, true) ?? undefined;
-  } else if (st.barcolorIndicatorId) {
-    st.chart.removeIndicator({ id: st.barcolorIndicatorId });
-    st.barcolorIndicatorId = undefined;
-  }
+  const barcolorChanged =
+    barcolorMetas.length !== st.barcolorMetas.length ||
+    barcolorMetas.some((m, i) => m !== st.barcolorMetas[i]);
+  st.barcolorMetas = barcolorMetas;
+  if (barcolorChanged) st.chart.setStyles({});
 
   // Overlay group: plots stacked on the candle pane, markers above them.
   if (overlayGroup.lineIdx.length || overlayHlines.length || overlayGroup.candles.length ||

@@ -38,9 +38,3 @@ export function toCandleStyleId(value: unknown): CandleStyleId {
     ? (value as CandleStyleId)
     : DEFAULT_CANDLE_STYLE;
 }
-
-/** Whether price is drawn as a line/area rather than per-bar shapes — the
- * per-bar decorations (barcolor) have nothing to paint on in that case. */
-export function isPriceLineStyle(id: CandleStyleId): boolean {
-  return id === 'line' || id === 'area';
-}

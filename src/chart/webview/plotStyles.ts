@@ -9,8 +9,9 @@
  * bgcolor (a zLevel -1 indicator painting with destination-over, i.e. behind
  * the candles) and trackprice lines. A4 completes the family: plotcandle/
  * plotbar (four value columns fed to the y-axis autoscale through paint-less
- * figures, bodies painted by the draw callback), barcolor (repaints the
- * built-in candles) and fill (plot–plot / hline–hline, solid or gradient).
+ * figures, bodies painted by the draw callback), barcolor (the color source
+ * of the chart's per-bar candle color callback) and fill (plot–plot /
+ * hline–hline, solid or gradient).
  * Verified v10 behaviors this relies on: a null datum breaks a line figure
  * (linebr comes for free), per-datum styles apply per line segment, a line
  * figure's segment coordinates are overridable via attrs (steplines), a text
@@ -732,71 +733,28 @@ export function drawPlotCandles(env: MarkerDrawEnv, items: CandleItem[]): void {
 // --- barcolor ---------------------------------------------------------------
 
 /**
- * Which shape barcolor has to repaint, derived from the chart's candle style:
- * it paints OVER the built-in bars, so drawing a solid candle onto an OHLC-bar
- * chart would show the recolored bars in the wrong shape. `none` covers the
- * line/area styles, where individual bars are not drawn at all.
+ * The barcolor color of one bar, or null to keep the chart's own direction
+ * color. The chart's per-bar candle color callback asks for it, so the bar
+ * renders in this color in whatever shape the chart style draws. barcolor is
+ * always dynamic: every bar's color (null = na) arrives on its channel. Later
+ * barcolor calls win over earlier ones (Pine's rule), so the newest match is
+ * searched first.
  */
-export type BarcolorShape = 'candle' | 'hollow' | 'bar' | 'none';
-
-/**
- * Repaint the built-in candles in the barcolor color: an opaque body rect
- * plus wick over the original (KLineChart has no per-bar candle color API).
- * barcolor is always dynamic — every bar's color (or null = leave the candle
- * alone) arrives on its channel. Runs before the plot figures, so plot lines
- * stay on top. Later barcolor calls paint over earlier ones (Pine's rule).
- */
-export function drawBarcolors(
-  env: MarkerDrawEnv,
+export function barcolorAt(
   metas: PlotMetaRecord[],
-  shape: BarcolorShape = 'candle'
-): void {
-  if (shape === 'none') return;
-  const { ctx, bars } = env;
-  const total = bars.length;
-  const from = Math.max(0, env.visibleFrom);
-  const to = Math.min(total, env.visibleTo);
-  const bodyW = Math.max(1, env.gapBar);
-  // Tick length of an OHLC bar, mirroring KLineChart's own sizing.
-  const tickW = Math.min(Math.max(Math.round(env.gapBar * 0.2), 1), 8);
-  for (const meta of metas) {
-    for (let barIndex = from; barIndex < to; barIndex++) {
-      const src = barIndex - (meta.offset ?? 0);
-      if (src < 0 || src >= total) continue;
-      if (meta.show_last !== undefined && barIndex < total - meta.show_last) continue;
-      const enc = env.colorAt(meta.id, src);
-      if (typeof enc !== 'string') continue;
-      const bar = bars[barIndex];
-      if (!Number.isFinite(bar.high) || !Number.isFinite(bar.low)) continue;
-      const x = env.xAxis.convertToPixel(barIndex);
-      const yo = env.yAxis.convertToPixel(bar.open);
-      const yc = env.yAxis.convertToPixel(bar.close);
-      const yh = env.yAxis.convertToPixel(bar.high);
-      const yl = env.yAxis.convertToPixel(bar.low);
-      ctx.fillStyle = enc;
-      if (shape === 'bar') {
-        ctx.fillRect(x - tickW / 2, yh, tickW, Math.max(1, yl - yh));
-        ctx.fillRect(x - bodyW / 2, yo, bodyW / 2, tickW);
-        ctx.fillRect(x, yc, bodyW / 2, tickW);
-        continue;
-      }
-      ctx.strokeStyle = enc;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, yh);
-      ctx.lineTo(x, yl);
-      ctx.stroke();
-      const bodyY = Math.min(yo, yc);
-      const bodyH = Math.max(1, Math.abs(yo - yc));
-      // Hollow styles leave rising bodies open, so the barcolor must too —
-      // filling them would make recolored up bars the only solid ones.
-      if (shape === 'hollow' && bar.close > bar.open) {
-        ctx.strokeRect(x - bodyW / 2 + 0.5, bodyY + 0.5, Math.max(1, bodyW - 1), bodyH - 1);
-      } else {
-        ctx.fillRect(x - bodyW / 2, bodyY, bodyW, bodyH);
-      }
-    }
+  barIndex: number,
+  total: number,
+  colors: { colorAt(channel: string, barIndex: number): ColorEnc | undefined }
+): string | null {
+  for (let i = metas.length - 1; i >= 0; i--) {
+    const meta = metas[i];
+    const src = barIndex - (meta.offset ?? 0);
+    if (src < 0 || src >= total) continue;
+    if (meta.show_last !== undefined && barIndex < total - meta.show_last) continue;
+    const enc = colors.colorAt(meta.id, src);
+    if (typeof enc === 'string') return enc;
   }
+  return null;
 }
 
 // --- fill -------------------------------------------------------------------

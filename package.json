@@ -1563,7 +1563,7 @@
     "@vscode/vsce-sign@2.1.0": true
   },
   "dependencies": {
-    "klinecharts": "^10.0.3",
+    "klinecharts": "^10.1.0",
     "pyright": "1.1.411",
     "vscode-languageclient": "^9.0.1"
   }
