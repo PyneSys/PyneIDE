@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { Logger } from '../env/constants';
+import { markdownFiles, symbolIndex } from './pynecoreSymbols';
 
 const SKILL_NAMES = ['pine-development', 'pyne-development', 'pyneide-workflow'] as const;
 const SKILL_ROOTS = ['.agents/skills', '.claude/skills', '.cursor/skills'] as const;
@@ -141,6 +142,38 @@ function ensureLocalDirectory(projectRoot: string, relative: string): void {
   }
 }
 
+/**
+ * Contents of the Core's documentation directory. It lies in the project's
+ * git-ignored environment, where search tools that honor .gitignore find
+ * nothing, so the agent needs the file list to open pages by path.
+ */
+function documentationIndex(docsRoot: string): string {
+  const entries = markdownFiles(docsRoot).sort().map((relative) => {
+    const content = fs.readFileSync(path.join(docsRoot, relative), 'utf8');
+    const title = /^# (.+)$/m.exec(content)?.[1].trim() ?? relative;
+    return [title.replaceAll('|', '\\|'), `\`${relative}\``];
+  });
+  if (!entries.length) throw new Error(`PyneCore documentation not found in ${docsRoot}`);
+  const widths = [0, 1].map((column) => Math.max(
+    ['Topic', 'Local document'][column].length, ...entries.map((entry) => entry[column].length)
+  ));
+  const row = (cells: string[]): string =>
+    `| ${cells.map((cell, column) => cell.padEnd(widths[column])).join(' | ')} |`;
+  return [
+    '# PyneCore documentation contents', '',
+    'All paths are relative to `pynecoreDocs` in `project.json`. That directory is inside the',
+    "project's git-ignored Python environment, so search and file-listing tools that honor",
+    '.gitignore (ripgrep, and Grep or Glob tools built on it) return nothing there. Open the',
+    'files below by path; to search their text, use `rg --no-ignore` or `grep -rn`. To find a',
+    'function, variable or constant, search `symbols.md` next to this file instead.', '',
+    'This list was written with the agent files. If a listed file is missing after a PyneCore',
+    'update, list the directory with `find`, and ask the user to run',
+    '**PyneIDE: Update Agent Files**.', '',
+    row(['Topic', 'Local document']), row(widths.map((width) => '-'.repeat(width))),
+    ...entries.map(row), '',
+  ].join('\n');
+}
+
 /** The path of a generated file, if it lies in a skill directory of the project itself. */
 function generatedFilePath(root: string, relativePath: string): string | undefined {
   const parts = relativePath.split('/');
@@ -161,7 +194,10 @@ function generatedFilePath(root: string, relativePath: string): string | undefin
   }
 }
 
-/** Write project-local skills only during explicit project initialization. */
+/**
+ * Write the project-local agent files. Runs only on explicit request: project
+ * initialization or the Update Agent Files command.
+ */
 export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkillsResult {
   const root = path.resolve(options.projectRoot);
   // Check parents before reading or writing: agent directories can link to global skills.
@@ -192,6 +228,9 @@ export function ensureProjectAgentSkills(options: AgentSkillsOptions): AgentSkil
       templates.set(`${name}/references/documentation.md`, fs.readFileSync(
         path.join(directory, 'references', 'documentation.md'), 'utf8'
       ));
+    } else if (name === 'pyne-development') {
+      templates.set(`${name}/references/documentation.md`, documentationIndex(options.pynecoreDocs));
+      templates.set(`${name}/references/symbols.md`, symbolIndex(options.pynecoreDocs));
     }
   }
 

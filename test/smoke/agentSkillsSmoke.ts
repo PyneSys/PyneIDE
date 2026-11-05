@@ -7,15 +7,18 @@ import * as path from 'node:path';
 import { PYNECORE_VERSION } from '../../src/env/constants';
 import { agentFileExcludes, hideGeneratedFiles, scaffoldWorkdirWithCli } from '../../src/env/workdir';
 import { ensureProjectAgentSkills, type AgentSkillsOptions } from '../../src/workspace/agentSkills';
+import { documentedSymbols } from '../../src/workspace/pynecoreSymbols';
 
 const extensionPath = path.resolve(__dirname, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pyneide-agent-skills-'));
 const roots = ['.agents/skills', '.claude/skills', '.cursor/skills'];
 const names = ['pine-development', 'pyne-development', 'pyneide-workflow'];
 const pynecoreDocs = path.join(temp, 'site-packages', 'pynecore', 'docs');
-fs.mkdirSync(path.join(pynecoreDocs, 'reference'), { recursive: true });
-fs.writeFileSync(path.join(pynecoreDocs, 'README.md'), '# PyneCore Documentation\n');
-fs.writeFileSync(path.join(pynecoreDocs, 'reference/types.md'), '# Types\n');
+fs.mkdirSync(path.join(pynecoreDocs, 'reference/lib'), { recursive: true });
+fs.writeFileSync(path.join(pynecoreDocs, 'README.md'), '<!--\n---\ntitle: "x"\n---\n-->\n\n# PyneCore Documentation\n');
+fs.writeFileSync(path.join(pynecoreDocs, 'reference/types.md'), '# Types | na\n');
+fs.writeFileSync(path.join(pynecoreDocs, 'reference/lib/ta.md'), '# ta\n\n### crossover()\n');
+fs.writeFileSync(path.join(pynecoreDocs, 'logo.svg'), '<svg/>');
 
 function options(projectRoot: string, workdir = projectRoot): AgentSkillsOptions {
   fs.mkdirSync(projectRoot, { recursive: true });
@@ -40,7 +43,7 @@ async function main(): Promise<void> {
       const workdir = subfolder ? path.join(root, 'workdir') : root;
       const opts = options(root, workdir);
       const generated = ensureProjectAgentSkills(opts);
-      assert.equal(generated.created, 24);
+      assert.equal(generated.created, 30);
       const guide = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
       for (const name of names) assert.ok(guide.includes(name));
       assert.ok(guide.includes('AGENT_RULES.md'));
@@ -61,7 +64,18 @@ async function main(): Promise<void> {
           assert.ok(fs.existsSync(project.extensionReadme));
         }
       }
-      assert.ok(!fs.existsSync(path.join(root, roots[0], 'pyne-development/references/documentation.md')));
+      const index = fs.readFileSync(path.join(
+        root, roots[0], 'pyne-development/references/documentation.md'
+      ), 'utf8');
+      const listed = [...index.matchAll(/\| `([^`]+)`\s*\|/g)].map((match) => match[1]);
+      assert.deepEqual(listed, ['README.md', 'reference/lib/ta.md', 'reference/types.md']);
+      assert.ok(index.includes('| PyneCore Documentation '));
+      assert.ok(index.includes('| Types \\| na '));
+      assert.ok(index.includes('rg --no-ignore'));
+      const symbols = fs.readFileSync(path.join(
+        root, roots[0], 'pyne-development/references/symbols.md'
+      ), 'utf8');
+      assert.ok(symbols.includes('\n- `ta.crossover()` `reference/lib/ta.md:3`\n'));
       assert.deepEqual(ensureProjectAgentSkills(opts),
         { created: 0, updated: 0, removed: 0, preserved: 0 });
 
@@ -159,8 +173,8 @@ async function main(): Promise<void> {
     const manifestFile = path.join(retired, '.agents/pyneide-skills.json');
     const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
     const sha = (text: string): string => crypto.createHash('sha256').update(text).digest('hex');
-    const index = 'pyne-development/references/documentation.md';
-    const generatedIndex = '# Bundled PyneCore documentation contents\n';
+    const index = 'pyne-development/references/retired.md';
+    const generatedIndex = '# A file an earlier release generated\n';
     for (const skillRoot of roots) {
       fs.writeFileSync(path.join(retired, skillRoot, index), generatedIndex);
       manifest.files[`${skillRoot}/${index}`] = sha(generatedIndex);
@@ -176,6 +190,49 @@ async function main(): Promise<void> {
     assert.ok(fs.existsSync(path.join(retired, roots[2], index)));
     const tracked = Object.keys(JSON.parse(fs.readFileSync(manifestFile, 'utf8')).files);
     assert.ok(!tracked.some((file) => file.endsWith(index) || file.includes('..')));
+
+    // Every heading and table form the PyneCore reference uses.
+    const formats = path.join(temp, 'symbol formats');
+    const page = (file: string, content: string): void => {
+      fs.mkdirSync(path.dirname(path.join(formats, file)), { recursive: true });
+      fs.writeFileSync(path.join(formats, file), content);
+    };
+    page('reference/lib/ta.md', [
+      '<!--', '# not a title', '-->', '# ta', '## Functions', '### crossover()', '### Colors',
+      '```python', '# ta.fake()', '### fenced()', '```',
+    ].join('\n'));
+    page('reference/lib/array.md', '# array\n#### `new_bool(size, initial_value)`\n');
+    page('reference/lib/builtins.md', [
+      '# Global functions', '## Time and date', '### timenow', '### plotcandle() and plotbar()',
+      '## Bare names and calls',
+    ].join('\n'));
+    page('reference/lib/plot.md', [
+      '# plot', '### plot()', '| Constant | Description |', '|---|---|',
+      '| `plot.style_line` | Line |', '', '| Parameter | Type |', '|---|---|', '| `series` | float |',
+    ].join('\n'));
+    page('reference/lib/strategy_closedtrades.md', [
+      '# strategy.closedtrades', '### entry_price(trade_num)', '## Variables',
+      '| Name | Type |', '|------|------|', '| position_size | float |',
+    ].join('\n'));
+    page('reference/lib/currency.md', '# currency\n| Constant | Name |\n|--|--|\n| `currency.AED` | Dirham |\n');
+    page('reference/types.md', '# Types\n### Series[T]\n### User-Defined Types (@udt)\n### na\n');
+    page('reference/script-format.md', '# Script format\n### @script.strategy\n');
+    page('guide.md', '# Guide\n### ignored()\n');
+    assert.deepEqual(documentedSymbols(formats).map((symbol) => `${symbol.name} ${symbol.file}:${symbol.line}`), [
+      '@script.strategy reference/script-format.md:2',
+      'array.new_bool() reference/lib/array.md:2',
+      'currency.AED reference/lib/currency.md:4',
+      'na reference/types.md:4',
+      'plot.style_line reference/lib/plot.md:5',
+      'plot() reference/lib/plot.md:2',
+      'plotbar() reference/lib/builtins.md:4',
+      'plotcandle() reference/lib/builtins.md:4',
+      'Series[T] reference/types.md:2',
+      'strategy.closedtrades.entry_price() reference/lib/strategy_closedtrades.md:2',
+      'strategy.closedtrades.position_size reference/lib/strategy_closedtrades.md:6',
+      'ta.crossover() reference/lib/ta.md:6',
+      'timenow reference/lib/builtins.md:3',
+    ]);
 
     const unknown = path.join(temp, 'unknown manifest');
     const unknownOptions = options(unknown);
@@ -216,8 +273,8 @@ async function main(): Promise<void> {
       }
       console.log('Real Pyne CLI scaffolding + skills passed for root and workdir/ layouts');
     }
-    console.log('Agent skills: all three hosts, both layouts, Core docs path, reinitialization, ' +
-      'metadata refresh, retired-file removal and user-file preservation passed');
+    console.log('Agent skills: all three hosts, both layouts, Core docs path, docs and name indexes, ' +
+      'reinitialization, metadata refresh, retired-file removal and user-file preservation passed');
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

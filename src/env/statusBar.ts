@@ -331,6 +331,11 @@ export class EnvStatusBar {
             label: '$(edit) Edit Agent Rules…',
             description: 'Describe how you want to develop Pine and Pyne code',
             action: () => void vscode.commands.executeCommand('pyneide.editAgentRules'),
+          },
+          {
+            label: '$(sync) Update Agent Files',
+            description: 'Rewrite the skills and documentation paths for the current PyneCore',
+            action: () => void vscode.commands.executeCommand('pyneide.updateAgentFiles'),
           }
         );
       }

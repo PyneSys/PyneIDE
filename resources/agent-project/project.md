@@ -19,7 +19,10 @@ skill directories.
 Each skill's `references/project.json` records the actual workdir, interpreter,
 CLI and PyneCore documentation paths. The workdir can be this folder or
 its `workdir/` subfolder. Read the local PyneCore documentation without a network
-request; use the Pine skill's topic index for external Pine references.
+request; use the Pine skill's topic index for external Pine references. The PyneCore
+documentation is inside the git-ignored Python environment: search tools that honor
+.gitignore find nothing there, so open its pages by path. To find where a function or
+constant is documented, search the `pyne-development` skill's `references/symbols.md`.
 
 ## Pine source ownership
 

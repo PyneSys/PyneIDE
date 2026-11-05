@@ -207,7 +207,9 @@ Pyne code, and one for running and debugging in PyneIDE.
 The skills tell the agent where things live in your project: the workdir, the Python
 environment and the `pyne` CLI. The PyneCore documentation ships inside the PyneCore
 package, so the agent reads the docs of the exact Core version the project runs, from
-disk and without a network request. For Pine,
+disk and without a network request. After a Core update or an environment change,
+**PyneIDE: Update Agent Files** points the agent files at the current Core and its docs
+without touching the rest of the project. For Pine,
 the agent gets the v6 basics and a topic index into the Pine documentation, so it
 opens the page for the API it needs. The skills also tell the agent
 to edit only the `.pine` source, leave the compiled Python to PyneIDE, and report which

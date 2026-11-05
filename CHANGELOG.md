@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PyneIDE: Update Agent Files** rewrites the agent files of an initialized
+  project for its current Python environment and PyneCore, for example after
+  a Core update, without touching the workdir. Files you edited are kept.
+- The Pyne skill gets a name index of the PyneCore reference: every
+  documented function, variable, constant and type, with the page and line
+  that describes it, such as `ta.crossover()` in `reference/lib/ta.md`. It is
+  written next to the skills, where the agent's own search tools work, so
+  the agent finds a function by name instead of guessing its page.
+
 ### Changed
 
 - **Breaking:** the minimum supported PyneCore release is now 6.12.1. A
@@ -16,9 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment with an older Core, have to be moved to 6.12.1 or later.
 - The agent skills read the documentation that ships inside the project's
   PyneCore package, so it always matches the Core the project runs. The
-  extension no longer carries its own copy. Initializing a project again
-  removes the generated documentation index of earlier releases, unless it
-  was edited.
+  extension no longer carries its own copy. The generated contents list of
+  that documentation, and the skills, tell the agent that the docs lie in the
+  git-ignored environment, where search tools that honor `.gitignore` find
+  nothing, and how to open and search them instead.
 
 ## [0.11.1] - 2026-11-01
 

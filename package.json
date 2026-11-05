@@ -100,6 +100,12 @@
         "enablement": "pyneide.hasWorkdir"
       },
       {
+        "command": "pyneide.updateAgentFiles",
+        "title": "Update Agent Files",
+        "category": "PyneIDE",
+        "enablement": "pyneide.hasWorkdir"
+      },
+      {
         "command": "pyneide.openWalkthrough",
         "title": "Get Started",
         "category": "PyneIDE"
@@ -705,6 +711,11 @@
           "command": "pyneide.editAgentRules",
           "when": "view == pyneide.workspace && pyneide.hasWorkdir",
           "group": "pyneide.preferences@1"
+        },
+        {
+          "command": "pyneide.updateAgentFiles",
+          "when": "view == pyneide.workspace && pyneide.hasWorkdir",
+          "group": "pyneide.preferences@2"
         }
       ],
       "view/item/context": [

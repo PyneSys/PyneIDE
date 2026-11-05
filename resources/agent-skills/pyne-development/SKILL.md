@@ -8,15 +8,28 @@ description: Write, debug or review Pyne code, indicators, strategies and librar
 Read `references/project.json` first. `pynecoreDocs` is the absolute filesystem directory
 of the Markdown documentation that ships inside the project's PyneCore package, so it
 describes the installed runtime. Use ordinary file reads; no network or additional
-documentation server is needed. `runtimeVersion` records the Core selected at initialization.
+documentation server is needed. `runtimeVersion` records the Core selected when the agent
+files were written.
+
+The directory is inside the project's git-ignored Python environment. Search and
+file-listing tools that honor .gitignore (ripgrep, and Grep or Glob tools built on it)
+return nothing there, which does not mean a page is missing. Open pages by path from the
+contents below or from `references/documentation.md`, the complete file list; to search
+their text, use `rg --no-ignore` or `grep -rn` on `pynecoreDocs`.
 
 If the recorded directory is missing, for example after a Core update or a project move,
 run the recorded `pythonBin` with `-c "import pynecore; print(pynecore.docs_path())"` to
-find the current one. Do not fetch an online copy as a substitute for missing local
-documentation without the user's request.
+find the current one, and ask the user to run **PyneIDE: Update Agent Files**. Do not
+fetch an online copy as a substitute for missing local documentation without the user's
+request.
 
-Paths in the contents below are relative to `pynecoreDocs`. Its `README.md` links every
-documentation section. Read only the pages relevant to the task.
+To look up a function, variable, constant or type, search `references/symbols.md` first.
+It lists every name the PyneCore reference documents with its page and line, for example
+`ta.crossover()` in `reference/lib/ta.md`, and it is not git-ignored, so the ordinary
+search tools work on it. Read the page from the listed line.
+
+Paths in the contents below are relative to `pynecoreDocs`. Read only the pages relevant
+to the task.
 
 ## Pyne basics
 

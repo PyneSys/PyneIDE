@@ -55,8 +55,8 @@ import { PyneHoverProvider } from './typing/pyneHover';
 import { PYLANCE_EXTENSION, PyrightService, routeAnalysisToPyne } from './typing/pyrightService';
 import { SeriesAnalyzer } from './typing/seriesAnalyzer';
 import type { InputsTab } from './workspace/inputsMessages';
-import { ensureProjectAgentSkills } from './workspace/agentSkills';
-import { registerAgentPreferences } from './workspace/agentPreferences';
+import { ensureProjectAgentSkills, type AgentSkillsOptions } from './workspace/agentSkills';
+import { agentProjectFolder, registerAgentPreferences } from './workspace/agentPreferences';
 import { InputsViewManager } from './workspace/inputsView';
 import { registerLibraryCompletion } from './workspace/libraryCompletion';
 import { registerLibraryDefinition } from './workspace/libraryDefinition';
@@ -112,6 +112,9 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand('pyneide.createWorkspace', () =>
       initProjectCommand(context, manager, output)
+    ),
+    vscode.commands.registerCommand('pyneide.updateAgentFiles', () =>
+      updateAgentFilesCommand(context, manager, output)
     ),
     // The walkthrough is otherwise only reachable from the Welcome page, which
     // most users never open again after the first launch.
@@ -648,6 +651,65 @@ async function ensurePyneCli(manager: EnvManager): Promise<string | undefined> {
   return pyneBin;
 }
 
+type AgentEnvironment = Pick<AgentSkillsOptions,
+  'pythonBin' | 'pyneBin' | 'runtimeVersion' | 'pynecoreDocs'>;
+
+/** The project environment's part of the agent files; reports why it is unavailable. */
+async function agentEnvironment(manager: EnvManager): Promise<AgentEnvironment | undefined> {
+  const pyneBin = await ensurePyneCli(manager);
+  if (!pyneBin) return undefined;
+  const environment = manager.state;
+  if (environment.kind !== 'ready') return undefined;
+  const pynecoreDocs = environment.verify.pynecoreDocs;
+  if (!pynecoreDocs) {
+    void vscode.window.showErrorMessage(
+      `PyneIDE: PyneCore ${environment.verify.pynecoreVersion ?? ''} in ${environment.pythonBin} ` +
+        'has no documentation (pynecore.docs_path()). Reinstall PyneCore, then try again.'
+    );
+    return undefined;
+  }
+  return {
+    pythonBin: environment.pythonBin,
+    pyneBin,
+    runtimeVersion: environment.verify.pynecoreVersion,
+    pynecoreDocs,
+  };
+}
+
+/** Rewrite the agent files of an initialized project, without touching its workdir. */
+async function updateAgentFilesCommand(
+  context: vscode.ExtensionContext,
+  manager: EnvManager,
+  output: vscode.OutputChannel
+): Promise<void> {
+  const folder = agentProjectFolder();
+  const workdir = folder && resolvePyneIdeWorkdir(folder);
+  if (!folder || !workdir) {
+    void vscode.window.showWarningMessage('PyneIDE: initialize a Pyne project before updating its agent files.');
+    return;
+  }
+  const environment = await agentEnvironment(manager.forProject(folder.uri));
+  if (!environment) return;
+  try {
+    const result = ensureProjectAgentSkills({
+      projectRoot: folder.uri.fsPath,
+      workdir: workdir.path,
+      extensionPath: context.extensionPath,
+      extensionVersion: context.extension.packageJSON.version as string,
+      ...environment,
+      log: (msg) => output.appendLine(msg),
+    });
+    void vscode.window.showInformationMessage(
+      `PyneIDE: agent files updated (${result.created} created, ${result.updated} updated, ` +
+        `${result.removed} removed, ${result.preserved} user-edited files kept).`
+    );
+  } catch (err) {
+    void vscode.window.showErrorMessage(
+      `PyneIDE: failed to update agent files: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 async function initProjectCommand(
   context: vscode.ExtensionContext,
   manager: EnvManager,
@@ -665,29 +727,17 @@ async function initProjectCommand(
     if (!projectUri) return;
   }
   manager = manager.forProject(projectUri);
-  const pyneBin = await ensurePyneCli(manager);
-  if (!pyneBin) return;
+  const environment = await agentEnvironment(manager);
+  if (!environment) return;
+  const { pyneBin } = environment;
   const log = (msg: string): void => output.appendLine(msg);
-  const environment = manager.state;
-  if (environment.kind !== 'ready') return;
-  const pynecoreDocs = environment.verify.pynecoreDocs;
-  if (!pynecoreDocs) {
-    void vscode.window.showErrorMessage(
-      `PyneIDE: PyneCore ${environment.verify.pynecoreVersion ?? ''} in ${environment.pythonBin} ` +
-        'has no documentation (pynecore.docs_path()). Reinstall PyneCore, then initialize the project again.'
-    );
-    return;
-  }
   const writeAgentSkills = (projectRoot: string, workdir: string): void => {
     ensureProjectAgentSkills({
       projectRoot,
       workdir,
       extensionPath: context.extensionPath,
       extensionVersion: context.extension.packageJSON.version as string,
-      pythonBin: environment.pythonBin,
-      pyneBin,
-      runtimeVersion: environment.verify.pynecoreVersion,
-      pynecoreDocs,
+      ...environment,
       log,
     });
   };

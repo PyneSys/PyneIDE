@@ -89,6 +89,10 @@ for flags and output behavior. Prefer an existing local data file for a reproduc
 ## Internal documentation contents
 
 All paths below are relative to the `pynecoreDocs` filesystem directory in `project.json`.
+It is inside the git-ignored Python environment, so tools that honor .gitignore list and
+find nothing there: open the files by path, and search with `rg --no-ignore` or `grep -rn`.
+The `pyne-development` skill's `references/documentation.md` lists every page, and its
+`references/symbols.md` gives the page and line of every documented name.
 
 | Task                          | Local document                                        |
 | ----------------------------- | ----------------------------------------------------- |
