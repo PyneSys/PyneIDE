@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-05
+
 ### Added
 
+- The chart has a **Data Window**, opened from its toolbar. It lists every
+  value of one bar: open, high, low, close, change and volume, each plot of
+  the script, and the strategy's equity. It includes plots that are not drawn
+  on the chart, such as `display=display.data_window`. It follows the
+  crosshair and keeps the last hovered bar when the pointer leaves the chart;
+  the **Held** chip returns it to the newest bar. While the debugger is
+  paused, it shows the paused bar. Clicking a row copies the full-precision
+  value.
+- A plot shown only in the status line, such as
+  `display=display.status_line`, shows its value in the chart legend without
+  being drawn or changing the price scale.
+- Labels, boxes and table cells render bold and italic text from
+  `text_formatting`.
 - **PyneIDE: Update Agent Files** rewrites the agent files of an initialized
   project for its current Python environment and PyneCore, for example after
   a Core update, without touching the workdir. Files you edited are kept.
@@ -31,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that documentation, and the skills, tell the agent that the docs lie in the
   git-ignored environment, where search tools that honor `.gitignore` find
   nothing, and how to open and search them instead.
+- A plot is drawn on the chart when its `display` includes the pane, so
+  combined values such as `display.all - display.pane` or
+  `display.data_window + display.pane` are placed correctly. The legend shows
+  a plot's value only when its `display` includes the status line.
+- The extension is listed as **PyneIDE: Pine Script Debugger and
+  Backtester**, and its description leads with the Pine debugger and the
+  backtest chart.
+
+### Fixed
+
+- With PyneCore 6.12.1, the Performance view of a strategy got no
+  statistics. They are computed again, with the Sharpe and Sortino ratios
+  using the script's `risk_free_rate`.
 
 ## [0.11.1] - 2026-11-01
 
