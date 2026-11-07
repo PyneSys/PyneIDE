@@ -367,6 +367,7 @@ export class PineAccessPanel {
         '<ul class="limits">',
         `<li>${compiles(plan.hourlyLimit)} per hour</li>`,
         ...quotas(plan).map((q) => `<li>${compiles(q.count)} per ${q.period}</li>`),
+        '<li>Failed compiles don’t count</li>',
         `<li>Scripts up to ${plan.maxScriptSizeKB} KB</li>`,
         '</ul>',
         `<p class="desc">${escapeHtml(plan.description)}</p>`,
