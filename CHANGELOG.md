@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pyne Edge profile 2026.11.1**: Python's builtin `round()` is no longer
+  allowed in Edge code and is reported as an error. It rounds half to even,
+  unlike Pine's `math.round`, which rounds half away from zero; use
+  `math.round` instead.
+
 ## [0.13.1] - 2026-11-07
 
 ### Added

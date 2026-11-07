@@ -36,7 +36,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.10.2'
+EDGE_RULES_VERSION = '2026.11.1'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -118,9 +118,11 @@ ALLOWED_CLASS_DECORATORS = frozenset({
 # hand-curated minimum for hand-written scripts is limited to builtins every
 # constrained runtime supports trivially. Notably absent (and therefore
 # errors): exec/eval/compile/__import__, getattr/setattr/hasattr/delattr,
-# type/isinstance, open, globals/locals/vars.
+# type/isinstance, open, globals/locals/vars, and `round` (2026.11.1): Python
+# rounds half to even and `round(x)` returns an int, where Pine's
+# `math.round` rounds half away from zero -- a Pine author expects the latter.
 ALLOWED_BUILTIN_CALLS = frozenset({
-    'len', 'abs', 'min', 'max', 'round', 'int', 'float', 'bool', 'str',
+    'len', 'abs', 'min', 'max', 'int', 'float', 'bool', 'str',
     'range', 'enumerate', 'print',
 })
 
