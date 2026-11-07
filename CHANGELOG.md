@@ -7,12 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-11-07
+
+### Added
+
+- **Open Chart Source** in the chart tab toolbar switches to the script's
+  existing editor tab or opens the source to the left of the chart.
+
 ### Changed
 
-- **Pyne Edge profile 2026.11.1**: Python's builtin `round()` is no longer
-  allowed in Edge code and is reported as an error. It rounds half to even,
-  unlike Pine's `math.round`, which rounds half away from zero; use
-  `math.round` instead.
+- The Pyne Edge profile (2026.11.1) reports Python's built-in `round()` as an
+  error. Use `math.round` to round half away from zero, as Pine does.
+
+### Fixed
+
+- Charts stay open when their source tab closes, including during a run.
+  A run started from the Pyne Workspace sidebar leaves its chart open when
+  it finishes, even if the script was never opened in the editor.
 
 ## [0.13.1] - 2026-11-07
 
