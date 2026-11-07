@@ -55,7 +55,9 @@ export interface UsagePeriod {
   resetAt: string;
 }
 
+/** Compile usage; `weekly` is null when the plan has no weekly limit. */
 export interface Usage {
+  weekly: UsagePeriod | null;
   daily: UsagePeriod;
   hourly: UsagePeriod;
 }
@@ -64,7 +66,10 @@ export interface Usage {
 export interface PricingPlan {
   name: string;
   priceDisplay: string;
+  /** Compiles per UTC day; equals `weeklyLimit` on a weekly limited plan. */
   dailyLimit: number;
+  /** Compiles per week from Monday 00:00 UTC; null or missing when the plan has no weekly limit. */
+  weeklyLimit?: number | null;
   hourlyLimit: number;
   maxScriptSizeKB: number;
   apiKeys: number;
@@ -254,17 +259,23 @@ export class PyneApiClient {
           PyneApiClient.parseErrorDetail(res.text, res.status).error
       );
     }
+    type RawPeriod = { limit: number; used: number; remaining: number; reset_at: string };
     const data = PyneApiClient.parseJson<{
-      daily: { limit: number; used: number; remaining: number; reset_at: string };
-      hourly: { limit: number; used: number; remaining: number; reset_at: string };
+      weekly?: RawPeriod | null;
+      daily: RawPeriod;
+      hourly: RawPeriod;
     }>(res, 'account/usage');
-    const period = (p: typeof data.daily): UsagePeriod => ({
+    const period = (p: RawPeriod): UsagePeriod => ({
       limit: p.limit,
       used: p.used,
       remaining: p.remaining,
       resetAt: p.reset_at,
     });
-    return { daily: period(data.daily), hourly: period(data.hourly) };
+    return {
+      weekly: data.weekly ? period(data.weekly) : null,
+      daily: period(data.daily),
+      hourly: period(data.hourly),
+    };
   }
 
   /** Public subscription plans; the same source the website and the web app use. */

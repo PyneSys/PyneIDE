@@ -462,9 +462,11 @@ export class CompileService {
       );
       const fmt = (label: string, p: { used: number; limit: number; remaining: number; resetAt: string }) =>
         `${label}: ${p.used}/${p.limit} used, ${p.remaining} remaining (resets ${new Date(p.resetAt).toLocaleString()})`;
-      void vscode.window.showInformationMessage(
-        `PyneSys compile usage — ${fmt('Daily', usage.daily)}; ${fmt('Hourly', usage.hourly)}`
-      );
+      const periods: string[] = [];
+      if (usage.weekly) periods.push(fmt('Weekly', usage.weekly));
+      if (usage.daily.limit !== usage.weekly?.limit) periods.push(fmt('Daily', usage.daily));
+      periods.push(fmt('Hourly', usage.hourly));
+      void vscode.window.showInformationMessage(`PyneSys compile usage — ${periods.join('; ')}`);
     } catch (err) {
       await showNetworkError({
         headline: 'could not fetch the compile usage',

@@ -97,6 +97,12 @@ type OutMessage =
 
 const compiles = (count: number): string => `${count} compile${count === 1 ? '' : 's'}`;
 
+/** The plan's compile quotas, longest period first; a daily limit equal to the weekly one is left out. */
+const quotas = (plan: PricingPlan): { count: number; period: 'week' | 'day' }[] => [
+  ...(plan.weeklyLimit != null ? [{ count: plan.weeklyLimit, period: 'week' as const }] : []),
+  ...(plan.dailyLimit !== plan.weeklyLimit ? [{ count: plan.dailyLimit, period: 'day' as const }] : []),
+];
+
 const escapeHtml = (text: string): string =>
   text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -302,7 +308,7 @@ export class PineAccessPanel {
       parts.push(
         '<h1>Compile limit reached</h1>',
         `<p class="lead">${escapeHtml(detail ?? 'Your plan’s compile limit is used up.')} ` +
-          'A larger plan raises the hourly and daily limits.</p>',
+          'A larger plan raises the compile limits.</p>',
         '<p class="muted">Until then, every Pine script you already compiled keeps running, and ' +
           'its generated Pyne code (the .py next to it) runs and debugs without compiling.</p>'
       );
@@ -360,7 +366,7 @@ export class PineAccessPanel {
         `<div class="price">${escapeHtml(plan.priceDisplay)}<span>/month</span></div>`,
         '<ul class="limits">',
         `<li>${compiles(plan.hourlyLimit)} per hour</li>`,
-        `<li>${compiles(plan.dailyLimit)} per day</li>`,
+        ...quotas(plan).map((q) => `<li>${compiles(q.count)} per ${q.period}</li>`),
         `<li>Scripts up to ${plan.maxScriptSizeKB} KB</li>`,
         '</ul>',
         `<p class="desc">${escapeHtml(plan.description)}</p>`,
@@ -393,7 +399,7 @@ export class PineAccessPanel {
         '</tr></thead>',
       '<tbody>',
       row('Price', (plan) => `${escapeHtml(plan.priceDisplay)}/month`),
-      row('Pine compiles per day', (plan) => String(plan.dailyLimit)),
+      row('Pine compiles', (plan) => quotas(plan).map((q) => `${q.count} per ${q.period}`).join(', ')),
       row('Pine compiles per hour', (plan) => String(plan.hourlyLimit)),
       row('API keys', (plan) => String(plan.apiKeys)),
       row('Max script size', (plan) => `${plan.maxScriptSizeKB} KB`),

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
-import type { Usage } from '../api/client';
+import type { Usage, UsagePeriod } from '../api/client';
 import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
 import type { PluginService } from '../plugins/service';
@@ -275,7 +275,7 @@ export class EnvStatusBar {
       switch (usageState.kind) {
         case 'loading':
           items.push({
-            label: '$(loading~spin) Loading daily and hourly usage…',
+            label: '$(loading~spin) Loading compile usage…',
           });
           break;
         case 'signed-out':
@@ -287,19 +287,18 @@ export class EnvStatusBar {
         case 'ready': {
           const formatReset = (value: string): string =>
             `Resets ${new Date(value).toLocaleString()}`;
-          const { daily, hourly } = usageState.usage;
-          items.push(
-            {
-              label: `$(calendar) Daily: ${daily.used} / ${daily.limit} used`,
-              description: `${daily.remaining} remaining`,
-              detail: formatReset(daily.resetAt),
-            },
-            {
-              label: `$(clock) Hourly: ${hourly.used} / ${hourly.limit} used`,
-              description: `${hourly.remaining} remaining`,
-              detail: formatReset(hourly.resetAt),
-            }
-          );
+          const { weekly, daily, hourly } = usageState.usage;
+          const periods: { icon: string; label: string; period: UsagePeriod }[] = [];
+          if (weekly) periods.push({ icon: 'calendar', label: 'Weekly', period: weekly });
+          if (daily.limit !== weekly?.limit) periods.push({ icon: 'calendar', label: 'Daily', period: daily });
+          periods.push({ icon: 'clock', label: 'Hourly', period: hourly });
+          for (const { icon, label, period } of periods) {
+            items.push({
+              label: `$(${icon}) ${label}: ${period.used} / ${period.limit} used`,
+              description: `${period.remaining} remaining`,
+              detail: formatReset(period.resetAt),
+            });
+          }
           break;
         }
         case 'error':
