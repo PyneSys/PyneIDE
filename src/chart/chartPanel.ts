@@ -11,7 +11,7 @@
  * reopening the chart replays the snapshot and shows exactly what was there,
  * as if it had never been closed. The panel therefore outlives its webview —
  * `ChartManager.reconcile` (driven by editor tabs) is what actually retires a
- * chart, once neither the script nor a run/debug references it anymore.
+ * dormant chart, once neither the script nor a run/debug references it.
  */
 import * as path from 'path';
 
@@ -1068,6 +1068,41 @@ export class ChartManager implements RunListener {
     return key && isChartablePath(key) ? key : undefined;
   }
 
+  async openSource(): Promise<void> {
+    const source = this.activeInputScriptPath();
+    if (!source) return;
+
+    const uri = vscode.Uri.file(source);
+    const doc = await vscode.workspace.openTextDocument(uri).then(
+      (document) => document,
+      () => undefined
+    );
+    if (!doc) {
+      void vscode.window.showWarningMessage(`PyneIDE: Could not open source file ${path.basename(source)}.`);
+      return;
+    }
+
+    const groups = vscode.window.tabGroups;
+    const existing = groups.all.find((group) => group.tabs.some(
+      (tab) => tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri.toString()
+    ));
+    if (existing) {
+      await vscode.window.showTextDocument(doc, { viewColumn: existing.viewColumn });
+      return;
+    }
+
+    const commands = await vscode.commands.getCommands(true);
+    if (this.activeChartKey !== source) return;
+    const chartGroup = groups.activeTabGroup.viewColumn;
+    if (commands.includes('workbench.action.focusLeftGroupWithoutWrap')) {
+      await vscode.commands.executeCommand('workbench.action.focusLeftGroupWithoutWrap');
+    }
+    if (groups.activeTabGroup.viewColumn === chartGroup && commands.includes('workbench.action.newGroupLeft')) {
+      await vscode.commands.executeCommand('workbench.action.newGroupLeft');
+    }
+    await vscode.window.showTextDocument(doc, { viewColumn: groups.activeTabGroup.viewColumn, preview: false });
+  }
+
   onEvent(event: BridgeEvent, chartKey: string): void {
     // A real run takes ownership of a chart that may have been created by
     // opening its persisted output. From here on it follows normal script
@@ -1175,15 +1210,13 @@ export class ChartManager implements RunListener {
   }
 
   /**
-   * Retire charts whose script is no longer open in ANY editor tab (neither the
-   * `.pine` nor its `.py`) and which no run/debug is streaming to. This is the
-   * true chart-close: closing just the chart's own tab keeps it dormant (so it
-   * can be reopened), but closing the last script tab discards it for good.
+   * Release closed charts once there is no source tab or stream to reuse their
+   * snapshot. Open chart tabs keep their results independently of source tabs.
    */
   reconcile(): void {
     const live = openChartKeys();
-    for (const key of [...this.panels.keys()]) {
-      if (!live.has(key) && !this.dataPreviews.has(key) && !this.isPinned?.(key)) {
+    for (const [key, panel] of this.panels) {
+      if (!panel.isOpen() && !live.has(key) && !this.dataPreviews.has(key) && !this.isPinned?.(key)) {
         this.closeChart(key);
       }
     }
@@ -1205,7 +1238,7 @@ export class ChartManager implements RunListener {
         this.context,
         chartKey,
         () => this.onSelectData?.(chartKey),
-        undefined,
+        () => this.reconcile(),
         (active) => this.updateActiveChart(chartKey, active),
         (timestamp) => this.onSelectBreakpointBar?.(chartKey, timestamp),
         (timestamp) => this.onRemoveBreakpointBar?.(chartKey, timestamp),

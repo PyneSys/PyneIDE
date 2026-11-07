@@ -442,7 +442,7 @@ export class RunService {
     void run.exited.then(() => {
       if (this.previewRuns.get(chartKey) === run) {
         this.previewRuns.delete(chartKey);
-        // Preview no longer pins the chart: retire it if its source tab is gone.
+        // A closed preview can release its snapshot once streaming ends.
         this.chartManager?.reconcile();
       }
     });
@@ -1406,8 +1406,7 @@ export class RunService {
     this.flyToBar = undefined;
     this.setRunActive(false);
     this.listener?.onFinished(chartKey);
-    // The run no longer pins this chart: if its source tab was closed while it
-    // ran (kept alive only by the run), retire it now.
+    // A closed chart can release its snapshot once streaming ends.
     this.chartManager?.reconcile();
     // The debuggee is gone; close the debug session with it.
     if (this.debugSession) {

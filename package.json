@@ -294,6 +294,13 @@
         "icon": "$(screen-full)"
       },
       {
+        "command": "pyneide.openChartSource",
+        "title": "Open Chart Source",
+        "category": "PyneIDE",
+        "icon": "$(go-to-file)",
+        "enablement": "activeWebviewPanelId == pyneideChart && pyneide.chartHasInputs"
+      },
+      {
         "command": "pyneide.pauseRun",
         "title": "Pause Run at Next Bar",
         "category": "PyneIDE",
@@ -667,6 +674,11 @@
           "command": "pyneide.toggleChartFullscreen",
           "when": "activeWebviewPanelId == pyneideChart && !editorPartMaximizedEditorGroup",
           "group": "navigation@-100"
+        },
+        {
+          "command": "pyneide.openChartSource",
+          "when": "activeWebviewPanelId == pyneideChart && pyneide.chartHasInputs",
+          "group": "navigation@-101"
         },
         {
           "command": "pyneide.dataPreviewChart",

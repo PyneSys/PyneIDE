@@ -54,8 +54,7 @@ export class InputsViewManager {
 
   /**
    * Close input forms whose script is no longer open in ANY editor tab (neither
-   * the `.pine` nor its `.py`) — the same lifetime rule as the chart. Closing
-   * only the form's own tab keeps nothing dormant; it just disposes.
+   * the `.pine` nor its `.py`). Closing the form's own tab also disposes it.
    */
   reconcile(): void {
     const live = openChartKeys();

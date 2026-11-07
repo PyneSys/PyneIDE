@@ -168,11 +168,8 @@ export function activate(context: vscode.ExtensionContext): void {
   runService.attachChart(chartManager);
   chartManager.onSelectData = (chartKey) => void runService.reselectChartData(chartKey);
   new ChartBreakpointService(context, chartManager).register();
-  // A chart lives as long as its script (the .pine OR its compiled .py) is open
-  // in a tab, or a run/debug is streaming to it. Closing the last such tab
-  // retires the chart; closing only the chart's own tab keeps it dormant so it
-  // can be reopened with its state intact.
   context.subscriptions.push(
+    vscode.commands.registerCommand('pyneide.openChartSource', () => chartManager.openSource()),
     vscode.window.tabGroups.onDidChangeTabs(() => {
       chartManager.reconcile();
       inputsView.reconcile();
