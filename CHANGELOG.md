@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-07
+
+### Added
+
+- Compile usage shows a weekly limit for plans that have one. The status bar
+  menu, **Show Compile Usage** and the plan comparison list the weekly, daily
+  and hourly quotas; a daily limit equal to the weekly one is not repeated.
+  The plan cards note that failed compiles don't count toward the limits.
+
+### Fixed
+
+- `barcolor()` colors are drawn by the chart itself instead of being painted
+  over the original bars. A semi-transparent color is now shown as such
+  rather than blending with the bar's up or down color underneath, and the
+  recolored bar always takes the shape of the selected candle style.
+
 ## [0.13.0] - 2026-11-05
 
 ### Added
