@@ -3,7 +3,10 @@
  *
  * - `<stem>.csv` contains OHLCV + plot values;
  * - `<stem>_viz.ndjson` contains the native visual header, plot metadata,
- *   dynamic color deltas, strategy equity and final drawing snapshot.
+ *   dynamic color deltas, strategy equity and final drawing snapshot;
+ * - `<stem>_robustness.json`, when present, holds the robustness tests of the
+ *   run (the bridge deletes it at the start of every run, so it is never older
+ *   than the other files).
  *
  * The files are deliberately joined best-effort. Unknown visual records,
  * colors for timestamps absent from the CSV and metadata without a matching
@@ -21,6 +24,7 @@ import type {
   DrawingEventRecord,
   EquityExcursions,
   PlotMetaRecord,
+  RobustnessReport,
   StartEvent,
   TradeRecord,
 } from '../run/bridgeClient';
@@ -34,6 +38,8 @@ interface NativeRecord {
   time?: number;
   equity?: number | null;
   excursions?: unknown;
+  /** The executed bar's OHLCV, on a bar record without plot values. */
+  ohlcv?: unknown[];
   c?: Record<string, ColorEnc>;
   script?: Record<string, unknown>;
   syminfo?: Record<string, unknown>;
@@ -51,6 +57,7 @@ export interface OutputPair {
   viz: string;
   trades?: string;
   strat?: string;
+  robustness?: string;
 }
 
 export interface OutputPreview {
@@ -87,12 +94,46 @@ export function resolveOutputPair(filePath: string): OutputPair | undefined {
   const stem = plot.replace(/\.csv$/i, '');
   const trades = `${stem}_trade.csv`;
   const strat = `${stem}_strat.csv`;
+  const robustness = `${stem}_robustness.json`;
   return {
     plot,
     viz,
     trades: fs.existsSync(trades) ? trades : undefined,
     strat: fs.existsSync(strat) ? strat : undefined,
+    robustness: fs.existsSync(robustness) ? robustness : undefined,
   };
+}
+
+/**
+ * The bars of a run whose script plots nothing: PyneCore writes no plot rows
+ * then, so they come from the executed OHLCV the bridge stores on the
+ * visualization sidecar's bar records.
+ */
+function barsFromViz(records: NativeRecord[]): BarRow[] {
+  const bars: BarRow[] = [];
+  for (const record of records) {
+    if (record.t !== 'bar' || typeof record.time !== 'number') continue;
+    const ohlcv = record.ohlcv;
+    if (!Array.isArray(ohlcv) || ohlcv.length < 5) continue;
+    const value = (i: number): number | null => {
+      const field = ohlcv[i];
+      return typeof field === 'number' && Number.isFinite(field) ? field : null;
+    };
+    bars.push([record.time, value(0), value(1), value(2), value(3), value(4), null]);
+  }
+  return bars;
+}
+
+/** The saved robustness report, or undefined (with a warning) when it is unreadable. */
+function readRobustness(file: string, warnings: string[]): RobustnessReport | undefined {
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8')) as RobustnessReport;
+    if (report && typeof report === 'object' && Array.isArray(report.rows)) return report;
+  } catch {
+    // Reported below like any other unreadable file.
+  }
+  warnings.push(`${path.basename(file)} is not a readable robustness report`);
+  return undefined;
 }
 
 /** RFC-4180-style CSV reader sufficient for pynecore's LF writer, including
@@ -243,10 +284,12 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
   }
 
   const csv = parseCsv(fs.readFileSync(pair.plot, 'utf8'));
-  const header = csv.shift();
-  if (!header || header.length < 6) throw new Error('plot CSV has no valid OHLCV header');
+  const header = csv.shift() ?? [];
+  if (header.length < 6 && header.some((field) => field.trim())) {
+    throw new Error('plot CSV has no valid OHLCV header');
+  }
   const plotKeys = header.slice(6);
-  const bars: BarRow[] = [];
+  let bars: BarRow[] = [];
   for (const row of csv) {
     const time = parseTime(row[0]);
     if (time === undefined) {
@@ -263,6 +306,7 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
       plotKeys.length ? plotKeys.map((_, i) => numberOrNull(row[i + 6])) : null,
     ]);
   }
+  if (!bars.length) bars = barsFromViz(records);
   if (!bars.length) throw new Error('plot CSV contains no chartable rows');
 
   const hdr = records.find((record) => record.t === 'hdr');
@@ -335,6 +379,7 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
       strat: pair.strat ?? null,
       trades: pair.trades ?? null,
       viz: pair.viz,
+      robustness: pair.robustness ?? null,
     },
   };
 
@@ -366,6 +411,10 @@ export function buildOutputPreview(pair: OutputPair, dataPath?: string): OutputP
     }
     if (trades?.closed.length) events.push({ e: 'trades', d: trades.closed });
     if (trades?.open.length) events.push({ e: 'openTrades', d: trades.open });
+    const report = pair.robustness ? readRobustness(pair.robustness, warnings) : undefined;
+    if (report) {
+      events.push({ e: 'robustness', supported: true, report, file: pair.robustness });
+    }
   }
   events.push({ e: 'end', bars: bars.length, cancelled: !complete });
   return { events, warnings };

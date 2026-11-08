@@ -119,7 +119,19 @@ function fmtSize(bytes: number): string {
 }
 
 /** Outputs a run writes next to its `<stem>.csv`, nested under it in the tree. */
-const OUTPUT_SIDECARS = ['_viz.ndjson', '_strat.csv', '_trade.csv', '_profile.json'];
+const OUTPUT_SIDECARS = [
+  '_viz.ndjson',
+  '_strat.csv',
+  '_trade.csv',
+  '_profile.json',
+  '_robustness.json',
+  '_robustness.csv',
+  '_montecarlo.csv',
+  '_costs.csv',
+  '_periods.csv',
+  '_coinflip_direction.csv',
+  '_coinflip_timing.csv',
+];
 
 /** Provider names that carry the `<provider>_…` stem convention, used only as a
  * fallback when the `.toml` has no persisted `[download]` provider string. */

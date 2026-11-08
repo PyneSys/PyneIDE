@@ -72,7 +72,7 @@
         "*.pine": "${capture}.py, ${capture}.py.map, ${capture}.toml",
         "*.py": "${capture}.py.map, ${capture}.toml",
         "*.ohlcv": "${capture}.toml",
-        "*.csv": "${capture}_viz.ndjson, ${capture}_strat.csv, ${capture}_trade.csv"
+        "*.csv": "${capture}_viz.ndjson, ${capture}_strat.csv, ${capture}_trade.csv, ${capture}_profile.json, ${capture}_robustness.json, ${capture}_robustness.csv, ${capture}_montecarlo.csv, ${capture}_costs.csv, ${capture}_periods.csv, ${capture}_coinflip_*.csv"
       },
       "workbench.editor.customLabels.patterns": {
         "**/scripts/lib/*/*/v*.{pine,py}": "${dirname}/${filename}.${extname}"
@@ -254,6 +254,20 @@
         "title": "Profile Pine Script",
         "category": "PyneIDE",
         "icon": "$(flame)",
+        "enablement": "resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.robustnessScript",
+        "title": "Run Robustness Tests",
+        "category": "PyneIDE",
+        "icon": "$(beaker)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.robustnessPineScript",
+        "title": "Run Robustness Tests on Pine Script",
+        "category": "PyneIDE",
+        "icon": "$(beaker)",
         "enablement": "resourceLangId == pine"
       },
       {
@@ -527,6 +541,14 @@
           "when": "resourceLangId == pine"
         },
         {
+          "command": "pyneide.robustnessScript",
+          "when": "resourceLangId != pine"
+        },
+        {
+          "command": "pyneide.robustnessPineScript",
+          "when": "resourceLangId == pine"
+        },
+        {
           "command": "pyneide.showProfile",
           "when": "resourceLangId == pine || pyneide.isPyneScript"
         },
@@ -600,6 +622,16 @@
         },
         {
           "command": "pyneide.profileScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.robustnessPineScript",
+          "when": "resourceLangId == pine",
+          "group": "pyneide@2"
+        },
+        {
+          "command": "pyneide.robustnessScript",
           "when": "resourceLangId != pine && pyneide.isPyneScript",
           "group": "pyneide@2"
         },
@@ -1066,7 +1098,9 @@
               "onCommand:pyneide.profileScript",
               "onCommand:pyneide.profilePineScript",
               "onCommand:pyneide.workspace.profileScript",
-              "onCommand:pyneide.workspace.profilePineScript"
+              "onCommand:pyneide.workspace.profilePineScript",
+              "onCommand:pyneide.robustnessScript",
+              "onCommand:pyneide.robustnessPineScript"
             ]
           },
           {
@@ -1216,6 +1250,105 @@
             "scope": "resource",
             "order": 1,
             "markdownDescription": "Show agent instruction files and skill folders in the Explorer for initialized Pyne projects. They are hidden by default. To edit your development preferences while keeping them hidden, run **PyneIDE: Edit Agent Rules…**."
+          }
+        }
+      },
+      {
+        "id": "pyneide.robustness",
+        "title": "Robustness Tests",
+        "order": 5,
+        "properties": {
+          "pyneide.robustness.draws": {
+            "type": "integer",
+            "default": 10000,
+            "minimum": 100,
+            "scope": "resource",
+            "order": 1,
+            "markdownDescription": "Random draws of the bootstrap, the Monte Carlo and the fast direction coin flip. More draws give steadier percentiles and take longer."
+          },
+          "pyneide.robustness.seed": {
+            "type": "integer",
+            "default": 0,
+            "scope": "resource",
+            "order": 2,
+            "markdownDescription": "Random seed. The same seed, settings and trades give the same results on every run."
+          },
+          "pyneide.robustness.coinflip": {
+            "type": "string",
+            "default": "direction",
+            "enum": [
+              "direction",
+              "timing",
+              "both",
+              "none"
+            ],
+            "enumDescriptions": [
+              "Keep every entry and flip a coin for its direction.",
+              "Keep every trade's direction, size, stop distance and holding time, and draw its entry moment at random. Runs the strategy once per draw.",
+              "Run both coin-flip tests.",
+              "No coin-flip test."
+            ],
+            "scope": "resource",
+            "order": 3,
+            "markdownDescription": "Which coin-flip test compares the strategy's rules with random decisions."
+          },
+          "pyneide.robustness.coinflipRuns": {
+            "type": "integer",
+            "default": 200,
+            "minimum": 10,
+            "scope": "resource",
+            "order": 4,
+            "markdownDescription": "Backtests run by the coin-flip tests that need one per draw: the timing test, and the direction test when `#pyneide.robustness.exact#` is on."
+          },
+          "pyneide.robustness.exact": {
+            "type": "boolean",
+            "default": false,
+            "scope": "resource",
+            "order": 5,
+            "markdownDescription": "Run the direction coin flip as one backtest per draw instead of pairing every trade with its mirrored twin. Slower, but it also follows strategies whose later decisions depend on the open position."
+          },
+          "pyneide.robustness.costBps": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0
+            },
+            "default": [
+              0,
+              2,
+              5,
+              10
+            ],
+            "scope": "resource",
+            "order": 6,
+            "markdownDescription": "Extra costs per side, in basis points of the traded value, for the cost-sensitivity table."
+          },
+          "pyneide.robustness.riskPercent": {
+            "type": "number",
+            "default": 1,
+            "exclusiveMinimum": 0,
+            "scope": "resource",
+            "order": 7,
+            "markdownDescription": "Account Monte Carlo of results in R: the percent of the account risked per trade (1 R)."
+          },
+          "pyneide.robustness.ruinPercent": {
+            "type": "number",
+            "default": 50,
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "scope": "resource",
+            "order": 8,
+            "markdownDescription": "Account Monte Carlo: a path counts as ruined once the account has lost this percent of its starting value (`50`: ruined at half the starting account)."
+          },
+          "pyneide.robustness.targetMultiple": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "default": null,
+            "scope": "resource",
+            "order": 9,
+            "markdownDescription": "Account Monte Carlo: count the paths that reach this multiple of the starting account (for example `2`). Empty: no target."
           }
         }
       },
@@ -1540,6 +1673,7 @@
     "test:edge-corpus": "node esbuild.mjs --smoke-edge-corpus && node dist/edge-corpus-smoke.js",
     "test:bridge-viz": "node esbuild.mjs --smoke-bridge-viz && node dist/bridge-viz-smoke.js",
     "test:bridge-profile": "node esbuild.mjs --smoke-bridge-profile && node dist/bridge-profile-smoke.js",
+    "test:bridge-robustness": "node esbuild.mjs --smoke-bridge-robustness && node dist/bridge-robustness-smoke.js",
     "test:bridge-security": "node esbuild.mjs --smoke-bridge-security && node dist/bridge-security-smoke.js",
     "test:chart-breakpoints": "node esbuild.mjs --smoke-chart-breakpoints && node dist/chart-breakpoint-condition-smoke.js",
     "test:equity-navigation": "node esbuild.mjs --smoke-equity-navigation && node dist/equity-navigation-smoke.js",

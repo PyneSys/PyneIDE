@@ -33,6 +33,7 @@ import type {
   DrawingFamily,
   EquityExcursions,
   PlotMetaRecord,
+  RobustnessReport,
   StartEvent,
   TradeRecord,
 } from '../../run/bridgeClient';
@@ -68,6 +69,7 @@ import {
   EquityCrosshair,
   type EquitySummary,
 } from './equityCurve';
+import { drawRobustness, renderRobustness } from './robustnessView';
 import { tradeAtTimestamp } from './tradeNavigation';
 import { closeTradeDetails, showTradeDetails } from './tradeDetails';
 import {
@@ -361,6 +363,8 @@ interface RunState {
   renderedTableLayout: string;
   trades: TradeRecord[];
   stats: Record<string, number | null> | undefined;
+  /** The robustness tests of the run, when it was started with them. */
+  robustness: RobustnessReport | undefined;
   dirty: boolean;
   /** A meta arrived/changed: plot indicators need a rebuild on the next tick. */
   metaDirty: boolean;
@@ -986,6 +990,7 @@ function startRun(start: StartEvent): void {
     renderedTableLayout: '',
     trades: [],
     stats: undefined,
+    robustness: undefined,
     dirty: false,
     metaDirty: false,
     ended: false,
@@ -2442,10 +2447,11 @@ const tabBodyEl = document.getElementById('tab-body');
 const tabPerformanceEl = document.getElementById('tab-performance');
 const tabTradesEl = document.getElementById('tab-trades');
 const tabStatsEl = document.getElementById('tab-stats');
+const tabRobustnessEl = document.getElementById('tab-robustness');
 const tabToggleEl = document.getElementById('tab-toggle');
 const strategyPropertiesEl = document.getElementById('strategy-properties');
 const panelSplitterEl = document.getElementById('panel-splitter');
-let activeTab: 'performance' | 'trades' | 'stats' = 'trades';
+let activeTab: 'performance' | 'trades' | 'stats' | 'robustness' = 'trades';
 let bottomPanelHeight: number | undefined;
 let panelResizeFrame: number | undefined;
 let selectedTradeIndex: number | undefined;
@@ -2609,6 +2615,7 @@ function resizeChartAndPerformance(): void {
     panelResizeFrame = undefined;
     state?.chart.resize();
     drawPerformance();
+    paintRobustness();
     requestAnimationFrame(() => {
       if (state && !isFrozen()) {
         refreshLegendLayout(state);
@@ -2735,6 +2742,21 @@ function renderStats(): string {
   return '<table><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
+function paintRobustness(): void {
+  const report = state?.robustness;
+  if (!tabBodyEl || !report || activeTab !== 'robustness') return;
+  if (bottomEl?.classList.contains('collapsed')) return;
+  const p = palette();
+  drawRobustness(tabBodyEl, report, {
+    foreground: cssVar('--vscode-editor-foreground', '#ccc'),
+    muted: cssVar('--vscode-descriptionForeground', '#999'),
+    grid: isDark() ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+    positive: p.up,
+    negative: p.down,
+    accent: cssVar('--vscode-charts-blue', '#3794ff'),
+  });
+}
+
 function renderTables(): void {
   if (!tabBodyEl || !bottomEl) return;
   if (activeTab !== 'performance' || bottomEl.classList.contains('collapsed')) {
@@ -2743,6 +2765,8 @@ function renderTables(): void {
   tabPerformanceEl?.classList.toggle('active', activeTab === 'performance');
   tabTradesEl?.classList.toggle('active', activeTab === 'trades');
   tabStatsEl?.classList.toggle('active', activeTab === 'stats');
+  tabRobustnessEl?.classList.toggle('active', activeTab === 'robustness');
+  if (tabRobustnessEl) tabRobustnessEl.hidden = !state?.robustness;
   if (tabPerformanceEl) tabPerformanceEl.hidden = state?.start.scriptType !== 'strategy';
   if (strategyPropertiesEl) strategyPropertiesEl.hidden = state?.start.scriptType !== 'strategy';
   if (tabTradesEl && state) tabTradesEl.textContent = `Trades (${state.trades.length})`;
@@ -2752,8 +2776,11 @@ function renderTables(): void {
       ? renderPerformance()
       : activeTab === 'trades'
         ? renderTrades()
-        : renderStats();
+        : activeTab === 'robustness'
+          ? renderRobustness(state?.robustness)
+          : renderStats();
   requestAnimationFrame(drawPerformance);
+  requestAnimationFrame(paintRobustness);
 }
 
 tabPerformanceEl?.addEventListener('click', () => {
@@ -2768,6 +2795,11 @@ tabTradesEl?.addEventListener('click', () => {
 });
 tabStatsEl?.addEventListener('click', () => {
   activeTab = 'stats';
+  setCollapsed(false);
+  renderTables();
+});
+tabRobustnessEl?.addEventListener('click', () => {
+  activeTab = 'robustness';
   setCollapsed(false);
   renderTables();
 });
@@ -3456,6 +3488,9 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'stats':
       if (state) state.stats = msg.stats;
       break;
+    case 'robustness':
+      if (state) state.robustness = msg.report;
+      break;
     case 'debugPosition': {
       debugPosition = msg.position;
       dataWindowHeld = undefined;
@@ -3510,7 +3545,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         syncBreakpointOverlays(state);
         if (!isFrozen()) renderDrawingTables(state);
         ensureTradeMarkerIndicator(state);
-        if (state.start.scriptType === 'strategy') {
+        if (state.robustness) {
+          activeTab = 'robustness';
+          setCollapsed(false);
+        } else if (state.start.scriptType === 'strategy') {
           activeTab = 'performance';
           setCollapsed(false);
         }

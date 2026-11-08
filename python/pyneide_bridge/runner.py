@@ -47,8 +47,12 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
     The source-data path lets a persisted chart recover its binding. Strategy
     equity and the engine's equity excursions are stored on each bar because
     the plot CSV intentionally contains plots only; without them a chart
-    reopened from disk could not rebuild the full-run performance view.
+    reopened from disk could not rebuild the full-run performance view. A bar
+    without plot values has no plot CSV row, so its record carries the
+    executed OHLCV (``ohlcv``) instead: the candles the script saw, aggregated
+    to the chart timeframe when the run has one.
     """
+    from pynecore import lib
     from pynecore.core.viz import VizWriter
 
     class _DataPathVizWriter(VizWriter):
@@ -63,6 +67,10 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
                     "initialCapital": num_or_none(initial_capital),
                 }
             elif obj.get("t") == "bar":
+                if "v" not in obj:
+                    obj = {**obj, "ohlcv": [
+                        num_or_none(lib.open), num_or_none(lib.high), num_or_none(lib.low),
+                        num_or_none(lib.close), num_or_none(lib.volume)]}
                 position = getattr(runner.script, "position", None)
                 if position is not None:
                     equity = float(position.equity) if position.equity \
@@ -600,6 +608,9 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
     trade_path = output_dir / f"{script.stem}_trade.csv"
     viz_path = output_dir / f"{script.stem}_viz.ndjson"
     profile_path = output_dir / f"{script.stem}_profile.json"
+    # Robustness results describe one run's trades: a new run makes the old ones stale
+    robustness_path = output_dir / f"{script.stem}_robustness.json"
+    robustness_path.unlink(missing_ok=True)
 
     # --security KEY=VALUE mappings (backtest file mode only)
     security_data: dict[str, str] | None = None
@@ -707,6 +718,12 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
             runner.viz_writer = _make_viz_writer(viz_path, data_path, runner)
 
         is_strategy = _script_type_name(runner.script) == "strategy"
+        session = None
+        if args.robustness is not None:
+            session = _robustness_session(
+                args.robustness, emitter, runner, is_strategy, syminfo, output_dir, script,
+                lambda: _test_runner(ScriptRunner, script, syminfo, reader, runner_kwargs,
+                                     time_from_ts, time_to_ts, magnifier_mode))
         emitter.emit({
             "e": "start",
             "script": str(script),
@@ -725,6 +742,7 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                 "trades": str(trade_path) if is_strategy else None,
                 "viz": str(viz_path) if viz_supported else None,
                 "profile": str(profile_path) if profiled else None,
+                "robustness": str(robustness_path) if session is not None else None,
             },
         })
 
@@ -740,7 +758,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
                            total_bars=size,
                            is_strategy=is_strategy,
                            batch_size=args.batch_size,
-                           chart_breakpoints=args.debugpy_port is not None)
+                           chart_breakpoints=args.debugpy_port is not None,
+                           robustness=session)
 
 
 def run_data_only(args: Any, emitter: Emitter, control: Control) -> int:
@@ -858,9 +877,44 @@ def _chart_breakpoint_iter(source: Any, emitter: Emitter, control: Control):
             active_timestamp = None
 
 
+def _robustness_session(config_text: str, emitter: Emitter, runner: Any, is_strategy: bool,
+                        syminfo: Any, output_dir: Path, script: Path,
+                        make_runner: Any) -> Any:
+    """The robustness session of a run, or None when it cannot have one (the
+    reason goes out as a ``robustness`` event)."""
+    from . import robustness
+    if not robustness.supported():
+        emitter.emit({"e": "robustness", "supported": False, "report": None,
+                      "message": "this PyneCore has no robustness tests"})
+        return None
+    if not is_strategy:
+        emitter.emit({"e": "robustness", "supported": True, "report": None,
+                      "message": "robustness tests need a strategy"})
+        return None
+    return robustness.RobustnessSession(
+        robustness.parse_config(config_text), runner.script.position, syminfo,
+        make_runner, output_dir, script.stem)
+
+
+def _test_runner(runner_class: Any, script: Path, syminfo: Any, reader: Any,
+                 runner_kwargs: dict[str, Any], time_from_ts: int, time_to_ts: int,
+                 magnifier_mode: bool) -> Any:
+    """A fresh runner on the run's data that writes no output files, for the
+    robustness tests that run the strategy again."""
+    kwargs = dict(runner_kwargs)
+    for key in ("plot_path", "strat_path", "trade_path", "viz_path", "profile_path"):
+        kwargs.pop(key, None)
+    if magnifier_mode:
+        kwargs["magnifier_iter"] = reader.read_from(time_from_ts, time_to_ts)
+        ohlcv_iter: Any = iter(())
+    else:
+        ohlcv_iter = reader.read_from(time_from_ts, time_to_ts)
+    return runner_class(script, ohlcv_iter, syminfo, **kwargs)
+
+
 def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 total_bars: int, is_strategy: bool, batch_size: int,
-                chart_breakpoints: bool) -> int:
+                chart_breakpoints: bool, robustness: Any = None) -> int:
     from pynecore import lib
 
     plot_keys: list[str] = []
@@ -955,6 +1009,9 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                         if getattr(runner, "viz_writer", None) is not None:
                             runner.viz_writer.trades.append(serialized)
 
+            if robustness is not None:
+                robustness.on_bar()
+
             batch.append(row)
             if viz_tap.active:
                 viz_tap.collect_colors(time_ms)
@@ -999,6 +1056,18 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
             except Exception as exc:  # stats are best-effort, the run itself succeeded
                 emitter.emit({"e": "log", "level": "warning",
                               "message": f"strategy statistics failed: {exc}"})
+
+    if robustness is not None and not cancelled:
+        from .robustness import RobustnessCancelled
+        try:
+            robustness.finish(emitter, control)
+        except RobustnessCancelled:
+            cancelled = True
+        except Exception as exc:  # the tests are an add-on, the run itself succeeded
+            emitter.emit({"e": "log", "level": "warning",
+                          "message": f"robustness tests failed: {exc}"})
+            emitter.emit({"e": "robustness", "supported": True, "report": None,
+                          "message": f"the robustness tests failed: {exc}"})
 
     emitter.emit({"e": "end", "bars": bars_done, "cancelled": cancelled})
     return 0

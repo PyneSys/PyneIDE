@@ -23,6 +23,7 @@ import type {
   ColorDeltaRow,
   DrawingEventRecord,
   PlotMetaRecord,
+  RobustnessReport,
   StartEvent,
   TradeRecord,
 } from '../run/bridgeClient';
@@ -90,6 +91,7 @@ interface ChartSnapshot {
   trades: TradeRecord[];
   openTrades: TradeRecord[];
   stats: Record<string, number | null> | undefined;
+  robustness: RobustnessReport | undefined;
   ended: { bars: number; cancelled: boolean } | undefined;
 }
 
@@ -176,6 +178,7 @@ export class ChartPanel {
       trades: [],
       openTrades: [],
       stats: undefined,
+      robustness: undefined,
       ended: { bars: bars.length, cancelled: false },
     };
     this.reveal();
@@ -205,6 +208,7 @@ export class ChartPanel {
           trades: [],
           openTrades: [],
           stats: undefined,
+          robustness: undefined,
           ended: undefined,
         };
         this.reveal();
@@ -248,6 +252,11 @@ export class ChartPanel {
       case 'stats':
         if (this.snap) this.snap.stats = event.d;
         this.post({ type: 'stats', stats: event.d });
+        break;
+      case 'robustness':
+        if (!event.report) break;
+        if (this.snap) this.snap.robustness = event.report;
+        this.post({ type: 'robustness', report: event.report });
         break;
       case 'end':
         if (this.snap) this.snap.ended = { bars: event.bars, cancelled: event.cancelled };
@@ -365,7 +374,7 @@ export class ChartPanel {
   }
 
   /** Rebuild the current webview from the host snapshot (reset → meta → keys →
-   * bars → colors → drawings → trades → stats → end; metas must precede the
+   * bars → colors → drawings → trades → stats → robustness → end; metas must precede the
    * bars that reference them, colors/drawings follow the bars their
    * timestamps / bar indices join against). Safe to call only once the
    * webview is ready. */
@@ -386,6 +395,7 @@ export class ChartPanel {
     if (s.trades.length) void webview.postMessage({ type: 'trades', trades: s.trades });
     if (s.openTrades.length) void webview.postMessage({ type: 'openTrades', trades: s.openTrades });
     if (s.stats) void webview.postMessage({ type: 'stats', stats: s.stats });
+    if (s.robustness) void webview.postMessage({ type: 'robustness', report: s.robustness });
     if (s.ended) {
       void webview.postMessage({ type: 'end', bars: s.ended.bars, cancelled: s.ended.cancelled });
     }
@@ -860,6 +870,29 @@ export class ChartPanel {
     color: var(--vscode-descriptionForeground); pointer-events: none;
   }
   #equity-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  .rb-view { box-sizing: border-box; padding: 8px 10px 10px; }
+  .rb-charts {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 8px; margin: 4px 0 8px;
+  }
+  .rb-chart {
+    position: relative; height: 170px;
+    border: 1px solid var(--vscode-panel-border, #333); border-radius: 2px;
+  }
+  .rb-chart canvas { display: block; width: 100%; height: 100%; }
+  .rb-chart-title {
+    position: absolute; top: 2px; left: 8px; right: 58px; font-size: 10px;
+    color: var(--vscode-descriptionForeground); pointer-events: none;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .rb-notes { margin: 0 0 8px; padding-left: 18px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+  .rb-heading {
+    margin: 12px 0 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    color: var(--vscode-descriptionForeground);
+  }
+  .tab-body .rb-table th.rb-text, .tab-body .rb-table td.rb-text { text-align: left; white-space: normal; }
+  .tab-body .rb-table tr.rb-group td { border-top: 1px solid var(--vscode-panel-border, #444); }
+  .tab-body .rb-table th { position: static; }
   #equity-crosshair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   @media (max-width: 620px) {
     .performance-summary { gap: 5px; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
@@ -1006,6 +1039,7 @@ export class ChartPanel {
     <button id="tab-performance" hidden>Performance</button>
     <button id="tab-trades" class="active">Trades</button>
     <button id="tab-stats">Stats</button>
+    <button id="tab-robustness" hidden>Robustness</button>
     <span class="spacer"></span>
     <button id="strategy-properties" title="Strategy properties: capital, order size, costs"
             aria-label="Strategy properties" hidden>⚙</button>

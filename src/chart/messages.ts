@@ -8,6 +8,7 @@ import type {
   ColorDeltaRow,
   DrawingEventRecord,
   PlotMetaRecord,
+  RobustnessReport,
   StartEvent,
   TradeRecord,
 } from '../run/bridgeClient';
@@ -38,6 +39,8 @@ export type ChartInMessage =
   | { type: 'trades'; trades: TradeRecord[] }
   | { type: 'openTrades'; trades: TradeRecord[] }
   | { type: 'stats'; stats: Record<string, number | null> }
+  /** Robustness tests of the run, sent after its last bar (before `end`). */
+  | { type: 'robustness'; report: RobustnessReport }
   | { type: 'debugPosition'; position?: ChartDebugPosition }
   | { type: 'breakpoints'; targets: ChartBreakpointTarget[] }
   | { type: 'breakpointSelection'; label?: string }

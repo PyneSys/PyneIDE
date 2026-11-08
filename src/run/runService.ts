@@ -34,7 +34,12 @@ import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
 import { failures } from '../report/lastFailure';
 import { logHub } from '../report/logTee';
 import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
-import { BridgeRun, type BridgeEvent, type TradeRecord } from './bridgeClient';
+import {
+  BridgeRun,
+  type BridgeEvent,
+  type RobustnessEvent,
+  type TradeRecord,
+} from './bridgeClient';
 import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
 import { runtimeErrorLocation } from './runtimeError';
 import {
@@ -72,7 +77,32 @@ interface PreparedRun {
 export interface RunOptions {
   /** Profile the run per source line and show the result in the editor. */
   profile?: boolean;
+  /** Run the robustness tests after the last bar and show them on the chart. */
+  robustness?: boolean;
 }
+
+/** The `pyneide.robustness.*` settings as the bridge's `--robustness` object. */
+function robustnessSettings(scope: vscode.Uri): Record<string, unknown> {
+  const cfg = vscode.workspace.getConfiguration('pyneide.robustness', scope);
+  const settings: Record<string, unknown> = {
+    draws: cfg.get<number>('draws', 10000),
+    seed: cfg.get<number>('seed', 0),
+    coinflip: cfg.get<string>('coinflip', 'direction'),
+    coinflipRuns: cfg.get<number>('coinflipRuns', 200),
+    exact: cfg.get<boolean>('exact', false),
+    costBps: cfg.get<number[]>('costBps', [0, 2, 5, 10]),
+    riskPercent: cfg.get<number>('riskPercent', 1),
+    ruinPercent: cfg.get<number>('ruinPercent', 50),
+  };
+  const target = cfg.get<number | null>('targetMultiple', null);
+  if (typeof target === 'number' && target > 0) settings.targetMultiple = target;
+  return settings;
+}
+
+/** How much of a source the strategy-declaration check reads. */
+const STRATEGY_HEAD_CHARS = 20000;
+/** A strategy declaration in a Pine or Pyne source. */
+const STRATEGY_DECLARATION_RE = /^\s*(?:strategy\s*\(|@?\s*script\.strategy\s*\()/m;
 
 export class RunService {
   // The languageId must be spelled lowercase: createOutputChannel's documented
@@ -94,6 +124,8 @@ export class RunService {
   private paused = false;
   private barsDone = 0;
   private barsTotal = 0;
+  /** The robustness test the active run is in after its last bar (status bar text). */
+  private robustnessPhase: string | undefined;
   private debugSession: vscode.DebugSession | undefined;
   /**
    * Endpoint of the bridge a launch just spawned, handed to the adapter factory
@@ -200,6 +232,12 @@ export class RunService {
       ),
       vscode.commands.registerCommand('pyneide.profilePineScript', (uri?: vscode.Uri) =>
         this.runFromCommand(uri, { profile: true })
+      ),
+      vscode.commands.registerCommand('pyneide.robustnessScript', (uri?: vscode.Uri) =>
+        this.runFromCommand(uri, { robustness: true })
+      ),
+      vscode.commands.registerCommand('pyneide.robustnessPineScript', (uri?: vscode.Uri) =>
+        this.runFromCommand(uri, { robustness: true })
       ),
       vscode.commands.registerCommand('pyneide.changeRunData', (uri?: vscode.Uri) =>
         this.changeRunData(uri)
@@ -477,7 +515,11 @@ export class RunService {
       this.startPending = false;
     }
     if (!prepared) return;
-    await this.executeRun({ ...prepared, profile: options?.profile });
+    await this.executeRun({
+      ...prepared,
+      profile: options?.profile,
+      robustness: options?.robustness,
+    });
   }
 
   /** Re-run a visible script chart after something its result depends on
@@ -1244,6 +1286,11 @@ export class RunService {
       this.statusItem.hide();
       return;
     }
+    if (this.robustnessPhase) {
+      this.statusItem.text = `$(beaker) ${this.activeScriptName} ${this.robustnessPhase}`;
+      this.statusItem.show();
+      return;
+    }
     const bars = `${this.barsDone.toLocaleString()}/${this.barsTotal.toLocaleString()}`;
     this.statusItem.text = this.paused
       ? `$(debug-pause) ${this.activeScriptName} ${bars} (paused)`
@@ -1262,6 +1309,7 @@ export class RunService {
     security?: string[];
     debug?: { onEndpoint: (host: string, port: number) => void };
     profile?: boolean;
+    robustness?: boolean;
   }): Promise<void> {
     const scriptName = path.basename(opts.scriptPath);
     const chartKey = opts.chartKey;
@@ -1269,7 +1317,13 @@ export class RunService {
     this.supersedePreview(chartKey);
     this.activeChartKey = chartKey;
     this.activeRunIsDebug = opts.debug !== undefined;
-    const mode = opts.debug ? 'Debug' : opts.profile ? 'Profile' : 'Run';
+    const mode = opts.debug
+      ? 'Debug'
+      : opts.profile
+        ? 'Profile'
+        : opts.robustness
+          ? 'Robustness'
+          : 'Run';
     this.output.appendLine(
       `--- ${mode}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
     );
@@ -1282,6 +1336,7 @@ export class RunService {
     let endBars = 0;
     let cancelled = false;
     let profileFile: string | null | undefined;
+    let robustness: RobustnessEvent | undefined;
 
     // Script log output is easy to lose among the other channels, so the first
     // log line of a run brings this one up. Once per run only — a per-bar
@@ -1301,6 +1356,7 @@ export class RunService {
     this.activeScriptName = scriptName;
     this.barsDone = 0;
     this.barsTotal = 0;
+    this.robustnessPhase = undefined;
     this.setRunActive(true);
 
     // No progress notification on purpose: the status bar item carries the
@@ -1316,6 +1372,7 @@ export class RunService {
       // shows every processed bar while execution sits at a breakpoint.
       ...(opts.debug ? { debugpyPort: 0, batchSize: 1 } : {}),
       ...(opts.profile ? { profile: true } : {}),
+      ...(opts.robustness ? { robustness: robustnessSettings(vscode.Uri.file(opts.scriptPath)) } : {}),
       onEvent: (event) => {
         switch (event.e) {
           case 'start':
@@ -1361,6 +1418,14 @@ export class RunService {
           case 'stats':
             stats = event.d;
             break;
+          case 'robustnessProgress':
+            this.robustnessPhase =
+              event.total > 1 ? `${event.phase} ${event.done}/${event.total}` : event.phase;
+            this.updateStatusItem(true);
+            break;
+          case 'robustness':
+            robustness = event;
+            break;
           case 'error':
             errorMessage = event.message;
             errorKind = event.kind;
@@ -1399,6 +1464,7 @@ export class RunService {
 
     const code = await run.exited;
     this.activeRun = undefined;
+    this.robustnessPhase = undefined;
     this.chartManager?.setDebugPosition(chartKey, undefined);
     this.activeChartKey = undefined;
     this.activeRunIsDebug = false;
@@ -1488,6 +1554,10 @@ export class RunService {
     // status-bar note replaces the old dismissable notification toast.
     vscode.window.setStatusBarMessage(summary, 6000);
 
+    if (opts.robustness && !cancelled) {
+      this.reportRobustness(robustness);
+      return;
+    }
     if (!opts.profile || cancelled) return;
     if (!profileFile) {
       void vscode.window.showWarningMessage(
@@ -1497,9 +1567,27 @@ export class RunService {
       void vscode.window.showWarningMessage(`PyneIDE: the run wrote no readable profile (${profileFile}).`);
     }
   }
+
+  /** Tell the user when a robustness run produced no report; a report shows on the chart. */
+  private reportRobustness(event: RobustnessEvent | undefined): void {
+    if (event?.report) {
+      const flips = event.report.coinflips.map((flip) => flip.verdict).filter(Boolean);
+      for (const verdict of flips) this.output.appendLine(`Coin flip: ${verdict}`);
+      if (event.report.files.length) {
+        this.output.appendLine(`Robustness CSV files: ${event.report.files.join(', ')}`);
+      }
+      return;
+    }
+    const message = !event
+      ? 'the run reported no robustness results'
+      : !event.supported
+        ? 'the installed PyneCore has no robustness tests; update PyneCore to use them'
+        : (event.message ?? 'the run reported no robustness results');
+    void vscode.window.showWarningMessage(`PyneIDE: ${message}.`);
+  }
 }
 
-/** "Run ..." / "Debug" / "Profile" CodeLenses on the first line of Pyne/Pine scripts. */
+/** "Run ..." / "Debug" / "Profile" / "Robustness" CodeLenses on the first line of Pyne/Pine scripts. */
 class RunCodeLensProvider implements vscode.CodeLensProvider {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeCodeLenses = this.changed.event;
@@ -1544,7 +1632,16 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
         arguments: [doc.uri],
       })
     );
-    // Appended last so Run, Debug and Profile keep their position while a run streams.
+    if (STRATEGY_DECLARATION_RE.test(doc.getText().slice(0, STRATEGY_HEAD_CHARS))) {
+      lenses.push(
+        new vscode.CodeLens(range, {
+          title: '$(beaker) Robustness',
+          command: 'pyneide.robustnessScript',
+          arguments: [doc.uri],
+        })
+      );
+    }
+    // Appended last so the other lenses keep their position while a run streams.
     // A .pine and its compiled .py fold onto one chart key, so the Stop lens
     // shows on whichever of the pair the user is looking at.
     if (this.stopTarget() === canonicalChartKey(doc.uri.fsPath)) {

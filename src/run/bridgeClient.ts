@@ -86,7 +86,97 @@ export interface StartEvent {
     viz?: string | null;
     /** Per-line profile (JSON), written when a profiled run completes. */
     profile?: string | null;
+    /** Robustness test results (JSON), written after the last bar of a tested run. */
+    robustness?: string | null;
   };
+}
+
+/** One percentile summary of a random distribution (p5..p95). */
+export interface Percentiles {
+  p5: number | null;
+  p25: number | null;
+  p50: number | null;
+  p75: number | null;
+  p95: number | null;
+}
+
+/** One Monte Carlo of a strategy's trade sequence: running totals or an account. */
+export interface MonteCarloRecord {
+  method: string;
+  draws: number;
+  seed: number;
+  trades: number;
+  compound: boolean;
+  initial_capital: number | null;
+  final: Percentiles;
+  max_drawdown: Percentiles;
+  share_losing: number | null;
+  ruin_level: number | null;
+  share_ruined: number | null;
+  target_level: number | null;
+  share_target: number | null;
+  /** The p5..p95 fan after every `trade`-th trade. */
+  bands: (Percentiles & { trade: number })[];
+}
+
+/** One coin-flip test: the real total against the random totals. */
+export interface CoinFlipRecord {
+  mode: 'direction' | 'timing';
+  method: string;
+  unit: string;
+  draws: number;
+  seed: number;
+  real: number | null;
+  trades: number;
+  distribution: Percentiles;
+  percentile: number | null;
+  share_better: number | null;
+  description: string;
+  verdict: string;
+  notes: string[];
+  /** Equal-width bins over the random totals and the real one. */
+  histogram: { edges: (number | null)[]; counts: number[] };
+  [key: string]: unknown;
+}
+
+/** One row of the robustness summary table (the `_robustness.csv` columns). */
+export type RobustnessRow = Record<string, string | number | null>;
+
+/** The statistics of one trade sample (the whole run, a cost level or a period). */
+export type SampleSummary = Record<string, number | string | null>;
+
+/**
+ * The robustness report of one strategy run, as PyneCore's
+ * `RobustnessReport.to_dict()` writes it, plus the summary `rows`, a histogram
+ * per coin flip and the CSV `files` written next to it.
+ */
+export interface RobustnessReport {
+  schema_version: number;
+  unit: 'r' | 'currency' | 'percent';
+  trades: number;
+  skipped: number;
+  summary: SampleSummary;
+  hit_rate: Record<string, number | null>;
+  bootstrap: Record<string, number | string | boolean | null>;
+  monte_carlo: MonteCarloRecord;
+  account: MonteCarloRecord | null;
+  account_sizing: string | null;
+  costs: { unit: string; break_even_bps: number | null; rows: (SampleSummary & { bps: number })[] };
+  periods: (SampleSummary & { period: string; label: string })[];
+  coinflips: CoinFlipRecord[];
+  rows: RobustnessRow[];
+  files: string[];
+  [key: string]: unknown;
+}
+
+/** The `robustness` event: the report, or why the run was not tested. */
+export interface RobustnessEvent {
+  e: 'robustness';
+  /** False when the installed PyneCore has no robustness tests. */
+  supported: boolean;
+  report: RobustnessReport | null;
+  message?: string;
+  file?: string;
 }
 
 /**
@@ -209,6 +299,8 @@ export type BridgeEvent =
   | { e: 'trades'; d: TradeRecord[] }
   | { e: 'openTrades'; d: TradeRecord[] }
   | { e: 'progress'; done: number; total: number }
+  | { e: 'robustnessProgress'; phase: string; done: number; total: number }
+  | RobustnessEvent
   | { e: 'state'; state: 'paused' | 'running' }
   | { e: 'stats'; d: Record<string, number | null> }
   | { e: 'log'; level: string; message: string }
@@ -245,6 +337,11 @@ export interface BridgeRunOptions {
   debugpyPort?: number;
   /** Profile the run per source line (`output/<stem>_profile.json`). */
   profile?: boolean;
+  /**
+   * Run the robustness tests after the last bar: the JSON settings object
+   * (`pyneide_bridge.robustness` reads its keys; an empty object takes the defaults).
+   */
+  robustness?: Record<string, unknown>;
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -280,6 +377,7 @@ export class BridgeRun {
     if (opts.batchSize) args.push('--batch-size', String(opts.batchSize));
     if (opts.debugpyPort !== undefined) args.push('--debugpy-port', String(opts.debugpyPort));
     if (opts.profile) args.push('--profile');
+    if (opts.robustness) args.push('--robustness', JSON.stringify(opts.robustness));
 
     const pythonPath = process.env.PYTHONPATH
       ? `${opts.bridgeRoot}${path.delimiter}${process.env.PYTHONPATH}`

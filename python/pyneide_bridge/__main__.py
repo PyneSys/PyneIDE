@@ -71,6 +71,10 @@ def main() -> int:
     parser.add_argument("--profile", action="store_true",
                         help="Profile the run per source line and write "
                              "output/<stem>_profile.json (pynecore's profiler)")
+    parser.add_argument("--robustness", default=None, metavar="JSON",
+                        help="Strategy runs: after the last bar, run the robustness tests "
+                             "(settings as a JSON object) and write "
+                             "output/<stem>_robustness.json")
     args = parser.parse_args()
 
     emitter = Emitter(proto_stream)
