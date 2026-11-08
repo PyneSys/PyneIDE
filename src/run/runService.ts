@@ -90,6 +90,8 @@ function robustnessSettings(scope: vscode.Uri): Record<string, unknown> {
     coinflip: cfg.get<string>('coinflip', 'direction'),
     coinflipRuns: cfg.get<number>('coinflipRuns', 200),
     exact: cfg.get<boolean>('exact', false),
+    earlyStop: cfg.get<string>('earlyStop', 'edge'),
+    jobs: cfg.get<number>('jobs', 0),
     costBps: cfg.get<number[]>('costBps', [0, 2, 5, 10]),
     riskPercent: cfg.get<number>('riskPercent', 1),
     ruinPercent: cfg.get<number>('ruinPercent', 50),

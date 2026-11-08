@@ -116,12 +116,18 @@ function headline(report: RobustnessReport): string {
         (typeof capped === 'number' ? `, ${num(capped)} trades capped by the leverage limit` : '')));
   }
   for (const flip of report.coinflips) {
+    if (flip.valid === false) {
+      parts.push(metric(`Coin flip (${flip.mode})`, 'not valid', null,
+        `only ${num(flip.trades, 0)} of ${num(flip.trades + (flip.unpaired ?? 0), 0)} trades paired`));
+      continue;
+    }
     parts.push(
       metric(
         `Coin flip (${flip.mode})`,
         `beats ${pct(flip.percentile, 0)}`,
         null,
-        `${pct(flip.share_better, 0)} of ${num(flip.draws)} random draws did better`
+        `${pct(flip.share_better, 0)} of ${num(flip.draws)} random draws did better` +
+          (flip.stop_reason ? ` (stopped early, of ${num(flip.planned)} planned)` : '')
       )
     );
   }

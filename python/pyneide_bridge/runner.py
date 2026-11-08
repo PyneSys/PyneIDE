@@ -722,8 +722,8 @@ def run(args: Any, emitter: Emitter, control: Control) -> int:
         if args.robustness is not None:
             session = _robustness_session(
                 args.robustness, emitter, runner, is_strategy, syminfo, output_dir, script,
-                lambda: _test_runner(ScriptRunner, script, syminfo, reader, runner_kwargs,
-                                     time_from_ts, time_to_ts, magnifier_mode))
+                _TestRunnerFactory(script, syminfo, data_path, runner_kwargs,
+                                   time_from_ts, time_to_ts, magnifier_mode))
         emitter.emit({
             "e": "start",
             "script": str(script),
@@ -896,20 +896,53 @@ def _robustness_session(config_text: str, emitter: Emitter, runner: Any, is_stra
         make_runner, output_dir, script.stem)
 
 
-def _test_runner(runner_class: Any, script: Path, syminfo: Any, reader: Any,
+class _TestRunnerFactory:
+    """Builds a fresh runner on the run's data that writes no output files, for the
+    robustness tests that run the strategy again.
+
+    The coin-flip tests send it to their worker processes: it holds only picklable
+    settings and opens the data itself, once per process."""
+
+    _OUTPUTS = ("plot_path", "strat_path", "trade_path", "viz_path", "profile_path",
+                "magnifier_iter")
+
+    def __init__(self, script: Path, syminfo: Any, data_path: Path,
                  runner_kwargs: dict[str, Any], time_from_ts: int, time_to_ts: int,
-                 magnifier_mode: bool) -> Any:
-    """A fresh runner on the run's data that writes no output files, for the
-    robustness tests that run the strategy again."""
-    kwargs = dict(runner_kwargs)
-    for key in ("plot_path", "strat_path", "trade_path", "viz_path", "profile_path"):
-        kwargs.pop(key, None)
-    if magnifier_mode:
-        kwargs["magnifier_iter"] = reader.read_from(time_from_ts, time_to_ts)
-        ohlcv_iter: Any = iter(())
-    else:
-        ohlcv_iter = reader.read_from(time_from_ts, time_to_ts)
-    return runner_class(script, ohlcv_iter, syminfo, **kwargs)
+                 magnifier_mode: bool):
+        self.script = script
+        self.syminfo = syminfo
+        self.data_path = data_path
+        self.kwargs = {k: v for k, v in runner_kwargs.items() if k not in self._OUTPUTS}
+        self.time_from_ts = time_from_ts
+        self.time_to_ts = time_to_ts
+        self.magnifier_mode = magnifier_mode
+        self._reader: Any = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state["_reader"] = None
+        return state
+
+    def close(self) -> None:
+        """Close the data opened by the runners of this process."""
+        if self._reader is not None:
+            self._reader.close()
+            self._reader = None
+
+    def __call__(self) -> Any:
+        from pynecore.core.ohlcv import OHLCVReader
+        from pynecore.core.script_runner import ScriptRunner
+
+        if self._reader is None:
+            self._reader = OHLCVReader(self.data_path).open()
+        bars = self._reader.read_from(self.time_from_ts, self.time_to_ts)
+        kwargs = dict(self.kwargs)
+        if self.magnifier_mode:
+            kwargs["magnifier_iter"] = bars
+            ohlcv_iter: Any = iter(())
+        else:
+            ohlcv_iter = bars
+        return ScriptRunner(self.script, ohlcv_iter, self.syminfo, **kwargs)
 
 
 def _stream_run(runner: Any, emitter: Emitter, control: Control, *,

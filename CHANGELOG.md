@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The coin-flip tests that run one backtest per draw (timing, and the exact
+  direction test) run several backtests at the same time and stop once their
+  verdict is clear. The new `pyneide.robustness.jobs` and
+  `pyneide.robustness.earlyStop` settings control them. Needs PyneCore 6.13.1
+  or newer.
+
+### Fixed
+
+- The direction coin-flip tile shows "not valid" when too few trades could be
+  paired for a verdict, instead of a misleading "beats 100%". Needs PyneCore
+  6.13.1 or newer to report it.
+
 ## [0.14.0] - 2026-11-08
 
 ### Added

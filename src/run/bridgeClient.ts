@@ -133,6 +133,14 @@ export interface CoinFlipRecord {
   distribution: Percentiles;
   percentile: number | null;
   share_better: number | null;
+  /** Real trades the paired direction test found no counterpart for. */
+  unpaired?: number;
+  /** False when too few trades paired for a verdict. */
+  valid?: boolean;
+  /** Backtests a test that runs one per draw would run without an early stop. */
+  planned?: number;
+  /** Why such a test stopped before `planned` backtests; null when it ran them all. */
+  stop_reason?: string | null;
   description: string;
   verdict: string;
   notes: string[];

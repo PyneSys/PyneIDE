@@ -1307,6 +1307,31 @@
             "order": 5,
             "markdownDescription": "Run the direction coin flip as one backtest per draw instead of pairing every trade with its mirrored twin. Slower, but it also follows strategies whose later decisions depend on the open position."
           },
+          "pyneide.robustness.earlyStop": {
+            "type": "string",
+            "default": "edge",
+            "enum": [
+              "edge",
+              "better",
+              "off"
+            ],
+            "enumDescriptions": [
+              "Stop once it is clear whether the real rules beat 95% of the random draws.",
+              "Stop once it is clear whether the real rules beat half of the random draws.",
+              "Run every backtest."
+            ],
+            "scope": "resource",
+            "order": 6,
+            "markdownDescription": "When the coin-flip tests that run one backtest per draw may stop before `#pyneide.robustness.coinflipRuns#` backtests. Needs PyneCore 6.13.1 or newer."
+          },
+          "pyneide.robustness.jobs": {
+            "type": "integer",
+            "default": 0,
+            "minimum": 0,
+            "scope": "resource",
+            "order": 7,
+            "markdownDescription": "Backtests the coin-flip tests run at the same time, each in its own process. `0` uses the CPU count minus one. Needs PyneCore 6.13.1 or newer."
+          },
           "pyneide.robustness.costBps": {
             "type": "array",
             "items": {
@@ -1320,7 +1345,7 @@
               10
             ],
             "scope": "resource",
-            "order": 6,
+            "order": 8,
             "markdownDescription": "Extra costs per side, in basis points of the traded value, for the cost-sensitivity table."
           },
           "pyneide.robustness.riskPercent": {
@@ -1328,7 +1353,7 @@
             "default": 1,
             "exclusiveMinimum": 0,
             "scope": "resource",
-            "order": 7,
+            "order": 9,
             "markdownDescription": "Account Monte Carlo of results in R: the percent of the account risked per trade (1 R)."
           },
           "pyneide.robustness.ruinPercent": {
@@ -1337,7 +1362,7 @@
             "exclusiveMinimum": 0,
             "maximum": 100,
             "scope": "resource",
-            "order": 8,
+            "order": 10,
             "markdownDescription": "Account Monte Carlo: a path counts as ruined once the account has lost this percent of its starting value (`50`: ruined at half the starting account)."
           },
           "pyneide.robustness.maxLeverage": {
@@ -1348,7 +1373,7 @@
             "default": null,
             "exclusiveMinimum": 0,
             "scope": "resource",
-            "order": 9,
+            "order": 11,
             "markdownDescription": "Account Monte Carlo of results in R: the largest position as a multiple of the account (`1` = no leverage). A trade whose stop is too close to risk `#pyneide.robustness.riskPercent#` within this limit risks less. Empty: no limit."
           },
           "pyneide.robustness.targetMultiple": {
@@ -1358,7 +1383,7 @@
             ],
             "default": null,
             "scope": "resource",
-            "order": 10,
+            "order": 12,
             "markdownDescription": "Account Monte Carlo: count the paths that reach this multiple of the starting account (for example `2`). Empty: no target."
           }
         }

@@ -14,8 +14,10 @@ event. A PyneCore without the analysis package gets a ``robustness`` event with
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -29,6 +31,7 @@ _METHODS = ("bootstrap", "shuffle")
 _BLOCKS = ("week", "month", "trade")
 _PERIODS = ("year", "month", "weekday")
 _COINFLIPS = ("direction", "timing", "both", "none")
+_EARLY_STOPS = ("edge", "better", "off")
 
 
 class RobustnessCancelled(Exception):
@@ -64,8 +67,9 @@ def _number(value: Any, default: float | None) -> float | None:
     return float(value) if math.isfinite(float(value)) else default
 
 
-def _config(raw: dict[str, Any]) -> tuple[Any, tuple[str, ...], int, bool]:
-    """The PyneCore test settings and the coin-flip modes, runs and exactness."""
+def _config(raw: dict[str, Any]) -> tuple[Any, tuple[str, ...], int, bool, dict[str, Any]]:
+    """The PyneCore test settings, the coin-flip modes, runs and exactness, and the
+    coin-flip options only a newer PyneCore takes."""
     from pynecore.analysis import RobustnessConfig
     from pynecore.analysis.costs import DEFAULT_COST_BPS
 
@@ -93,7 +97,15 @@ def _config(raw: dict[str, Any]) -> tuple[Any, tuple[str, ...], int, bool]:
     mode = _choice(raw.get("coinflip"), _COINFLIPS, "direction")
     modes = ("direction", "timing") if mode == "both" else () if mode == "none" else (mode,)
     runs = max(10, int(_number(raw.get("coinflipRuns"), 200) or 200))
-    return config, modes, runs, bool(raw.get("exact"))
+    extra: dict[str, Any] = {}
+    from pynecore.analysis.coinflip import coinflip_test
+    parameters = inspect.signature(coinflip_test).parameters
+    if "jobs" in parameters:
+        jobs = int(_number(raw.get("jobs"), 0) or 0)
+        extra["jobs"] = jobs if jobs > 0 else max(1, (os.cpu_count() or 2) - 1)
+    if "early_stop" in parameters:
+        extra["early_stop"] = _choice(raw.get("earlyStop"), _EARLY_STOPS, "edge")
+    return config, modes, runs, bool(raw.get("exact")), extra
 
 
 def _histogram(totals: list[float], real: float) -> dict[str, Any]:
@@ -154,26 +166,31 @@ class RobustnessSession:
                           "message": "the run closed no trades: there is nothing to test"})
             return
 
-        config, modes, runs, exact = _config(self._raw)
+        config, modes, runs, exact, extra = _config(self._raw)
         emitter.emit({"e": "robustnessProgress", "phase": "tests", "done": 0, "total": 1})
         report = analyze(trades, config)
         emitter.emit({"e": "robustnessProgress", "phase": "tests", "done": 1, "total": 1})
 
-        for mode in modes:
-            phase = f"coin flip ({mode})"
+        try:
+            for mode in modes:
+                phase = f"coin flip ({mode})"
 
-            def on_progress(done: int, total: int, phase: str = phase) -> None:
-                emitter.emit({"e": "robustnessProgress", "phase": phase,
-                              "done": done, "total": total})
+                def on_progress(done: int, total: int, phase: str = phase) -> None:
+                    emitter.emit({"e": "robustnessProgress", "phase": phase,
+                                  "done": done, "total": total})
+                    if control.cancelled:
+                        raise RobustnessCancelled()
+
                 if control.cancelled:
                     raise RobustnessCancelled()
-
-            if control.cancelled:
-                raise RobustnessCancelled()
-            report.coinflips.append(coinflip_test(
-                mode, self._make_runner, self._syminfo, trades, report.unit,
-                seed=config.seed, draws=config.draws, exact=exact, runs=runs,
-                on_progress=on_progress))
+                report.coinflips.append(coinflip_test(
+                    mode, self._make_runner, self._syminfo, trades, report.unit,
+                    seed=config.seed, draws=config.draws, exact=exact, runs=runs,
+                    on_progress=on_progress, **extra))
+        finally:
+            close = getattr(self._make_runner, "close", None)
+            if close is not None:
+                close()
 
         written = report.write_csv(self._output_dir, self._stem)
         payload = _jsonable(report.to_dict())
