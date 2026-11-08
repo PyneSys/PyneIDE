@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Robustness tests** for strategies: the Robustness lens and the Run Robustness
+  Tests commands run the strategy, then PyneCore's robustness tests on its closed
+  trades. A Robustness tab on the chart shows the headline numbers, the coin-flip
+  histograms, the Monte Carlo fans and the summary, cost and period tables. The
+  results are also written as CSV files and reload with the chart. Settings under
+  `pyneide.robustness.*`; needs PyneCore 6.12.2 or newer.
+
+### Fixed
+
+- A run whose script plots nothing reopens from disk with its candles.
+
 ## [0.13.2] - 2026-11-07
 
 ### Added

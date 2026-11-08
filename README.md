@@ -178,6 +178,30 @@ and the same measurement runs from the command line as `pyne run --profile`.
 
 *One click on the flame: the WMA line inside the helper costs 39% of the script, and both calls to the helper carry it.*
 
+## Test whether a backtest is luck
+
+A good backtest can still be luck: a few lucky trades, a friendly order of wins and
+losses, costs it never paid, or rules that do no better than random decisions on the
+same trades. Press **Robustness** (a lens on strategies, next to Run, Debug and Profile)
+and the strategy runs as usual; after the last bar PyneCore's robustness tests run on
+its closed trades, and the chart switches to a **Robustness** tab:
+
+- the trades in R (profit divided by the risk to the initial stop), with the hit rate's
+  confidence interval and a bootstrap interval of the mean trade;
+- a Monte Carlo of the trade sequence, as a running total and as a compounding account,
+  with the share of ruined paths;
+- the extra trading cost per side that brings the result to zero, and the result by year;
+- coin-flip tests: the real result against the same entries with a coin choosing long or
+  short, and against the same trades entered at random moments. Both run the strategy
+  again in the same engine, so the random trades fill by the same rules.
+
+Every number is seeded, so a run repeats exactly. The settings are under
+`pyneide.robustness.*`: draws, seed, which coin-flip test runs, the extra cost
+scenarios, the risk per trade, a leverage limit, and the ruin and target levels of the
+account. The results also go to CSV files next to the run's other outputs, and the tab
+comes back when the chart is reopened. The tests need PyneCore 6.12.2 or newer; the
+same tests run from the command line as `pyne robustness`.
+
 ## Pyne code, done right
 
 **Pyne** is Pine written as ordinary Python — `@pyne` `.py` files that run on
