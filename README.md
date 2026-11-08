@@ -199,7 +199,7 @@ Every number is seeded, so a run repeats exactly. The settings are under
 `pyneide.robustness.*`: draws, seed, which coin-flip test runs, the extra cost
 scenarios, the risk per trade, a leverage limit, and the ruin and target levels of the
 account. The results also go to CSV files next to the run's other outputs, and the tab
-comes back when the chart is reopened. The tests need PyneCore 6.12.2 or newer; the
+comes back when the chart is reopened. The tests need PyneCore 6.13.0 or newer; the
 same tests run from the command line as `pyne robustness`.
 
 ## Pyne code, done right

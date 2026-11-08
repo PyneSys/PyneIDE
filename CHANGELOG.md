@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trades. A Robustness tab on the chart shows the headline numbers, the coin-flip
   histograms, the Monte Carlo fans and the summary, cost and period tables. The
   results are also written as CSV files and reload with the chart. Settings under
-  `pyneide.robustness.*`; needs PyneCore 6.12.2 or newer.
+  `pyneide.robustness.*`; needs PyneCore 6.13.0 or newer.
 
 ### Fixed
 
