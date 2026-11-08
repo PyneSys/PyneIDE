@@ -1340,6 +1340,17 @@
             "order": 8,
             "markdownDescription": "Account Monte Carlo: a path counts as ruined once the account has lost this percent of its starting value (`50`: ruined at half the starting account)."
           },
+          "pyneide.robustness.maxLeverage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "default": null,
+            "exclusiveMinimum": 0,
+            "scope": "resource",
+            "order": 9,
+            "markdownDescription": "Account Monte Carlo of results in R: the largest position as a multiple of the account (`1` = no leverage). A trade whose stop is too close to risk `#pyneide.robustness.riskPercent#` within this limit risks less. Empty: no limit."
+          },
           "pyneide.robustness.targetMultiple": {
             "type": [
               "number",
@@ -1347,7 +1358,7 @@
             ],
             "default": null,
             "scope": "resource",
-            "order": 9,
+            "order": 10,
             "markdownDescription": "Account Monte Carlo: count the paths that reach this multiple of the starting account (for example `2`). Empty: no target."
           }
         }

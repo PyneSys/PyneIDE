@@ -161,6 +161,8 @@ export interface RobustnessReport {
   monte_carlo: MonteCarloRecord;
   account: MonteCarloRecord | null;
   account_sizing: string | null;
+  /** Trades the leverage limit made risk less, null without a limit. */
+  account_capped?: number | null;
   costs: { unit: string; break_even_bps: number | null; rows: (SampleSummary & { bps: number })[] };
   periods: (SampleSummary & { period: string; label: string })[];
   coinflips: CoinFlipRecord[];

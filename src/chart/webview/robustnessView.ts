@@ -78,7 +78,7 @@ function headline(report: RobustnessReport): string {
   const unit = UNIT_LABELS[report.unit] ?? report.unit;
   const total = numberOf(report.summary, 'total');
   const parts = [
-    metric('Total', withUnit(num(total), unit), total, `${num(report.trades)} trades`),
+    metric('Total', withUnit(num(total), unit), total, `${num(report.trades)} closed trades`),
   ];
   const hit = report.hit_rate;
   parts.push(
@@ -110,8 +110,10 @@ function headline(report: RobustnessReport): string {
     )
   );
   if (report.account?.share_ruined !== null && report.account?.share_ruined !== undefined) {
+    const capped = report.account_capped;
     parts.push(metric('Ruined paths', pct(report.account.share_ruined), null,
-      `account at or below ${num(report.account.ruin_level, 0)}`));
+      `account at or below ${num(report.account.ruin_level, 0)}` +
+        (typeof capped === 'number' ? `, ${num(capped)} trades capped by the leverage limit` : '')));
   }
   for (const flip of report.coinflips) {
     parts.push(
@@ -208,10 +210,10 @@ export function renderRobustness(report: RobustnessReport | undefined): string {
   const unit = UNIT_LABELS[report.unit] ?? report.unit;
   const charts = [
     ...report.coinflips.map((flip, i) =>
-      chartBox(`rb-coinflip-${i}`, `Coin flip (${flip.mode}): random totals vs the real one`)
+      chartBox(`rb-coinflip-${i}`, `Coin flip (${flip.mode}): random vs real`)
     ),
-    chartBox('rb-montecarlo', `Monte Carlo: running total${unit ? ` (${unit})` : ''}, P5–P95`),
-    ...(report.account ? [chartBox('rb-account', 'Account Monte Carlo: equity, P5–P95')] : []),
+    chartBox('rb-montecarlo', `Monte Carlo total${unit ? ` (${unit})` : ''}, P5–P95`),
+    ...(report.account ? [chartBox('rb-account', 'Account equity, P5–P95')] : []),
   ];
   const notes = report.coinflips
     .flatMap((flip) => flip.notes.map((note) => `Coin flip (${flip.mode}): ${note}`))

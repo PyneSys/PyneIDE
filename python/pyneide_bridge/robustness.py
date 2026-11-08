@@ -88,6 +88,7 @@ def _config(raw: dict[str, Any]) -> tuple[Any, tuple[str, ...], int, bool]:
         risk_fraction=(_number(raw.get("riskPercent"), 1.0) or 1.0) / 100.0,
         ruin_fraction=(_number(raw.get("ruinPercent"), 50.0) or 50.0) / 100.0,
         target_multiple=_number(raw.get("targetMultiple"), None),
+        max_leverage=_number(raw.get("maxLeverage"), None) or None,
     )
     mode = _choice(raw.get("coinflip"), _COINFLIPS, "direction")
     modes = ("direction", "timing") if mode == "both" else () if mode == "none" else (mode,)

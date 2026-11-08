@@ -55,7 +55,9 @@ def main():
     plot(close, "close")
 `;
 
-const SETTINGS = { draws: 500, seed: 7, coinflip: 'both', coinflipRuns: 10, targetMultiple: 2 };
+const SETTINGS = {
+  draws: 500, seed: 7, coinflip: 'both', coinflipRuns: 10, targetMultiple: 2, maxLeverage: 1,
+};
 
 /** 0: the robustness tests are installed; 3: this pynecore has none. */
 const CAPABILITY_PROBE = `
@@ -150,6 +152,7 @@ function assertReport(workdir: string, events: BridgeEvent[]): string {
   assert.equal(report.coinflips[1].draws, SETTINGS.coinflipRuns);
   assert.ok(report.monte_carlo.bands.length > 1, 'no Monte Carlo fan');
   assert.ok(report.account?.target_level, 'the target multiple must reach the account Monte Carlo');
+  assert.equal(typeof report.account_capped, 'number', 'the leverage limit must reach the account Monte Carlo');
 
   assert.ok(fs.existsSync(file), 'no report file');
   for (const suffix of ['robustness', 'montecarlo', 'costs', 'periods', 'coinflip_direction', 'coinflip_timing']) {

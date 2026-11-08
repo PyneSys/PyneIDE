@@ -96,6 +96,8 @@ function robustnessSettings(scope: vscode.Uri): Record<string, unknown> {
   };
   const target = cfg.get<number | null>('targetMultiple', null);
   if (typeof target === 'number' && target > 0) settings.targetMultiple = target;
+  const leverage = cfg.get<number | null>('maxLeverage', null);
+  if (typeof leverage === 'number' && leverage > 0) settings.maxLeverage = leverage;
   return settings;
 }
 

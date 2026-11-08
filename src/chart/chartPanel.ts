@@ -871,6 +871,10 @@ export class ChartPanel {
   }
   #equity-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
   .rb-view { box-sizing: border-box; padding: 8px 10px 10px; }
+  .rb-view .performance-summary { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .rb-view .performance-metric span, .rb-view .performance-metric small {
+    white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+  }
   .rb-charts {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
     gap: 8px; margin: 4px 0 8px;
