@@ -14,6 +14,7 @@
  * dormant chart, once neither the script nor a run/debug references it.
  */
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 
 import * as vscode from 'vscode';
 
@@ -30,6 +31,7 @@ import type {
 import type { RunListener } from '../run/runService';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
+import { parseLabelLink } from './labelLinks';
 import { toColorSchemeId, type ColorSchemeId } from './colorScheme';
 import { toPriceScaleId, type PriceScaleId } from './priceScale';
 import type { ChartDebugPosition, ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from './messages';
@@ -363,6 +365,9 @@ export class ChartPanel {
         this.breakpointSelectionLabel = undefined;
         this.onCancelBreakpointSelection?.();
         break;
+      case 'openLabelLink':
+        if (typeof msg.target === 'string') void this.openLabelLink(msg.target);
+        break;
       case 'copyText':
         if (typeof msg.text === 'string') {
           void vscode.env.clipboard.writeText(msg.text).then(() =>
@@ -370,6 +375,27 @@ export class ChartPanel {
           );
         }
         break;
+    }
+  }
+
+  private async openLabelLink(raw: string): Promise<void> {
+    const link = parseLabelLink(raw);
+    if (!link) return;
+    const workdir = this.snap?.start.workdir;
+    try {
+      if (link.kind === 'web') {
+        await vscode.env.openExternal(vscode.Uri.parse(link.url.href, true));
+        return;
+      }
+      const file = link.kind === 'file' ? fileURLToPath(link.url) :
+        workdir ? path.resolve(workdir, link.path) : undefined;
+      if (!file) return;
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      const line = link.line === undefined ? undefined : Math.min(link.line, document.lineCount) - 1;
+      const selection = line === undefined ? undefined : new vscode.Range(line, 0, line, 0);
+      await vscode.window.showTextDocument(document, { selection });
+    } catch {
+      void vscode.window.showWarningMessage(`PyneIDE: Could not open label link ${raw}.`);
     }
   }
 
@@ -627,6 +653,15 @@ export class ChartPanel {
   #script-legend[hidden] { display: none; }
   #chart-row { flex: 1; min-height: 0; display: flex; }
   #chart-area { flex: 1; min-width: 0; min-height: 0; position: relative; }
+  #label-tooltip {
+    position: absolute; z-index: 10; box-sizing: border-box;
+    width: max-content; max-width: min(360px, calc(100% - 8px)); max-height: 45%;
+    overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere;
+    padding: 6px 8px; border: 1px solid var(--vscode-editorHoverWidget-border, #555);
+    border-radius: 4px; background: var(--vscode-editorHoverWidget-background, #252526);
+    color: var(--vscode-editorHoverWidget-foreground, #ddd); user-select: text;
+  }
+  #label-tooltip a { color: var(--vscode-textLink-foreground, #4daafc); text-decoration: underline; }
   /* Data Window: every value of one bar, docked right of the chart. */
   #data-window {
     flex: 0 0 auto; width: 232px; max-width: 45%; min-width: 0;

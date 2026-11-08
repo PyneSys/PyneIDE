@@ -629,7 +629,15 @@ const LABEL_GLYPHS: Record<string, string> = {
 
 const LABEL_BG_DEFAULT = '#2962FFFF';
 
-function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
+export interface LabelHit {
+  label: LabelState;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState, hits?: LabelHit[]): void {
   const i = xres.toIndex(la.x, la.xloc);
   if (i === null) return;
   const x = env.xAxis.convertToPixel(i);
@@ -654,6 +662,21 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
   const px = sizePx(la.size, 14);
   const text = la.text ?? '';
   const lines = text ? text.split('\n') : [];
+  const tooltipHits = typeof la.tooltip === 'string' && la.tooltip.trim() ? hits : undefined;
+
+  function hit(x: number, y: number, width: number, height: number): void {
+    if (tooltipHits && x + width > 0 && x < env.bounding.width &&
+        y + height > 0 && y < env.bounding.height) {
+      tooltipHits.push({ label: la, x, y, width, height });
+    }
+  }
+
+  function hitText(text: string, tx: number, ty: number, height: number): void {
+    if (!tooltipHits || !text.trim()) return;
+    const width = ctx.measureText(text).width;
+    const left = ctx.textAlign === 'left' ? tx : ctx.textAlign === 'right' ? tx - width : tx - width / 2;
+    hit(left, ty - height / 2, width, height);
+  }
 
   const glyph = LABEL_GLYPHS[style];
   if (glyph !== undefined) {
@@ -664,7 +687,9 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
     ctx.textBaseline = 'middle';
     ctx.fillStyle = color;
     const dir = yloc === 'belowbar' ? 1 : -1;
-    ctx.fillText(glyph, x, y + dir * (px / 2));
+    const gy = y + dir * (px / 2);
+    ctx.fillText(glyph, x, gy);
+    hitText(glyph, x, gy, px);
     if (lines.length) {
       const tpx = Math.max(9, px - 3);
       ctx.font = `${textStyle(la.text_formatting)}${tpx}px sans-serif`;
@@ -672,6 +697,7 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
       let ty = y + dir * (px + tpx / 2 + 2);
       for (const line of dir === 1 ? lines : [...lines].reverse()) {
         ctx.fillText(line, x, ty);
+        hitText(line, x, ty, tpx);
         ty += dir * tpx * 1.25;
       }
     }
@@ -692,6 +718,7 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
       }
       ctx.fillStyle = la.textcolor ?? la.color ?? LABEL_BG_DEFAULT;
       ctx.fillText(line, x, ty);
+      hitText(line, x, ty, px);
       ty += px * 1.25;
     }
     ctx.textAlign = 'center';
@@ -739,7 +766,15 @@ function drawLabel(env: MarkerDrawEnv, xres: XResolver, la: LabelState): void {
   ctx.beginPath();
   ctx.roundRect(bx, by, w, h, r);
   ctx.fill();
+  hit(bx, by, w, h);
   if (pointer !== 'none') {
+    const vertical = pointer === 'up' || pointer === 'down';
+    hit(
+      x - (pointer === 'left' ? 0 : tip),
+      y - (pointer === 'up' ? 0 : tip),
+      vertical ? tip * 2 : tip,
+      vertical ? tip : tip * 2
+    );
     ctx.beginPath();
     ctx.moveTo(x, y);
     switch (pointer) {
@@ -796,7 +831,8 @@ export function drawDrawings(
   env: MarkerDrawEnv,
   store: DrawingStore,
   xres: XResolver,
-  scriptOverlay: boolean
+  scriptOverlay: boolean,
+  labelHits?: LabelHit[]
 ): void {
   const mine = (fo: boolean | undefined): boolean =>
     ((fo ?? false) || scriptOverlay) === env.overlay;
@@ -820,7 +856,7 @@ export function drawDrawings(
     for (const p of store.polylines.values()) if (mine(p.force_overlay)) drawPolyline(env, xres, p);
   }
   if (!store.hidden.has('label')) {
-    for (const la of store.labels.values()) if (mine(la.force_overlay)) drawLabel(env, xres, la);
+    for (const la of store.labels.values()) if (mine(la.force_overlay)) drawLabel(env, xres, la, labelHits);
   }
   ctx.restore();
 }

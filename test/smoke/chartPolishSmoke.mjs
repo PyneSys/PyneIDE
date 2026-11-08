@@ -5,10 +5,11 @@ import esbuild from 'esbuild';
 const built = await esbuild.build({ stdin: { resolveDir: process.cwd(), loader: 'ts', contents: `
   export { defaultBroker } from './src/data/brokerDefaults';
   export { DrawingStore, drawDrawings } from './src/chart/webview/drawings';
+  export { labelLinkSpans, parseLabelLink } from './src/chart/labelLinks';
 ` }, bundle: true, platform: 'node', format: 'cjs', write: false });
 const module = { exports: {} };
 new Function('module', 'exports', built.outputFiles[0].text)(module, module.exports);
-const { defaultBroker, DrawingStore, drawDrawings } = module.exports;
+const { defaultBroker, DrawingStore, drawDrawings, labelLinkSpans, parseLabelLink } = module.exports;
 const brokers = [{ id: 'alpaca' }, { id: 'kraken' }, { id: 'bybit' }];
 assert.equal(defaultBroker('ccxt', brokers), 'kraken');
 assert.equal(defaultBroker('ccxt', brokers, 'bybit'), 'bybit');
@@ -54,4 +55,27 @@ store.apply([
 drawDrawings(env, store, xres, false);
 assert.deepEqual(fonts, [['both', 'italic bold 14px sans-serif'], ['plain', '14px sans-serif']],
   'text_formatting must style the label font');
-console.log('CHART POLISH SMOKE OK: initial/saved brokers, reversible labels, hidden updates, pane routing, text styles');
+
+const tooltip = 'Docs (https://example.com/guide#L12)\nfile:///tmp/a%20b.py#L7, scripts/demo.pine#L12\n<script>command:quit</script>';
+const links = [...labelLinkSpans(tooltip)];
+assert.deepEqual(links.map(({ start, target }) => tooltip.slice(start, start + target.length)),
+  ['https://example.com/guide#L12', 'file:///tmp/a%20b.py#L7', 'scripts/demo.pine#L12']);
+assert.deepEqual(parseLabelLink('./notes%20here.md#L12'),
+  { kind: 'relative', path: './notes here.md', line: 12 });
+for (const target of ['command:quit', 'javascript:alert(1)', '%2Ftmp/private.txt', 'demo.pine#L0']) {
+  assert.equal(parseLabelLink(target), undefined, target);
+}
+
+store.apply([{ i: 3, op: 'update', obj: 'label', id: 1, s: {
+  id: 1, x: 50, y: 40, style: 'none', text: 'wide', textalign: 'right', tooltip, force_overlay: true,
+} }]);
+ctx.measureText = () => ({ width: 30 });
+const hits = [];
+drawDrawings(env, store, xres, false, hits);
+assert.deepEqual(hits.map(({ label, x, y, width, height }) => [label.id, x, y, width, height]),
+  [[1, 20, 33, 30, 14]], 'only the tooltip-enabled label is hit-testable, using its text alignment');
+hidden.add('label');
+hits.length = 0;
+drawDrawings(env, store, xres, false, hits);
+assert.deepEqual(hits, [], 'hidden labels have no tooltip hit regions');
+console.log('CHART POLISH SMOKE OK: brokers, reversible drawings, pane routing, text styles and label tooltips');

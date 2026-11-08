@@ -66,6 +66,8 @@ export interface TradeRecord {
 export interface StartEvent {
   e: 'start';
   script: string;
+  /** Resolved Pyne workdir for chart links. */
+  workdir?: string;
   scriptTitle?: string;
   scriptShortTitle?: string;
   scriptType: 'indicator' | 'strategy' | 'library';
@@ -418,7 +420,7 @@ export class BridgeRun {
           opts.onLog?.(`[bridge] unparseable event: ${line.slice(0, 200)}`);
           continue;
         }
-        opts.onEvent(event);
+        opts.onEvent(event.e === 'start' ? { ...event, workdir: opts.workdir } : event);
       }
     });
 

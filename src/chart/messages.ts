@@ -65,5 +65,6 @@ export type ChartOutMessage =
   | { type: 'selectBreakpointBar'; timestamp: number }
   | { type: 'removeBreakpointBar'; timestamp: number }
   | { type: 'cancelBreakpointSelection' }
+  | { type: 'openLabelLink'; target: string }
   /** Data Window row click: the host owns the clipboard. */
   | { type: 'copyText'; text: string };

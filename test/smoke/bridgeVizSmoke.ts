@@ -164,6 +164,7 @@ async function runBridge(pythonBin: string, workdir: string, script: string): Pr
     onLog: (line) => log(`[bridge] ${line}`),
   });
   const exitCode = await run.exited;
+  assert.equal(events.find((event) => event.e === 'start')?.workdir, workdir);
   return { events, exitCode };
 }
 
@@ -335,6 +336,7 @@ function assertNativeVizFile(workdir: string, stem: string): void {
   if (preview.warnings.length) fail(`output preview warnings: ${preview.warnings.join('; ')}`);
   const start = preview.events[0];
   if (start.e !== 'start' || start.data !== dataPath) fail('preview source data path missing');
+  assert.equal(start.workdir, workdir);
   assert.equal(start.scriptTitle, 'Viz Styles Demo');
   assert.equal(start.scriptShortTitle, 'VSD');
   if (!preview.events.some((event) => event.e === 'plotMeta')) fail('preview plot metadata missing');

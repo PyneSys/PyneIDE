@@ -78,9 +78,11 @@ import {
   hasTextStyle,
   makeXResolver,
   sizePx,
+  type LabelHit,
   type TableCellState,
   type TableState,
 } from './drawings';
+import { LabelTooltip } from './labelTooltip';
 import {
   buildFigure,
   buildHlineFigure,
@@ -460,6 +462,17 @@ let priceScaleId: PriceScaleId = DEFAULT_PRICE_SCALE;
 let colorSchemeId: ColorSchemeId = DEFAULT_COLOR_SCHEME;
 
 const container = document.getElementById('chart') as HTMLDivElement;
+const labelTooltip = container.parentElement && new LabelTooltip(
+  container.parentElement,
+  container,
+  (pane) => {
+    if (!isFrozen() && !breakpointSelectionLabel && !measureDrawing) {
+      return state?.chart.getDom(pane, 'main')?.getBoundingClientRect();
+    }
+    return undefined;
+  },
+  (target) => vscode.postMessage({ type: 'openLabelLink', target })
+);
 const scriptLegendEl = document.getElementById('script-legend');
 
 function syncScriptLegend(start: StartEvent): void {
@@ -933,6 +946,7 @@ function unfreezeAfterPaint(): void {
 }
 
 function startRun(start: StartEvent): void {
+  labelTooltip?.reset();
   closeTradeDetails();
   syncScriptLegend(start);
   selectedTradeIndex = undefined;
@@ -1641,7 +1655,9 @@ function ensureDrawingIndicators(st: RunState): void {
     figures: [],
     calc: () => [],
     draw: (params: IndicatorDrawParams) => {
-      drawDrawings(drawEnv(st, params, overlay), st.drawings, xres, st.start.overlay);
+      const hits: LabelHit[] = [];
+      drawDrawings(drawEnv(st, params, overlay), st.drawings, xres, st.start.overlay, hits);
+      if (state === st) labelTooltip?.update(overlay ? 'candle_pane' : PLOTS_PANE_ID, hits);
       return false;
     },
   });
@@ -1653,6 +1669,7 @@ function ensureDrawingIndicators(st: RunState): void {
   } else if (!wantOverlay && st.overlayDrawIndicatorId) {
     st.chart.removeIndicator({ id: st.overlayDrawIndicatorId });
     st.overlayDrawIndicatorId = undefined;
+    labelTooltip?.update('candle_pane', []);
   }
   if (wantPane && !st.paneDrawIndicatorId) {
     registerIndicator(makeDef('PyneDrawPane', false) as never);
@@ -1662,6 +1679,7 @@ function ensureDrawingIndicators(st: RunState): void {
   } else if (!wantPane && st.paneDrawIndicatorId) {
     st.chart.removeIndicator({ id: st.paneDrawIndicatorId });
     st.paneDrawIndicatorId = undefined;
+    labelTooltip?.update(PLOTS_PANE_ID, []);
   }
 }
 
@@ -3527,6 +3545,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       break;
     case 'breakpointSelection':
       breakpointSelectionLabel = msg.label;
+      if (msg.label) labelTooltip?.dismiss();
       breakpointPointerGesture = undefined;
       syncBreakpointSelectionUi();
       break;
