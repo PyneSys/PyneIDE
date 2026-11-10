@@ -8,6 +8,7 @@ import {
   PYNECORE_MIN_VERSION,
   PYNECORE_VERSION,
   PYTHON_VERSION,
+  TYPER_REQUIREMENT,
   type Logger,
 } from './constants';
 import { execChecked, execProcess } from './exec';
@@ -24,6 +25,7 @@ export interface EnvMarker {
   python: string;
   pynecore: string;
   debugpy: string;
+  typerRequirement?: string;
   /** Empty means automatically follow stable Core releases. */
   selection?: string;
   checkedAt?: number;
@@ -150,6 +152,7 @@ export function currentMarker(): EnvMarker {
     python: PYTHON_VERSION,
     pynecore: PYNECORE_VERSION,
     debugpy: DEBUGPY_VERSION,
+    typerRequirement: TYPER_REQUIREMENT,
   };
 }
 
@@ -162,7 +165,8 @@ export function markerUpToDate(storageDir: string, selection = PYNECORE_VERSION)
     marker.python === want.python &&
     (selection ? marker.pynecore === selection : compareVersions(marker.pynecore, PYNECORE_MIN_VERSION) >= 0) &&
     (marker.selection ?? marker.pynecore) === selection &&
-    marker.debugpy === want.debugpy
+    marker.debugpy === want.debugpy &&
+    marker.typerRequirement === want.typerRequirement
   );
 }
 
@@ -315,6 +319,7 @@ async function runBootstrap(
   const packages = [
     `pynesys-pynecore[all]${selection ? `==${selection}` : `>=${PYNECORE_MIN_VERSION}`}`,
     `debugpy==${DEBUGPY_VERSION}`,
+    TYPER_REQUIREMENT,
   ];
 
   log(`Installing: ${packages.join(', ')}`);

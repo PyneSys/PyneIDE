@@ -1,5 +1,5 @@
 /** Install project plugins while preserving the selected Core release. */
-import type { Logger } from './constants';
+import { TYPER_REQUIREMENT, type Logger } from './constants';
 import { execChecked } from './exec';
 import { ensureUv, uvEnv } from './uv';
 
@@ -30,7 +30,9 @@ async function runUvPip(op: PackageOperation, action: 'install' | 'uninstall'): 
   await execChecked(
     uvBin,
     ['pip', action, '--python', op.pythonBin, ...op.packages,
-      ...(action === 'install' && op.pynecoreVersion ? [`pynesys-pynecore==${op.pynecoreVersion}`] : [])],
+      ...(action === 'install' && op.pynecoreVersion
+        ? [`pynesys-pynecore==${op.pynecoreVersion}`, TYPER_REQUIREMENT]
+        : [])],
     op.log,
     { env, timeoutMs: 600000 }
   );

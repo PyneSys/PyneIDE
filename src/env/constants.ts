@@ -4,6 +4,8 @@ export const PYTHON_VERSION = '3.14';
 /** Core release installed when no project selection is given. */
 export const PYNECORE_VERSION = '6.12.1';
 export const DEBUGPY_VERSION = '1.8.21';
+/** Current Core releases import TyperChoice from typer._types, removed in Typer 0.29. */
+export const TYPER_REQUIREMENT = 'typer<0.29';
 
 /**
  * Oldest supported Core release. From 6.12.1 the Core ships its own docs

@@ -718,6 +718,7 @@ async function managedUpgradeSmoke(pythonBin: string, storageDir: string): Promi
     await execChecked(upgradePython, ['-c',
       'from importlib import metadata; import extra_plugin; ' +
       'assert extra_plugin.installed; assert metadata.version("pyneide-smoke-plugin") == "1.0.0"'], log);
+    await execChecked(pyneBinPath(upgradePython), ['--help'], log, { timeoutMs: 60000 });
     log(`Managed upgrade ${previousPin} -> ${PYNECORE_VERSION} preserved the venv and extra plugin`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
