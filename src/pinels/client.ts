@@ -58,7 +58,9 @@ export class PineLsClient {
           next(
             uri,
             diagnostics.filter((diagnostic) => {
-              if (diagnostic.code !== 'PYNE_SYNTAX_ERROR') return true;
+              // Syntax diagnostics (`S` codes of the Pyne code registry) on a
+              // library import still being typed are noise.
+              if (typeof diagnostic.code !== 'string' || !/^S\d{4}$/.test(diagnostic.code)) return true;
               const line = diagnostic.range.start.line;
               if (line >= document.lineCount) return true;
               return !isIncompletePineLibraryImport(document.lineAt(line).text);
