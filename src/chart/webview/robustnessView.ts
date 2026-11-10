@@ -156,7 +156,7 @@ function rowsTable(rows: RobustnessRow[]): string {
       return (
         `<tr${shown ? ' class="rb-group"' : ''}><td>${shown}</td>` +
         `<td class="rb-text" title="${esc(method)}">${esc(String(row['Metric'] ?? ''))}</td>` +
-        `<td>${withUnit(cell('Value'), unit)}</td>` +
+        `<td>${withUnit(cell('Value'), esc(unit))}</td>` +
         `<td>${cell('Low / P5')}</td><td>${cell('Median / P50')}</td><td>${cell('High / P95')}</td>` +
         `<td class="rb-text">${esc(verdict)}</td></tr>`
       );
@@ -189,7 +189,7 @@ function sampleTable(
       );
     })
     .join('');
-  const u = unit ? ` (${unit})` : '';
+  const u = unit ? ` (${esc(String(unit))})` : '';
   return (
     `<h4 class="rb-heading">${esc(title)}</h4>` +
     `<table class="rb-table"><thead><tr><th>${esc(first)}</th><th>Trades</th><th>Hit rate</th>` +

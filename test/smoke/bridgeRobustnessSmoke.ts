@@ -17,6 +17,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import assert from 'node:assert/strict';
 
+import { renderRobustness } from '../../src/chart/webview/robustnessView';
 import { execProcess } from '../../src/env/exec';
 import { managedVenvDir, pyneBinPath, venvPythonPath } from '../../src/env/uv';
 import { scaffoldWorkdirWithCli } from '../../src/env/workdir';
@@ -141,6 +142,15 @@ function assertReport(workdir: string, events: BridgeEvent[]): string {
   const report = event.report;
   assert.ok(report, `no report: ${event.message}`);
   assert.equal(report.unit, 'r', 'stop exits must give results in R');
+  assert.ok(renderRobustness(report).includes('<th>Total (R)</th>'));
+  const html = renderRobustness({
+    ...report,
+    unit: 'R & < USD' as typeof report.unit,
+    rows: [{ Test: 'Backtest', Metric: 'Total', Value: 1, Unit: 'USD > EUR & "fees"' }],
+  });
+  assert.ok(html.includes('<th>Total (R &#38; &#60; USD)</th>'), 'report unit must be HTML-escaped');
+  assert.ok(html.includes('<td>1 USD &#62; EUR &#38; &#34;fees&#34;</td>'), 'row unit must be HTML-escaped');
+
   assert.ok(report.trades > 5, 'too few trades to test');
   assert.ok(report.rows.some((row) => row['Test'] === 'Backtest' && row['Metric'] === 'Total'));
   assert.deepEqual(report.coinflips.map((flip) => flip.mode), ['direction', 'timing']);
