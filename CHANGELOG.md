@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-11-12
+
+### Added
+
+- The Symbol Browser offers extra download data when the selected provider
+  supports it, such as the **Ask side** option in cTrader.
+- Set **Spread** in a strategy's Properties to include bid/ask costs in a
+  backtest. Choose which side triggers stop orders. The backtest uses the
+  downloaded ask data when available and can fall back to the symbol's average
+  spread.
+
+### Changed
+
+- Pyne Edge diagnostics use shared `E0001`–`E0010` codes and updated messages.
+
+### Fixed
+
+- Python environment setup and plugin installs keep Typer compatible with the
+  selected PyneCore version. PyneCore 6.13.3 and newer can use Typer 0.29.
+- Symbol Browser downloads still work with older PyneCore versions that lack
+  the extra-data option. Switching providers or brokers discards stale symbol
+  results, and changing the download target clears the **Truncate** checkbox.
+- The Pine editor suppresses syntax errors while a library import is still
+  being typed.
+- Robustness reports render units from report data as text.
+
 ## [0.14.1] - 2026-11-08
 
 ### Added
