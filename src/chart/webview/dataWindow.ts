@@ -86,22 +86,28 @@ function trimZeros(text: string): string {
  * Bar time in the symbol's timezone as `YYYY-MM-DD HH:mm` (seconds only when
  * the bar has them). An unknown zone falls back to UTC.
  */
-export function formatBarTime(timestamp: number, timeZone: string | undefined): string {
+export function createBarTimeFormatter(timeZone: string | undefined): (timestamp: number) => string {
   const options: Intl.DateTimeFormatOptions = {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
   };
-  let parts: Intl.DateTimeFormatPart[];
+  let formatter: Intl.DateTimeFormat;
   try {
-    parts = new Intl.DateTimeFormat('en-US', { ...options, timeZone: timeZone || 'UTC' })
-      .formatToParts(timestamp);
+    formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone: timeZone || 'UTC' });
   } catch {
-    parts = new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' }).formatToParts(timestamp);
+    formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' });
   }
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
-  const seconds = get('second');
-  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}` +
-    (seconds && seconds !== '00' ? `:${seconds}` : '');
+  return (timestamp) => {
+    const parts = formatter.formatToParts(timestamp);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    const seconds = get('second');
+    return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}` +
+      (seconds && seconds !== '00' ? `:${seconds}` : '');
+  };
+}
+
+export function formatBarTime(timestamp: number, timeZone: string | undefined): string {
+  return createBarTimeFormatter(timeZone)(timestamp);
 }
 
 /** Render target for the panel; owns only the DOM below `root`. */

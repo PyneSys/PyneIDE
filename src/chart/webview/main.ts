@@ -56,6 +56,7 @@ import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../
 import { ColorTrack } from './colorTrack';
 import {
   DataWindowView,
+  createBarTimeFormatter,
   formatBarTime,
   formatPlotValue,
   type DataWindowMode,
@@ -2710,6 +2711,9 @@ function renderTrades(): string {
     return '<span class="muted">No trades (yet). Indicators produce no trades.</span>';
   }
   const d = mintickDecimals(st.start.syminfo.mintick);
+  const formatTime = createBarTimeFormatter(st.chart.getTimezone());
+  const tradeTime = (ts: number): string =>
+    ts > 0 && Number.isFinite(new Date(ts).getTime()) ? formatTime(ts).slice(0, 16) : '—';
   const rows = st.trades
     .map((t, i) => {
       const long = (t.size ?? 0) > 0;
@@ -2722,8 +2726,8 @@ function renderTrades(): string {
         '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/>' +
         '<path d="M8 7v4M8 4.5v.5"/></svg></button> ' +
         `${i + 1} ${long ? '▲' : '▼'} ${esc(t.entryId ?? t.entrySignal ?? '')}</td>` +
-        `<td>${fmtTime(t.entryTime)}</td><td>${fmt(t.entryPrice, d)}</td>` +
-        `<td>${fmtTime(t.exitTime)}</td><td>${fmt(t.exitPrice, d)}</td>` +
+        `<td>${tradeTime(t.entryTime)}</td><td>${fmt(t.entryPrice, d)}</td>` +
+        `<td>${tradeTime(t.exitTime)}</td><td>${fmt(t.exitPrice, d)}</td>` +
         `<td>${fmt(Math.abs(t.size ?? 0), 4)}</td>` +
         `<td class="${signClass(t.profit)}">${fmt(t.profit)}</td>` +
         `<td class="${signClass(t.profitPct)}">${fmt(t.profitPct)}%</td>` +
