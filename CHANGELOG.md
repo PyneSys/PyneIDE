@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-11-12
+
+### Fixed
+
+- The Trades list shows entry and exit times in the chart's time zone.
+
 ## [0.14.2] - 2026-11-12
 
 ### Added
