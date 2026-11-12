@@ -435,10 +435,14 @@ class ProviderService:
                                if broker
                                else f"{provider_name}:{symbol}@{timeframe}")
 
+            # Only a ticked box sends ``extra_data``: the box exists only for providers
+            # declaring ``extra_data``, which needs the pynecore that also accepts it,
+            # so an older pynecore never gets the keyword.
+            extra_kwargs = {"extra_data": True} if extra_data else {}
             result = download_to_file(
                 inst,
                 time_from=time_from, time_to=time_to, truncate=truncate,
-                extra_data=extra_data,
+                **extra_kwargs,
                 on_start=on_start, on_progress=on_progress,
                 on_conflict="abort", provider_string=provider_string,
             )
