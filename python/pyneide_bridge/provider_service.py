@@ -116,10 +116,13 @@ def _list_providers() -> list[dict[str, Any]]:
         if not (isinstance(cls, type) and issubclass(cls, ProviderPlugin)):
             continue
         meta = get_plugin_metadata(ep)
+        extra_data = getattr(cls, "extra_data", None)
         out.append({
             "name": name,
             "display_name": getattr(cls, "plugin_name", "") or name,
             "multi_broker": bool(getattr(cls, "multi_broker", False)),
+            "extra_data": ({"label": extra_data.label, "help": extra_data.help}
+                           if extra_data is not None else None),
             "summary": get_plugin_summary(cls) or meta["description"],
         })
     return out
@@ -396,6 +399,7 @@ class ProviderService:
         try:
             provider_name, broker, symbol, timeframe = self._download_target(params)
             truncate = bool(params.get("truncate", False))
+            extra_data = bool(params.get("extra_data", False))
             time_from = self._parse_from(params["from"])
             time_to = datetime.fromtimestamp(int(params["to"]), UTC)
 
@@ -434,6 +438,7 @@ class ProviderService:
             result = download_to_file(
                 inst,
                 time_from=time_from, time_to=time_to, truncate=truncate,
+                extra_data=extra_data,
                 on_start=on_start, on_progress=on_progress,
                 on_conflict="abort", provider_string=provider_string,
             )

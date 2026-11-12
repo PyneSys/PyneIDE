@@ -67,7 +67,7 @@ function fixture() {
 
 const download = {
   type: 'download', provider: 'capitalcom', symbol: 'EURUSD', timeframe: '240',
-  from: 100, to: 200, truncate: false,
+  from: 100, to: 200, truncate: false, extraData: false,
 };
 const completed = { ohlcv_path: '/data/eurusd.ohlcv', bars_written: 42 };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -110,5 +110,22 @@ test('a failed download releases its lock for retry', async () => {
   f.requests[1].resolve(completed);
   await flush();
   f.notifications[0].resolve(undefined);
+  await flush();
+});
+
+test('the opt-in data choice reaches the bridge as extra_data', async () => {
+  const f = fixture();
+  f.send({ ...download, provider: 'ctrader', broker: 'pepperstone', extraData: true });
+  assert.equal(f.requests[0].params.extra_data, true);
+  f.requests[0].resolve(completed);
+  await flush();
+  f.notifications[0].resolve(undefined);
+  await flush();
+
+  f.send(download);
+  assert.equal(f.requests[1].params.extra_data, false);
+  f.requests[1].resolve(completed);
+  await flush();
+  f.notifications[1].resolve(undefined);
   await flush();
 });

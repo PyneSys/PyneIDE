@@ -178,7 +178,11 @@ export class ProviderService {
     this.stdoutBuf = '';
 
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => this.onStdout(chunk));
+    // A restarted service's old process may still flush or exit after its
+    // replacement is up: only the current child's events count.
+    child.stdout.on('data', (chunk: string) => {
+      if (child === this.child) this.onStdout(chunk);
+    });
 
     let stderrBuf = '';
     child.stderr.setEncoding('utf8');
@@ -194,11 +198,11 @@ export class ProviderService {
 
     child.on('error', (err) => {
       this.opts.log?.(`[provider-service] spawn failed: ${err.message}`);
-      this.onChildGone(new Error(`Provider service failed to start: ${err.message}`));
+      this.onChildGone(child, new Error(`Provider service failed to start: ${err.message}`));
     });
     child.on('close', (code) => {
       this.opts.log?.(`[provider-service] exited (code ${code ?? 'signal'})`);
-      this.onChildGone(new Error(`Provider service exited (code ${code ?? 'signal'})`));
+      this.onChildGone(child, new Error(`Provider service exited (code ${code ?? 'signal'})`));
     });
 
     return child;
@@ -272,8 +276,9 @@ export class ProviderService {
     entry.reject(err);
   }
 
-  private onChildGone(err: Error): void {
-    if (this.child) this.child = undefined;
+  private onChildGone(child: ChildProcessWithoutNullStreams, err: Error): void {
+    if (child !== this.child) return;
+    this.child = undefined;
     this.rejectAll(err);
   }
 
@@ -300,7 +305,16 @@ export interface ProviderInfo {
   name: string;
   display_name: string;
   multi_broker: boolean;
+  /** The opt-in per-bar data the provider downloads only on request (e.g. a
+   * cTrader ask side rebuilt from ticks), or null when it has none. */
+  extra_data: ExtraDataInfo | null;
   summary: string;
+}
+
+/** A provider's opt-in download data: the checkbox label and its help text. */
+export interface ExtraDataInfo {
+  label: string;
+  help: string;
 }
 
 /** One broker/exchange of a multi-broker provider. */
@@ -342,4 +356,6 @@ export interface DownloadRequest {
   from: number | 'continue';
   to: number;
   truncate?: boolean;
+  /** Also download the provider's opt-in per-bar data (`extra_data`). */
+  extra_data?: boolean;
 }

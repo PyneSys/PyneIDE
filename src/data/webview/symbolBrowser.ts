@@ -70,6 +70,10 @@ const toSel = el<HTMLSelectElement>('to');
 const toDate = el<HTMLInputElement>('to-date');
 const truncateLabel = el<HTMLLabelElement>('truncate-label');
 const truncateChk = el<HTMLInputElement>('truncate');
+const extraWrap = el<HTMLSpanElement>('extra-wrap');
+const extraChk = el<HTMLInputElement>('extra');
+const extraLabel = el<HTMLSpanElement>('extra-label');
+const extraHelp = el<HTMLSpanElement>('extra-help');
 const downloadBtn = el<HTMLButtonElement>('download');
 const cancelBtn = el<HTMLButtonElement>('cancel');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
@@ -114,10 +118,10 @@ window.addEventListener('message', (ev: MessageEvent<BrowserInMessage>) => {
       onBrokers(msg.provider, msg.supported, msg.brokers, msg.error);
       break;
     case 'symbolsLoading':
-      listStatus.textContent = 'Loading symbols…';
+      if (isCurrentList(msg.provider, msg.broker)) listStatus.textContent = 'Loading symbols…';
       break;
     case 'symbols':
-      onSymbols(msg.symbols, msg.error);
+      if (isCurrentList(msg.provider, msg.broker)) onSymbols(msg.symbols, msg.error);
       break;
     case 'syminfo':
       if (msg.reqId === lastSyminfoReqId) renderSyminfo(msg.symbol, msg.info);
@@ -194,6 +198,14 @@ function selectProvider(name: string): void {
   currentMultiBroker = Boolean(info?.multi_broker);
   brokerSel.hidden = !currentMultiBroker;
   brokerLabel.hidden = !currentMultiBroker;
+  // The opt-in data switch exists only for providers that declare one, and a
+  // provider switch never carries the previous provider's choice over.
+  const extra = info?.extra_data ?? null;
+  extraWrap.hidden = extra === null;
+  extraChk.checked = false;
+  extraLabel.textContent = extra?.label ?? '';
+  extraHelp.title = extra?.help ?? '';
+  extraHelp.setAttribute('aria-label', extra?.help ?? '');
   allSymbols = [];
   positions = [];
   selected = -1;
@@ -243,6 +255,13 @@ function onBrokers(provider: string, supported: boolean, brokers: BrokerInfo[], 
   } else {
     listStatus.textContent = 'No brokers.';
   }
+}
+
+/** Whether a symbol-list reply belongs to the provider and broker selected now:
+ * a reply for an abandoned selection must not install its list. */
+function isCurrentList(provider: string, broker: string | undefined): boolean {
+  const currentBroker = brokerSel.hidden ? undefined : brokerSel.value;
+  return provider === providerSel.value && (broker ?? '') === (currentBroker ?? '');
 }
 
 function onSymbols(symbols: string[], error?: string): void {
@@ -576,6 +595,12 @@ function currentTimeframe(): string {
 function scheduleTargetProbe(smartFrom: boolean): void {
   if (smartFrom) smartFromPending = true;
   if (targetTimer) clearTimeout(targetTimer);
+  // The target changed: the old probe's answer and the Truncate consent given
+  // for the previous file must not apply to this one.
+  lastTargetReqId = ++targetReqId;
+  targetExists = false;
+  truncateLabel.hidden = true;
+  truncateChk.checked = false;
   const symbol = selectedSymbol();
   const timeframe = currentTimeframe();
   updateDownloadEnabled();
@@ -723,6 +748,7 @@ downloadBtn.addEventListener('click', () => {
     from,
     to,
     truncate: targetExists && truncateChk.checked,
+    extraData: !extraWrap.hidden && extraChk.checked,
   });
 });
 

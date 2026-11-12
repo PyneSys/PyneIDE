@@ -336,6 +336,7 @@ export class SymbolBrowserPanel {
     from: number | 'continue';
     to: number;
     truncate: boolean;
+    extraData: boolean;
   }): Promise<void> {
     if (this.activeDownloadId !== undefined) {
       this.post({
@@ -346,6 +347,9 @@ export class SymbolBrowserPanel {
       });
       return;
     }
+    // The prefill armed now belongs to this download; one armed while it runs
+    // waits for its own download.
+    const prefill = this.prefill;
     const { id, result } = this.service.requestWithHandle<DownloadResult>(
       'download',
       {
@@ -356,6 +360,7 @@ export class SymbolBrowserPanel {
         from: msg.from,
         to: msg.to,
         truncate: msg.truncate,
+        extra_data: msg.extraData,
       },
       {
         timeoutMs: 0, // a download's duration is unbounded
@@ -373,7 +378,7 @@ export class SymbolBrowserPanel {
         this.activeDownloadId = undefined;
       }
       this.post({ type: 'downloadDone', ohlcvPath: res.ohlcv_path, barsWritten: res.bars_written, symbol: msg.symbol });
-      await this.afterDownload(res, msg.symbol);
+      await this.afterDownload(res, msg.symbol, prefill);
     } catch (err) {
       const kind = err instanceof ProviderServiceError ? err.kind : 'Error';
       const retryable = err instanceof ProviderServiceError ? err.retryable : false;
@@ -389,12 +394,15 @@ export class SymbolBrowserPanel {
   /** Refresh the workspace tree and offer to open the freshly downloaded file.
    * With an armed security prefill, write the symbol_map entry and offer to run
    * the waiting script instead. */
-  private async afterDownload(res: DownloadResult, symbol: string): Promise<void> {
+  private async afterDownload(
+    res: DownloadResult,
+    symbol: string,
+    prefill: SecurityPrefill | undefined
+  ): Promise<void> {
     void vscode.commands.executeCommand('pyneide.workspace.refresh');
     const uri = vscode.Uri.file(res.ohlcv_path);
-    const prefill = this.prefill;
     if (prefill) {
-      this.prefill = undefined;
+      if (this.prefill === prefill) this.prefill = undefined;
       await this.recordPrefillMapping(prefill, res.ohlcv_path);
       // A Symbol Map-initiated download carries no script, so the "Run" offer is
       // dropped; the map write above still happened either way.
@@ -547,6 +555,13 @@ export class SymbolBrowserPanel {
     border: 1px solid var(--vscode-panel-border, #444);
   }
   .check { display: flex; align-items: center; gap: 4px; }
+  .help {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 50%; cursor: help;
+    font-size: 10px; font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    border: 1px solid var(--vscode-descriptionForeground);
+  }
   #progress-wrap { flex: 1 1 100%; display: none; align-items: center; gap: 8px; }
   #progress-wrap.on { display: flex; }
   #progress-track { flex: 1; height: 6px; border-radius: 3px;
@@ -593,6 +608,10 @@ export class SymbolBrowserPanel {
   <select id="to"></select>
   <input type="date" id="to-date" hidden />
   <label class="check" id="truncate-label" hidden><input type="checkbox" id="truncate" /> truncate</label>
+  <span class="check" id="extra-wrap" hidden>
+    <label class="check"><input type="checkbox" id="extra" /> <span id="extra-label"></span></label>
+    <span class="help" id="extra-help" role="img" tabindex="0">?</span>
+  </span>
   <button id="download" disabled>Download</button>
   <button id="cancel" class="secondary" hidden>Cancel</button>
   <div id="progress-wrap">

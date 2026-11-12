@@ -54,6 +54,7 @@ export type BrowserOutMessage =
       from: number | 'continue';
       to: number;
       truncate: boolean;
+      extraData: boolean;
     }
   | { type: 'cancelDownload' }
   // Persist the current selection so the next open restores it.

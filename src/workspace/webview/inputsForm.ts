@@ -35,16 +35,23 @@ const tabPropertiesBtn = document.getElementById('tab-properties') as HTMLButton
 const inputsPaneEl = document.getElementById('inputs-pane') as HTMLDivElement;
 const propertiesPaneEl = document.getElementById('properties-pane') as HTMLDivElement;
 
-/** One Properties row: a number or checkbox, optionally with a unit select
- * (order size type, commission type) that belongs to the same setting. */
+interface PropertyOption {
+  value: string;
+  label: string;
+}
+
+/** One Properties row: a number, checkbox or choice, optionally with a unit
+ * select (order size type, commission type) that belongs to the same setting. */
 interface PropertyField {
   key: string;
   label: string;
-  kind: 'float' | 'int' | 'bool';
+  kind: 'float' | 'int' | 'bool' | 'select';
   min?: number;
   suffix?: string;
   tooltip?: string;
-  unit?: { key: string; options: { value: string; label: string }[] };
+  /** The choices of a `select` field. */
+  options?: PropertyOption[];
+  unit?: { key: string; options: PropertyOption[] };
 }
 
 /** The settings TradingView's Properties tab offers that PyneCore backtests
@@ -108,6 +115,24 @@ const PROPERTY_GROUPS: { name: string; fields: PropertyField[] }[] = [
         min: 0,
         suffix: 'ticks',
         tooltip: 'Ticks added against the strategy to the fill price of market and stop orders.',
+      },
+      {
+        key: 'spread_type',
+        label: 'Spread',
+        kind: 'select',
+        options: [
+          { value: 'none', label: 'Not charged' },
+          { value: 'trade', label: 'Orders trigger on their own side' },
+          { value: 'opposite', label: 'Stops trigger on the opposite side' },
+        ],
+        tooltip:
+          'Charges the bid/ask spread: buys fill at the ask, sells at the bid. The spread of each bar ' +
+          'comes from its ask side, which only data downloaded with the ask has (Capital.com always, ' +
+          'cTrader with the "Ask side" option). Bars without it use the symbol\'s average spread ' +
+          '(avg_spread in its symbol info), or no spread when that is missing too. ' +
+          '"Own side": buy limits and stops trigger on the ask, sells on the bid. ' +
+          '"Opposite side": stops trigger on the other side (a buy stop on the bid, a sell stop on the ask), ' +
+          'so they fill one spread beyond their price; limits stay on their own side.',
       },
     ],
   },
@@ -338,8 +363,9 @@ function propertyRow(field: PropertyField): HTMLElement {
 /** A setting's declared value for display; a unit shows its option label. */
 function describeDefault(key: string): string {
   const def = properties?.[key]?.default;
-  const unit = PROPERTY_GROUPS.flatMap((g) => g.fields).find((f) => f.unit?.key === key)?.unit;
-  const label = unit?.options.find((o) => o.value === def)?.label;
+  const all = PROPERTY_GROUPS.flatMap((g) => g.fields);
+  const options = all.find((f) => f.unit?.key === key)?.unit?.options ?? all.find((f) => f.key === key)?.options;
+  const label = options?.find((o) => o.value === def)?.label;
   return label ?? (def === null || def === undefined ? 'none' : String(def));
 }
 
@@ -357,6 +383,23 @@ function propertyControl(field: PropertyField, onChange: () => void): HTMLElemen
       onChange();
     });
     return cb;
+  }
+
+  if (field.kind === 'select') {
+    const select = document.createElement('select');
+    select.id = id;
+    for (const opt of field.options ?? []) {
+      const o = document.createElement('option');
+      o.value = opt.value;
+      o.textContent = opt.label;
+      o.selected = opt.value === String(current);
+      select.appendChild(o);
+    }
+    select.addEventListener('change', () => {
+      propValues.set(field.key, select.value);
+      onChange();
+    });
+    return select;
   }
 
   const num = document.createElement('input');
