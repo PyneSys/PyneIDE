@@ -6,9 +6,9 @@ import {
   DEBUGPY_VERSION,
   ENV_SCHEMA_VERSION,
   PYNECORE_MIN_VERSION,
+  PYNECORE_TYPER_FIX_VERSION,
   PYNECORE_VERSION,
   PYTHON_VERSION,
-  TYPER_REQUIREMENT,
   type Logger,
 } from './constants';
 import { execChecked, execProcess } from './exec';
@@ -146,27 +146,27 @@ export function readMarker(storageDir: string): EnvMarker | undefined {
   }
 }
 
-export function currentMarker(): EnvMarker {
+export function currentMarker(pynecore = PYNECORE_VERSION): EnvMarker {
   return {
     schema: ENV_SCHEMA_VERSION,
     python: PYTHON_VERSION,
-    pynecore: PYNECORE_VERSION,
+    pynecore,
     debugpy: DEBUGPY_VERSION,
-    typerRequirement: TYPER_REQUIREMENT,
+    typerRequirement: typerRequirementForCore(pynecore),
   };
 }
 
 export function markerUpToDate(storageDir: string, selection = PYNECORE_VERSION): boolean {
   const marker = readMarker(storageDir);
   if (!marker) return false;
-  const want = currentMarker();
+  const want = currentMarker(marker.pynecore);
   return (
     marker.schema === want.schema &&
     marker.python === want.python &&
     (selection ? marker.pynecore === selection : compareVersions(marker.pynecore, PYNECORE_MIN_VERSION) >= 0) &&
     (marker.selection ?? marker.pynecore) === selection &&
     marker.debugpy === want.debugpy &&
-    marker.typerRequirement === want.typerRequirement
+    (!want.typerRequirement || marker.typerRequirement === want.typerRequirement)
   );
 }
 
@@ -192,6 +192,11 @@ export function compareVersions(a: string, b: string): number {
     if (diff !== 0) return diff;
   }
   return 0;
+}
+
+/** Older Core releases import a private module removed in Typer 0.29. */
+export function typerRequirementForCore(version: string): string | undefined {
+  return compareVersions(version, PYNECORE_TYPER_FIX_VERSION) < 0 ? 'typer<0.29' : undefined;
 }
 
 /**
@@ -316,10 +321,12 @@ async function runBootstrap(
   }
   throwIfCancelled(cancel);
 
+  const coreRequirement = selection ? `==${selection}` : `>=${PYNECORE_TYPER_FIX_VERSION}`;
+  const typerRequirement = selection ? typerRequirementForCore(selection) : undefined;
   const packages = [
-    `pynesys-pynecore[all]${selection ? `==${selection}` : `>=${PYNECORE_MIN_VERSION}`}`,
+    `pynesys-pynecore[all]${coreRequirement}`,
     `debugpy==${DEBUGPY_VERSION}`,
-    TYPER_REQUIREMENT,
+    ...(typerRequirement ? [typerRequirement] : []),
   ];
 
   log(`Installing: ${packages.join(', ')}`);
@@ -349,7 +356,7 @@ async function runBootstrap(
   }
   if (verify.ok) {
     fs.writeFileSync(markerPath(environmentDir), JSON.stringify({
-      ...currentMarker(), pynecore: verify.pynecoreVersion, selection, checkedAt: Date.now(),
+      ...currentMarker(verify.pynecoreVersion), selection, checkedAt: Date.now(),
     }, null, 2));
     log(
       `Environment ready: Python ${verify.pythonVersion}, ` +

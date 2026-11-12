@@ -1,5 +1,6 @@
 /** Install project plugins while preserving the selected Core release. */
-import { TYPER_REQUIREMENT, type Logger } from './constants';
+import { typerRequirementForCore } from './bootstrap';
+import type { Logger } from './constants';
 import { execChecked } from './exec';
 import { ensureUv, uvEnv } from './uv';
 
@@ -27,12 +28,15 @@ async function runUvPip(op: PackageOperation, action: 'install' | 'uninstall'): 
   if (op.packages.length === 0) return;
   const env = uvEnv(op.storageDir, op.proxyUrl);
   const { uvBin } = await ensureUv(op.storageDir, op.log, env);
+  const args = ['pip', action, '--python', op.pythonBin, ...op.packages];
+  if (action === 'install' && op.pynecoreVersion) {
+    args.push(`pynesys-pynecore[cli]==${op.pynecoreVersion}`);
+    const typerRequirement = typerRequirementForCore(op.pynecoreVersion);
+    if (typerRequirement) args.push(typerRequirement);
+  }
   await execChecked(
     uvBin,
-    ['pip', action, '--python', op.pythonBin, ...op.packages,
-      ...(action === 'install' && op.pynecoreVersion
-        ? [`pynesys-pynecore==${op.pynecoreVersion}`, TYPER_REQUIREMENT]
-        : [])],
+    args,
     op.log,
     { env, timeoutMs: 600000 }
   );

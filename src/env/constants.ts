@@ -1,11 +1,11 @@
 /** Shared toolchain versions. */
 export const UV_VERSION = '0.11.28';
 export const PYTHON_VERSION = '3.14';
-/** Core release installed when no project selection is given. */
+/** Core release used when the bootstrap caller omits a selection. */
 export const PYNECORE_VERSION = '6.12.1';
 export const DEBUGPY_VERSION = '1.8.21';
-/** Current Core releases import TyperChoice from typer._types, removed in Typer 0.29. */
-export const TYPER_REQUIREMENT = 'typer<0.29';
+/** First Core release compatible with Typer 0.29. */
+export const PYNECORE_TYPER_FIX_VERSION = '6.13.3';
 
 /**
  * Oldest supported Core release. From 6.12.1 the Core ships its own docs
