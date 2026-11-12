@@ -18,7 +18,7 @@ const CHECK_DEBOUNCE_MS = 400;
  * whatever `problems` it returns as diagnostics.
  *
  * For `@pyne edge` sources the worker additionally runs the fail-closed Edge
- * linter (F8, `pyne-edge-*` codes): the Pyne Edge profile is a strict
+ * linter (F8, codes `E0001`-`E0010`): the Pyne Edge profile is a strict
  * Pine-compatible Python subset defined by the versioned
  * `python/pyneide_edge_rules.py`. The worker re-detects the `edge` marker
  * itself, so nothing changes on this side — Edge findings are ordinary

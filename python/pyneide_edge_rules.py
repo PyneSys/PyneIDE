@@ -41,7 +41,7 @@ EDGE_RULES_VERSION = '2026.11.1'
 # --- syntax ----------------------------------------------------------------
 
 # Allowed positioned AST node types; any other statement/expression node is a
-# `pyne-edge-syntax` error. Helper nodes without their own position
+# `E0001` error. Helper nodes without their own position
 # (`arguments`, `comprehension`, `withitem`, ...) are governed by their
 # parents. Operators and expression contexts are checked separately below.
 ALLOWED_NODES = frozenset({

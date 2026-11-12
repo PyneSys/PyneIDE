@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { DETECT_HEAD_BYTES, findEdgeToken } from '../pyneDetect';
 
 /**
- * Quick fix on `pyne-edge-*` diagnostics: "Convert to full @pyne" — deletes
+ * Quick fix on Edge diagnostics (codes `E0001`-`E0010`): "Convert to full @pyne" — deletes
  * the ` edge` token from the head docstring, so leaving the Edge profile is a
  * deliberate, labelled, one-click decision instead of a fight with the
  * fail-closed linter. The wording spells out the trade-off (Edge is the
@@ -31,7 +31,7 @@ export class EdgeQuickFixProvider implements vscode.CodeActionProvider {
     context: vscode.CodeActionContext
   ): vscode.CodeAction[] | undefined {
     const edgeDiagnostics = context.diagnostics.filter(
-      (d) => d.source === 'Pyne' && typeof d.code === 'string' && d.code.startsWith('pyne-edge-')
+      (d) => d.source === 'Pyne' && typeof d.code === 'string' && /^E\d{4}$/.test(d.code)
     );
     if (edgeDiagnostics.length === 0) {
       return undefined;

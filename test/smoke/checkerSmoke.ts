@@ -325,9 +325,9 @@ async function main(): Promise<void> {
     const commented = await worker.request(
       '# a leading comment\n# /// script\n"""@pyne edge"""\n' + probe
     );
-    expectCodes(commented, ['pyne-edge-import'], 'edge-marker (leading comments)');
+    expectCodes(commented, ['E0006'], 'edge-marker (leading comments)');
     const singleQuotes = await worker.request("'''@pyne  edge'''\n" + probe);
-    expectCodes(singleQuotes, ['pyne-edge-import'], 'edge-marker (single quotes, double space)');
+    expectCodes(singleQuotes, ['E0006'], 'edge-marker (single quotes, double space)');
     const glued = await worker.request('"""@pyneedge"""\n' + probe);
     expectCodes(glued, [], 'edge-marker (@pyneedge is not a marker)');
     const edgy = await worker.request('"""@pyne edgy"""\n' + probe);
@@ -344,7 +344,7 @@ async function main(): Promise<void> {
         '    x = floor(1.5)\n' +
         '    print(x)\n'
     );
-    expectCodes(edgeImports, ['pyne-edge-import'], 'edge-import (no cascade to floor())');
+    expectCodes(edgeImports, ['E0006'], 'edge-import (no cascade to floor())');
     log('edge-import OK');
 
     // --- syntax: one report per disallowed construct, in line order ----------
@@ -363,12 +363,12 @@ async function main(): Promise<void> {
     );
     expectCodes(
       edgeSyntax,
-      ['pyne-edge-syntax', 'pyne-edge-syntax', 'pyne-edge-syntax', 'pyne-edge-syntax'],
+      ['E0001', 'E0001', 'E0001', 'E0001'],
       'edge-syntax'
     );
     {
       const msgs = messagesOf(edgeSyntax);
-      for (const needle of ['list literal', 'f-string', "'<<'", "'match'"]) {
+      for (const needle of ['list literal', 'f-string', '`<<`', '`match`']) {
         assert(
           msgs.some((m) => m.includes(needle)),
           `edge-syntax: expected a message mentioning ${needle}, got ${JSON.stringify(msgs)}`
@@ -386,7 +386,7 @@ async function main(): Promise<void> {
         '    n = 3\n' +
         '    assert n > 0, "n" + "!"\n'
     );
-    expectCodes(edgeAssert, ['pyne-edge-assert'], 'edge-assert (non-literal message)');
+    expectCodes(edgeAssert, ['E0004'], 'edge-assert (non-literal message)');
     log('edge-assert OK');
 
     // --- async + special parameters ------------------------------------------
@@ -395,7 +395,7 @@ async function main(): Promise<void> {
         SCAFFOLD +
         '\n\nasync def gather():\n    pass\n\n\ndef helper(*args):\n    pass\n'
     );
-    expectCodes(edgeAsync, ['pyne-edge-syntax', 'pyne-edge-syntax'], 'edge-async-signature');
+    expectCodes(edgeAsync, ['E0001', 'E0001'], 'edge-async-signature');
     log('edge-async-signature OK');
 
     // --- decorators: only the built-in set exists -----------------------------
@@ -404,14 +404,14 @@ async function main(): Promise<void> {
         SCAFFOLD +
         '\n\ndef deco(f):\n    return f\n\n\n@deco\ndef g():\n    return 1\n'
     );
-    expectCodes(edgeDecorator, ['pyne-edge-decorator'], 'edge-decorator');
+    expectCodes(edgeDecorator, ['E0007'], 'edge-decorator');
     log('edge-decorator OK');
 
     // --- classes: undecorated / inherited classes are not UDTs ---------------
     const edgeClass = await worker.request(
       EDGE_HEAD + SCAFFOLD + '\n\nclass State:\n    count: int = 0\n'
     );
-    expectCodes(edgeClass, ['pyne-edge-class'], 'edge-class');
+    expectCodes(edgeClass, ['E0008'], 'edge-class');
     log('edge-class OK');
 
     // --- class methods: undecorated with a receiver, Pine's `method` ---------
@@ -432,7 +432,7 @@ async function main(): Promise<void> {
         '\n\n@udt\nclass Pair:\n    a: float = 0.0\n\n' +
         '    @staticmethod\n    def zero() -> float:\n        return 0.0\n'
     );
-    expectCodes(edgeMethodDecorated, ['pyne-edge-decorator', 'pyne-edge-class'],
+    expectCodes(edgeMethodDecorated, ['E0007', 'E0008'],
       'edge-method-decorated');
     log('edge-method-decorated OK');
 
@@ -446,7 +446,7 @@ async function main(): Promise<void> {
         '    q = getattr(main, "x")\n' +
         '    print(q)\n'
     );
-    expectCodes(edgeCall, ['pyne-edge-call', 'pyne-edge-call'], 'edge-call');
+    expectCodes(edgeCall, ['E0009', 'E0009'], 'edge-call');
     log('edge-call OK');
 
     // --- Python's builtin open must not hide a missing price-series import ---
@@ -460,7 +460,7 @@ async function main(): Promise<void> {
       '    price = open + 1\n' +
       '    open("prices.csv")\n';
     const missingOpen = await worker.request(missingOpenSource);
-    expectCodes(missingOpen, Array(4).fill('pyne-edge-builtin'), 'edge-missing-open');
+    expectCodes(missingOpen, Array(4).fill('E0002'), 'edge-missing-open');
     for (const [line, start, end, , message] of missingOpen.problems ?? []) {
       assert(missingOpenSource.split('\n')[line].slice(start, end) === 'open',
         'edge-missing-open: diagnostic must underline only open');
@@ -495,7 +495,7 @@ async function main(): Promise<void> {
       ['default', 'def main(open: float = open):\n    plot(open)\n'],
       ['nested-default', 'def main():\n    def price(open: float = open):\n        return open\n    plot(price())\n'],
     ]) {
-      expectCodes(await worker.request(EDGE_HEAD + openScaffold + body), ['pyne-edge-builtin'],
+      expectCodes(await worker.request(EDGE_HEAD + openScaffold + body), ['E0002'],
         `edge-open-${label}`);
     }
     // A star import is reported once, wherever it stands: its uses do not cascade
@@ -505,11 +505,11 @@ async function main(): Promise<void> {
       ['after-read', 'x = input.int(14)\nif 1.0 > 0.0:\n    from pynecore.lib import *\n'],
     ]) {
       expectCodes(await worker.request(EDGE_HEAD + declaration + openScaffold +
-        'def main():\n    plot(open)\n'), ['pyne-edge-import'], `edge-star-import-${label}`);
+        'def main():\n    plot(open)\n'), ['E0006'], `edge-star-import-${label}`);
     }
     // An annotation without a value declares the name and binds nothing
     expectCodes(await worker.request(EDGE_HEAD + 'open: float\n' + openScaffold +
-      'def main():\n    plot(open)\n'), ['pyne-edge-builtin'], 'edge-open-annotation-only');
+      'def main():\n    plot(open)\n'), ['E0002'], 'edge-open-annotation-only');
     expectCodes(await worker.request(EDGE_HEAD + 'open: float = 1.0\n' + openScaffold +
       'def main():\n    plot(open)\n'), [], 'edge-open-annotated-value');
     // The module is initialized top to bottom: a read that runs meanwhile sees
@@ -521,7 +521,7 @@ async function main(): Promise<void> {
       ['loop-iterable', 'for open in open:\n    x = 1.0\n'],
     ]) {
       expectCodes(await worker.request(EDGE_HEAD + declaration + openScaffold +
-        'def main():\n    plot(open + 1.0)\n'), ['pyne-edge-builtin'], `edge-open-${label}`);
+        'def main():\n    plot(open + 1.0)\n'), ['E0002'], `edge-open-${label}`);
     }
     for (const [label, declaration] of [
       ['earlier-assignment', 'open = 1.0\nx = open\n'],
@@ -542,7 +542,7 @@ async function main(): Promise<void> {
       '    length = input.int(14)\n' +
       '    plot(input(1.0) + length)\n';
     const missingInput = await worker.request(missingInputSource);
-    expectCodes(missingInput, ['pyne-edge-builtin', 'pyne-edge-builtin'], 'edge-missing-input');
+    expectCodes(missingInput, ['E0002', 'E0002'], 'edge-missing-input');
     for (const [line, start, end, , message] of missingInput.problems ?? []) {
       assert(missingInputSource.split('\n')[line].slice(start, end) === 'input',
         'edge-missing-input: diagnostic must underline only input');
@@ -567,7 +567,7 @@ async function main(): Promise<void> {
         'def helper():\n    open = 1.0\n\n    @udt\n    class State:\n        open: float = open\n' +
         '    return State()\n'],
     ]) {
-      expectCodes(await worker.request(classHead + body + classTail), ['pyne-edge-builtin'],
+      expectCodes(await worker.request(classHead + body + classTail), ['E0002'],
         `edge-class-${label}`);
     }
     for (const [label, body] of [
@@ -582,7 +582,7 @@ async function main(): Promise<void> {
 
     // --- an error only the symbol table raises leaves the other rules running -
     expectCodes(await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nnonlocal x\n'),
-      ['pyne-edge-syntax'], 'edge-symtable-error');
+      ['E0001'], 'edge-symtable-error');
     expectCodes(await worker.request(EDGE_HEAD + openScaffold +
       'def main():\n    plot(open)\ndef f(a, a):\n    return a\n'), [],
       'edge-symtable-error-builtin-silent');
@@ -590,12 +590,12 @@ async function main(): Promise<void> {
 
     // --- functions/modules are not objects -----------------------------------
     const edgeFuncAttr = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nmain.cache = 1\n');
-    expectCodes(edgeFuncAttr, ['pyne-edge-func-attr'], 'edge-func-attr');
+    expectCodes(edgeFuncAttr, ['E0010'], 'edge-func-attr');
     log('edge-func-attr OK');
 
     // --- lambda outside a UDT field default ----------------------------------
     const edgeLambda = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nf2 = lambda: 1\n');
-    expectCodes(edgeLambda, ['pyne-edge-lambda'], 'edge-lambda');
+    expectCodes(edgeLambda, ['E0003'], 'edge-lambda');
     log('edge-lambda OK');
 
     // --- subscript stores (history reads stay allowed) -----------------------
@@ -608,7 +608,7 @@ async function main(): Promise<void> {
         '    p[0] = 1.0\n' +
         '    print(close[1])\n'
     );
-    expectCodes(edgeSubscript, ['pyne-edge-subscript'], 'edge-subscript');
+    expectCodes(edgeSubscript, ['E0005'], 'edge-subscript');
     log('edge-subscript OK');
 
     // --- edge + structure problems coexist in one sorted list ----------------
@@ -619,7 +619,7 @@ async function main(): Promise<void> {
         'def main():\n' +
         '    pass\n'
     );
-    expectCodes(edgeCoexist, ['pyne-edge-import', 'pyne-main-undecorated'], 'edge-coexist');
+    expectCodes(edgeCoexist, ['E0006', 'pyne-main-undecorated'], 'edge-coexist');
     log('edge-coexist OK');
 
     // --- the internal-test-module gate silences Edge rules too ---------------

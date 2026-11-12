@@ -3,7 +3,7 @@
  *
  * The Edge profile is bounded by "what the pynecomp emitter can produce", so
  * every compiled corpus script, re-headed as `@pyne edge`, must pass the Edge
- * linter with zero `pyne-edge-*` findings. A finding here means either the
+ * linter with zero Edge (`E0001`-`E0010`) findings. A finding here means either the
  * profile in python/pyneide_edge_rules.py is too tight or the emitter grew a
  * construct the profile must learn about — both are profile revisions.
  *
@@ -75,7 +75,7 @@ async function main(): Promise<void> {
         console.error(`${name}: worker error ${response.error ?? ''}`);
         continue;
       }
-      const edgeProblems = (response.problems ?? []).filter((p) => p[3].startsWith('pyne-edge'));
+      const edgeProblems = (response.problems ?? []).filter((p) => /^E\d{4}$/.test(p[3]));
       if (edgeProblems.length > 0) {
         failures++;
         console.error(`${name}:`);
