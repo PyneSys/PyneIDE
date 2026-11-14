@@ -45,6 +45,7 @@ class Control:
         # True whenever the main loop must leave the hot path.
         self.idle = False
         self._on_state = on_state
+        self._cancel_hooks: list[Callable[[], None]] = []
 
     def _wake(self) -> None:
         self.idle = self._paused or self._cancelled
@@ -127,6 +128,22 @@ class Control:
             self._runto = None
             self._cancelled = True
             self._wake()
+            hooks = list(self._cancel_hooks)
+        for hook in hooks:
+            hook()
+
+    def add_cancel_hook(self, hook: Callable[[], None]) -> None:
+        """Call ``hook`` on cancel, at once when the run is already cancelled.
+
+        A blocking source the per-bar gate cannot reach (a live feed waiting for
+        its next update) stops through one. The hook may run in a signal handler,
+        so it must not take a lock the main thread could hold.
+        """
+        with self._cond:
+            if not self._cancelled:
+                self._cancel_hooks.append(hook)
+                return
+        hook()
 
     @property
     def cancelled(self) -> bool:

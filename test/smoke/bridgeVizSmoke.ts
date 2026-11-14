@@ -170,7 +170,7 @@ async function runBridge(pythonBin: string, workdir: string, script: string): Pr
 
 function assertVizStream(events: BridgeEvent[]): void {
   const hello = events.find((ev) => ev.e === 'hello');
-  if (!hello || hello.e !== 'hello' || hello.protocol !== 3) fail('bad hello/protocol');
+  if (!hello || hello.e !== 'hello' || hello.protocol !== 4) fail('bad hello/protocol');
 
   // Meta-before-bars: every plot registers on bar 0 in the demo script, so
   // the very first plotMeta event must precede the first bars event.

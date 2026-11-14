@@ -15,4 +15,5 @@ pointing at this directory's parent.
 # v3: additive drawings events (line/label/box/table/polyline/linefill
 # journal). The client tolerates unknown events, so older consumers keep
 # working.
-PROTOCOL_VERSION = 3
+# v4: additive live chart events (download/live/tick/feedStatus, start.live).
+PROTOCOL_VERSION = 4

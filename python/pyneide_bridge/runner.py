@@ -1,8 +1,9 @@
 """Wires pynecore's ScriptRunner to the NDJSON protocol.
 
 Mirrors the file-mode path of ``pyne run`` (pynecore/cli/commands/run.py) but
-CLI-free: no typer, no rich, no provider mode. Pine compilation is the IDE's
-job (F2) — this module only runs ``.py`` Pyne scripts against ``.ohlcv`` data.
+CLI-free: no typer, no rich. Pine compilation is the IDE's job (F2) — this
+module only runs ``.py`` Pyne scripts against ``.ohlcv`` data; the provider
+mode of a live chart (``--live``) is in :mod:`~pyneide_bridge.live`.
 """
 
 from __future__ import annotations
@@ -73,9 +74,7 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
                         num_or_none(lib.close), num_or_none(lib.volume)]}
                 position = getattr(runner.script, "position", None)
                 if position is not None:
-                    equity = float(position.equity) if position.equity \
-                        else float(runner.script.initial_capital)
-                    obj = {**obj, "equity": num_or_none(equity),
+                    obj = {**obj, "equity": num_or_none(float(position.equity)),
                            "excursions": _equity_excursions(position)}
             elif obj.get("t") == "end":
                 position = getattr(runner.script, "position", None)
@@ -195,6 +194,23 @@ class _VizTap:
         for ev in events:
             ev.pop("t", None)
             self._draw_events.append(_scrub_nonfinite(ev))
+
+    def tick_colors(self) -> dict[str, Any]:
+        """Every dynamic color channel of the forming bar's latest run.
+
+        A full set, not a delta: the next tick's set or the bar's close replaces
+        it. The committed state the close deltas build on is left as it is.
+        """
+        return {cid: _scrub_nonfinite(self._encode(val))
+                for cid, val in self._lib._viz_dyn.items()}
+
+    def tick_drawings(self, bar_index: int) -> list[dict[str, Any]]:
+        """The drawing changes of the forming bar's latest run against the last
+        closed bar, leaving the shadow the close diffs against untouched."""
+        events = self._journal_diff(dict(self._shadow), bar_index)
+        for ev in events:
+            ev.pop("t", None)
+        return [_scrub_nonfinite(ev) for ev in events]
 
     def emit_metas(self, emitter: Emitter) -> None:
         if self._metas:
@@ -947,7 +963,13 @@ class _TestRunnerFactory:
 
 def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 total_bars: int, is_strategy: bool, batch_size: int,
-                chart_breakpoints: bool, robustness: Any = None) -> int:
+                chart_breakpoints: bool, robustness: Any = None, live: Any = None) -> int:
+    """Run the script and stream its results.
+
+    :param live: A live chart's :class:`~pyneide_bridge.live.LiveFeed`; ``None``
+        for a backtest. A live run streams the history like a backtest, then
+        every closed bar at once and the forming bar as ``tick`` events.
+    """
     from pynecore import lib
 
     plot_keys: list[str] = []
@@ -955,6 +977,9 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
     batch: list[list[Any]] = []
     trade_batch: list[dict[str, Any]] = []
     bars_done = 0
+    # Timestamp of the last bar row: a live close of the bar the history ended
+    # on (still forming at the download) replaces that row
+    last_row_ts: int | None = None
     last_flush = time.monotonic()
     cancelled = False
     viz_tap = _VizTap(lib)
@@ -973,14 +998,74 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
         if trade_batch:
             emitter.emit({"e": "trades", "d": trade_batch})
             trade_batch = []
-        emitter.emit({"e": "progress", "done": bars_done, "total": total_bars})
+        if live is None or not live.active:
+            emitter.emit({"e": "progress", "done": bars_done, "total": total_bars})
         last_flush = time.monotonic()
+
+    def bar_row(time_ms: int, plot_data: Any) -> list[Any]:
+        # lib.* holds the mintick-rounded values of the current bar or live
+        # update (raw .ohlcv floats carry float32 storage dust).
+        row: list[Any] = [
+            time_ms,
+            num_or_none(lib.open), num_or_none(lib.high),
+            num_or_none(lib.low), num_or_none(lib.close),
+            num_or_none(lib.volume),
+        ]
+        if plot_data:
+            new_keys = [k for k in plot_data if k not in plot_index]
+            if new_keys:
+                # Rows already in the batch align to the shorter key list
+                # (missing trailing columns read as null) — flush them
+                # before announcing the grown layout.
+                flush()
+                for k in new_keys:
+                    plot_index[k] = len(plot_keys)
+                    plot_keys.append(k)
+                emitter.emit({"e": "plotKeys", "keys": plot_keys})
+            plots: list[Any] = [None] * len(plot_keys)
+            for k, v in plot_data.items():
+                plots[plot_index[k]] = num_or_none(v)
+            row.append(plots)
+        else:
+            row.append(None)
+        if is_strategy:
+            position = runner.script.position
+            equity = float(position.equity) if position is not None \
+                else runner.script.initial_capital
+            row.append(num_or_none(equity))
+            row.append(_equity_excursions(position) if position else None)
+        return row
+
+    def tick_event(item: Any) -> dict[str, Any]:
+        """The ``tick`` event of a forming-bar update. Without a body run on it
+        (a strategy that does not calculate on every tick) only the candle is new."""
+        time_ms = int(item[0].timestamp)
+        index = bars_done - 1 if time_ms == last_row_ts else bars_done
+        ran = live.runs_on_ticks
+        event: dict[str, Any] = {"e": "tick", "ran": ran,
+                                 "d": bar_row(time_ms, item[1] if ran else None)}
+        if ran:
+            if viz_tap.active:
+                event["colors"] = viz_tap.tick_colors()
+            if viz_tap.journal:
+                event["drawings"] = viz_tap.tick_drawings(index)
+            if is_strategy:
+                event["trades"] = [_serialize_trade(t) for t in item[2]]
+        return event
+
+    def on_live() -> None:
+        flush()
+        live.active = True
+        emitter.emit({"e": "live"})
 
     if chart_breakpoints:
         runner.ohlcv_iter = _chart_breakpoint_iter(
             runner.ohlcv_iter, emitter, control)
+    if live is not None:
+        runner.ohlcv_iter = live.watch_transition(runner.ohlcv_iter, on_live)
     # Every bar's plot_data is read before the next one: no per-bar copy needed
-    gen = runner.run_iter(copy_results=False)
+    gen = runner.run_iter(copy_results=False, yield_ticks=True) if live is not None \
+        else runner.run_iter(copy_results=False)
     try:
         for item in gen:
             if control.idle:
@@ -993,54 +1078,35 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
 
             candle = item[0]
             plot_data = item[1]
-            bars_done += 1
-            # Race-free run-to-bar: self-pause on the feed thread once the target
-            # is reached (armed by the debug proxy via control.request_runto).
-            control.note_bar(bars_done)
 
             if viz_tap.active:
                 viz_tap.drain_metas()
 
-            # lib.* holds the mintick-rounded values of the current bar
-            # (raw .ohlcv floats carry float32 storage dust).
+            if not candle.is_closed:
+                event = tick_event(item)
+                viz_tap.emit_metas(emitter)
+                live.ticks.offer(event)
+                continue
+            if live is not None:
+                # The close supersedes every tick of its bar still held back
+                live.ticks.drop()
+
             time_ms = int(candle.timestamp)
-            row: list[Any] = [
-                time_ms,
-                num_or_none(lib.open), num_or_none(lib.high),
-                num_or_none(lib.low), num_or_none(lib.close),
-                num_or_none(lib.volume),
-            ]
+            replaces = live is not None and time_ms == last_row_ts
+            if not replaces:
+                bars_done += 1
+            last_row_ts = time_ms
+            # Race-free run-to-bar: self-pause on the feed thread once the target
+            # is reached (armed by the debug proxy via control.request_runto).
+            control.note_bar(bars_done)
 
-            if plot_data:
-                new_keys = [k for k in plot_data if k not in plot_index]
-                if new_keys:
-                    # Rows already in the batch align to the shorter key list
-                    # (missing trailing columns read as null) — flush them
-                    # before announcing the grown layout.
-                    flush()
-                    for k in new_keys:
-                        plot_index[k] = len(plot_keys)
-                        plot_keys.append(k)
-                    emitter.emit({"e": "plotKeys", "keys": plot_keys})
-                plots: list[Any] = [None] * len(plot_keys)
-                for k, v in plot_data.items():
-                    plots[plot_index[k]] = num_or_none(v)
-                row.append(plots)
-            else:
-                row.append(None)
-
-            if is_strategy:
-                position = runner.script.position
-                equity = float(position.equity) if position and position.equity \
-                    else runner.script.initial_capital
-                row.append(num_or_none(equity))
-                row.append(_equity_excursions(position) if position else None)
-                if len(item) > 2 and item[2]:
-                    for trade in item[2]:
-                        serialized = _serialize_trade(trade)
-                        trade_batch.append(serialized)
-                        if getattr(runner, "viz_writer", None) is not None:
-                            runner.viz_writer.trades.append(serialized)
+            row = bar_row(time_ms, plot_data)
+            if is_strategy and len(item) > 2 and item[2]:
+                for trade in item[2]:
+                    serialized = _serialize_trade(trade)
+                    trade_batch.append(serialized)
+                    if getattr(runner, "viz_writer", None) is not None:
+                        runner.viz_writer.trades.append(serialized)
 
             if robustness is not None:
                 robustness.on_bar()
@@ -1050,14 +1116,21 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 viz_tap.collect_colors(time_ms)
             if viz_tap.journal:
                 viz_tap.collect_drawings(bars_done - 1)
-            if len(batch) >= batch_size or \
+            if (live is not None and live.active) or len(batch) >= batch_size or \
                     time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
                 flush()
     finally:
+        if live is not None:
+            live.ticks.drop()
         # Runs ScriptRunner.run_iter's finally: writes strategy stats CSV,
         # exports still-open trades, closes writers, tears down security
         # subprocesses.
         gen.close()
+        if live is not None:
+            # Tears the live stream down with the source that holds it
+            runner.ohlcv_iter.close()
+    # A stopped live feed ends its iterator like an exhausted one
+    cancelled = cancelled or control.cancelled
 
     flush()
 

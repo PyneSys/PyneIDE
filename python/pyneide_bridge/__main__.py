@@ -54,6 +54,17 @@ def main() -> int:
                         help="Long-lived NDJSON RPC endpoint for the symbol browser "
                              "(providers/brokers/symbols/syminfo/download); ignores "
                              "--script/--data")
+    parser.add_argument("--live", default=None, metavar="PROVIDER_STRING",
+                        help="Live chart: download the provider string's history "
+                             "(e.g. ccxt:BYBIT:BTC/USDT:USDT@1) into workdir/data, run "
+                             "--script on it, then on the provider's live feed. Data only, "
+                             "no trading; replaces --data")
+    parser.add_argument("--live-from", default=None, metavar="FROM",
+                        help="History start of --live: a date, days, or -N bars "
+                             "(default: -500 bars)")
+    parser.add_argument("--history-trades", action="store_true",
+                        help="With --live on a strategy: trade on the history bars too and "
+                             "carry that position into the live phase (default: start flat)")
     parser.add_argument("--time-from", type=int, default=None,
                         help="Start of the run window (epoch seconds, UTC)")
     parser.add_argument("--time-to", type=int, default=None,
@@ -153,6 +164,27 @@ def main() -> int:
             signal.signal(sig, lambda *_: control.cancel())
         except (ValueError, OSError):
             pass
+
+    if args.live is not None:
+        if not args.script:
+            emitter.emit({"e": "error", "message": "--script is required for a run",
+                          "kind": "ValueError", "traceback": ""})
+            return 1
+        from .live import run_live
+        try:
+            return run_live(args, emitter, control)
+        except Exception as exc:
+            emitter.emit({
+                "e": "error",
+                "message": str(exc),
+                "kind": type(exc).__name__,
+                "traceback": traceback.format_exc(),
+            })
+            return 1
+    if args.history_trades or args.live_from is not None:
+        emitter.emit({"e": "error", "message": "--history-trades and --live-from need --live",
+                      "kind": "ValueError", "traceback": ""})
+        return 1
 
     if not args.data:
         emitter.emit({"e": "error", "message": "--data is required for a run",

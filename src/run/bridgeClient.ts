@@ -10,7 +10,7 @@ import { trackInterpreter } from '../env/usage';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
-export const BRIDGE_PROTOCOL_VERSION = 3;
+export const BRIDGE_PROTOCOL_VERSION = 4;
 
 /**
  * The engine's running equity extremes after a bar:
@@ -80,6 +80,8 @@ export interface StartEvent {
   syminfo: Record<string, string | number | boolean | null>;
   data: string;
   range: { from: number; to: number; bars: number };
+  /** A live chart: the provider string and whether the strategy traded on the history. */
+  live?: { provider: string; historyTrades: boolean };
   outputs: {
     plot: string;
     strat: string | null;
@@ -317,7 +319,48 @@ export type BridgeEvent =
   | { e: 'stats'; d: Record<string, number | null> }
   | { e: 'log'; level: string; message: string }
   | { e: 'error'; message: string; kind: string; traceback: string }
-  | { e: 'end'; bars: number; cancelled: boolean };
+  | { e: 'end'; bars: number; cancelled: boolean }
+  | DownloadEvent
+  | { e: 'live' }
+  | TickEvent
+  | FeedStatusEvent;
+
+/** Progress of a live chart's history download. */
+export type DownloadEvent =
+  | { e: 'download'; step: 'symbolInfo' }
+  /** `done`/`total`: seconds of the download window covered so far / in all. */
+  | { e: 'download'; step: 'history'; done: number; total: number }
+  /** A transient failure: the download is tried again after `delay` seconds. */
+  | { e: 'download'; step: 'retry'; attempt: number; delay: number; message: string };
+
+/**
+ * The forming bar's latest live update, at most 10 per second. Provisional: the
+ * next tick replaces all of it, the bar's close (a `bars` row with the same
+ * timestamp) supersedes it. `ran` is false when the script did not run on the
+ * update (a strategy without `calc_on_every_tick`): then only the candle is new.
+ */
+export interface TickEvent {
+  e: 'tick';
+  ran: boolean;
+  d: BarRow;
+  /** Every dynamic color channel of the run (a full set, not a delta). */
+  colors?: Record<string, ColorEnc>;
+  /** Drawing changes against the last closed bar. */
+  drawings?: DrawingEventRecord[];
+  /** Strategy: the trades the bar has closed so far. */
+  trades?: TradeRecord[];
+}
+
+/** State of the live feed. */
+export interface FeedStatusEvent {
+  e: 'feedStatus';
+  state: 'connecting' | 'live' | 'reconnecting' | 'market_closed' | 'stopped';
+  /** Reconnect attempt within one outage, from 1; 0 otherwise. */
+  attempt: number;
+  /** Seconds since the outage began, on `reconnecting`. */
+  offlineSeconds: number | null;
+  error: string | null;
+}
 
 export interface BridgeRunOptions {
   /** Python interpreter of the (managed) venv with pynecore installed. */
@@ -327,8 +370,8 @@ export interface BridgeRunOptions {
   /** Script path or bare name (resolved against `<workdir>/scripts`).
    * Omitted for a data-only preview. */
   script?: string;
-  /** .ohlcv path or bare name (resolved against `<workdir>/data`). */
-  data: string;
+  /** .ohlcv path or bare name (resolved against `<workdir>/data`). Not with `live`. */
+  data?: string;
   /** Stream raw candles only (chart preview), no script run. */
   dataOnly?: boolean;
   /** Resolved pyne workdir (always explicit — never rely on cwd). */
@@ -354,6 +397,13 @@ export interface BridgeRunOptions {
    * (`pyneide_bridge.robustness` reads its keys; an empty object takes the defaults).
    */
   robustness?: Record<string, unknown>;
+  /**
+   * Live chart instead of `data`: download the provider string's history into
+   * `<workdir>/data`, run the script on it, then on the provider's live feed.
+   * `from`: history start (date, days or -N bars, default -500 bars);
+   * `historyTrades`: a strategy trades on the history too. Data only, no trading.
+   */
+  live?: { provider: string; from?: string; historyTrades?: boolean };
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -379,7 +429,13 @@ export class BridgeRun {
     // four-line warning on every attach. The flag costs a little interpreter
     // startup, so it only goes on the runs that actually carry a debugger.
     if (opts.debugpyPort !== undefined) args.push('-X', 'frozen_modules=off');
-    args.push('-m', 'pyneide_bridge', '--data', opts.data, '--workdir', opts.workdir);
+    args.push('-m', 'pyneide_bridge', '--workdir', opts.workdir);
+    if (opts.data !== undefined) args.push('--data', opts.data);
+    if (opts.live) {
+      args.push('--live', opts.live.provider);
+      if (opts.live.from !== undefined) args.push('--live-from', opts.live.from);
+      if (opts.live.historyTrades) args.push('--history-trades');
+    }
     if (opts.script) args.push('--script', opts.script);
     if (opts.dataOnly) args.push('--data-only');
     if (opts.timeFrom !== undefined) args.push('--time-from', String(opts.timeFrom));
