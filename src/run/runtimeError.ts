@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { loadSourcemapFor, pineLineFor } from '../compile/sourcemap';
+import type { ErrorEvent } from './bridgeClient';
 
 export interface RuntimeErrorLocation {
   path: string;
@@ -19,10 +20,37 @@ function realPath(file: string): string {
   }
 }
 
+/** The code of `runtime.error()`: the script stopped itself. */
+const SCRIPT_STOP_CODE = 'R0005';
+
+/** Where a failed run stopped. A coded error names it itself (`at`, located by
+ * PyneCore with the Pine line of a compiled script); an error without `at` is
+ * located from its traceback. */
+export function runtimeErrorLocation(
+  error: Pick<ErrorEvent, 'traceback' | 'code' | 'at'>,
+  scriptPath: string,
+  workdir: string
+): RuntimeErrorLocation | undefined {
+  const at = error.at;
+  if (error.code !== undefined && at && Number.isSafeInteger(at.line) && at.line > 0) {
+    const scriptStop = error.code === SCRIPT_STOP_CODE;
+    const pinePath = at.path.replace(/\.py$/i, '.pine');
+    if (at.pineLine !== null && pinePath !== at.path) {
+      return { path: pinePath, line: at.pineLine, scriptStop };
+    }
+    return { path: realPath(at.path), line: at.line, scriptStop };
+  }
+  // A coded error raised outside bar execution (e.g. at script import) carries
+  // no `at`: locate it from the traceback, keeping the code's classification.
+  const location = tracebackLocation(error.traceback, scriptPath, workdir);
+  if (location && error.code !== undefined) location.scriptStop = error.code === SCRIPT_STOP_CODE;
+  return location;
+}
+
 /** Find the innermost user frame, skipping engine/bridge/dependency frames.
  * A runtime API may raise after the script calls it (e.g. runtime.error), so
  * the last Python frame is not necessarily the line the user can change. */
-export function runtimeErrorLocation(
+function tracebackLocation(
   traceback: string,
   scriptPath: string,
   workdir: string

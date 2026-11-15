@@ -37,6 +37,7 @@ import type { LibraryCallDiagnostics } from '../workspace/libraryDiagnostics';
 import {
   BridgeRun,
   type BridgeEvent,
+  type ErrorEvent,
   type RobustnessEvent,
   type TradeRecord,
 } from './bridgeClient';
@@ -1336,6 +1337,7 @@ export class RunService {
     let errorMessage: string | undefined;
     let errorKind: string | undefined;
     let errorTraceback: string | undefined;
+    let errorEvent: ErrorEvent | undefined;
     const trades: TradeRecord[] = [];
     let endBars = 0;
     let cancelled = false;
@@ -1431,9 +1433,10 @@ export class RunService {
             robustness = event;
             break;
           case 'error':
-            errorMessage = event.message;
+            errorMessage = event.code ? `${event.code}: ${event.message}` : event.message;
             errorKind = event.kind;
             errorTraceback = event.traceback;
+            errorEvent = event;
             this.output.appendLine(event.traceback);
             // Add Pine locations alongside the raw traceback in the log.
             try {
@@ -1489,7 +1492,8 @@ export class RunService {
     if (errorMessage) {
       this.chartManager?.closeChart(chartKey);
       await forgetRememberedData(this.context, chartKey);
-      const source = runtimeErrorLocation(errorTraceback ?? '', opts.scriptPath, opts.workdir);
+      const source = runtimeErrorLocation(
+        errorEvent ?? { traceback: errorTraceback ?? '' }, opts.scriptPath, opts.workdir);
       let location = '';
       if (source) {
         location = ` (${path.basename(source.path)}:${source.line})`;
@@ -1502,6 +1506,7 @@ export class RunService {
             vscode.DiagnosticSeverity.Error
           );
           diagnostic.source = 'Pyne runtime';
+          if (errorEvent?.code) diagnostic.code = errorEvent.code;
           this.runtimeDiagnostics.set(doc.uri, [diagnostic]);
           const selection = new vscode.Range(line, 0, line, 0);
           const editor = await vscode.window.showTextDocument(doc, { selection, preview: false });

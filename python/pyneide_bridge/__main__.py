@@ -12,7 +12,6 @@ import argparse
 import os
 import signal
 import sys
-import traceback
 from pathlib import Path
 
 
@@ -28,6 +27,7 @@ def main() -> int:
     from . import PROTOCOL_VERSION
     from . import control as control_module
     from .control import Control, start_stdin_reader
+    from .errors import error_event
     from .protocol import Emitter
 
     parser = argparse.ArgumentParser(prog="pyneide_bridge")
@@ -102,12 +102,7 @@ def main() -> int:
             ProviderService(Path(args.workdir).resolve(), emitter).serve()
             return 0
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
 
     # inspect/write are one-shot and own stdin themselves (write reads the JSON
@@ -118,12 +113,7 @@ def main() -> int:
         try:
             return inspect_inputs(args, emitter)
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
 
     if args.write_inputs:
@@ -131,12 +121,7 @@ def main() -> int:
         try:
             return write_inputs(args, emitter)
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
 
     if args.inspect_security:
@@ -144,12 +129,7 @@ def main() -> int:
         try:
             return inspect_security(args, emitter)
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
 
     control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
@@ -174,12 +154,7 @@ def main() -> int:
         try:
             return run_live(args, emitter, control)
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
     if args.history_trades or args.live_from is not None:
         emitter.emit({"e": "error", "message": "--history-trades and --live-from need --live",
@@ -196,12 +171,7 @@ def main() -> int:
         try:
             return run_data_only(args, emitter, control)
         except Exception as exc:
-            emitter.emit({
-                "e": "error",
-                "message": str(exc),
-                "kind": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-            })
+            emitter.emit(error_event(exc))
             return 1
 
     if not args.script:
@@ -224,12 +194,7 @@ def main() -> int:
     try:
         return run(args, emitter, control)
     except Exception as exc:
-        emitter.emit({
-            "e": "error",
-            "message": str(exc),
-            "kind": type(exc).__name__,
-            "traceback": traceback.format_exc(),
-        })
+        emitter.emit(error_event(exc))
         return 1
 
 

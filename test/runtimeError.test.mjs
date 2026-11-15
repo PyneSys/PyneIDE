@@ -124,6 +124,7 @@ function fixture(t) {
         e: 'error', kind: options.kind ?? 'ValueError', message: options.message ?? 'bad input',
         traceback: 'Traceback (most recent call last):\n' + frames.map(([file, line, name = 'main']) =>
           `  File "${file}", line ${line}, in ${name}\n    failing_call()\n`).join('') + 'ValueError: bad input\n',
+        ...(options.coded ?? {}),
       };
       choice = options.choice;
       exitCode = options.exitCode ?? 1;
@@ -250,6 +251,53 @@ for (const invalid of ['stale', 'converted', 'malformed']) {
     assert.equal(f.opened[0].options.selection.start.line, 2);
   });
 }
+
+test('a coded runtime.error is a script stop at the line PyneCore located', async (t) => {
+  const f = fixture(t);
+  // The traceback names another line: a coded error is not mined from it
+  await f.run([[f.script, 2]], {
+    kind: 'ScriptRuntimeError', message: 'stopped', coded: {
+      code: 'R0005', params: { message: 'stopped' }, bar: 5, time: 0, inSecurity: false,
+      at: { module: 'main', path: f.script, line: 3, col: 9, pineLine: null },
+    },
+  });
+  assert.equal(f.notices[0].severity, 'warning');
+  assert.match(f.notices[0].message, /script stopped: R0005: stopped \(demo.py:3\)/);
+  assert.equal(f.opened[0].file, f.script);
+  assert.equal(f.opened[0].options.selection.start.line, 2);
+  assert.equal(f.markers.get(f.script)[0].code, 'R0005');
+});
+
+test('a coded error without a location falls back to its traceback', async (t) => {
+  const f = fixture(t);
+  // Raised while importing the script: PyneCore never located it (at: null)
+  await f.run([[f.script, 3]], {
+    kind: 'ScriptRuntimeError', message: 'stopped', coded: {
+      code: 'R0005', params: { message: 'stopped' }, bar: null, time: null, inSecurity: false, at: null,
+    },
+  });
+  assert.equal(f.notices[0].severity, 'warning');
+  assert.match(f.notices[0].message, /script stopped: R0005: stopped \(demo.py:3\)/);
+  assert.equal(f.opened[0].file, f.script);
+  assert.equal(f.opened[0].options.selection.start.line, 2);
+  assert.ok(!f.notices[0].actions.includes('Report a Problem'));
+});
+
+test('a coded error of a compiled Pine script opens the Pine line PyneCore found', async (t) => {
+  const f = fixture(t);
+  const pine = f.script.replace(/\.py$/, '.pine');
+  fs.writeFileSync(pine, '//@version=6\nindicator("Demo")\nx = 1\ny = 2\n');
+  await f.run([[f.script, 3]], {
+    kind: 'DivisionByZeroError', message: 'Division by zero.', chartKey: pine, coded: {
+      code: 'R0001', params: {}, bar: 7, time: 0, inSecurity: false,
+      at: { module: 'main', path: f.script, line: 3, col: 5, pineLine: 4 },
+    },
+  });
+  assert.equal(f.notices[0].severity, 'error');
+  assert.match(f.notices[0].message, /script runtime error: R0001: Division by zero\./);
+  assert.equal(f.opened[0].file, pine);
+  assert.equal(f.opened[0].options.selection.start.line, 3);
+});
 
 test('a missing source does not turn a script exception into a report prompt', async (t) => {
   const f = fixture(t);

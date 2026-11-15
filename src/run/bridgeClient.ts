@@ -299,6 +299,38 @@ export interface DrawingEventRecord {
   s?: Record<string, unknown>;
 }
 
+/** Where a coded PyneCore error was raised (`PyneError.at`). */
+export interface ErrorSite {
+  /** `main` for the script, a library's import name. */
+  module: string;
+  /** The Pyne code file the module ran from. */
+  path: string;
+  /** One-based line in `path`. */
+  line: number;
+  /** One-based column in `path`. */
+  col: number | null;
+  /** The Pine line `path` was compiled from, when the run found its sourcemap. */
+  pineLine: number | null;
+}
+
+/**
+ * A failed bridge call. A run stopped by a coded PyneCore error also carries
+ * its code, parameters, bar and location; a PyneCore release from before the
+ * coded errors sends the message, kind and traceback alone.
+ */
+export interface ErrorEvent {
+  e: 'error';
+  message: string;
+  kind: string;
+  traceback: string;
+  code?: string;
+  params?: Record<string, string>;
+  bar?: number | null;
+  time?: number | null;
+  at?: ErrorSite | null;
+  inSecurity?: boolean;
+}
+
 export type BridgeEvent =
   | { e: 'hello'; protocol: number; pid: number }
   | { e: 'debugpy'; host: string; port: number }
@@ -318,7 +350,7 @@ export type BridgeEvent =
   | { e: 'state'; state: 'paused' | 'running' }
   | { e: 'stats'; d: Record<string, number | null> }
   | { e: 'log'; level: string; message: string }
-  | { e: 'error'; message: string; kind: string; traceback: string }
+  | ErrorEvent
   | { e: 'end'; bars: number; cancelled: boolean }
   | DownloadEvent
   | { e: 'live' }
@@ -530,9 +562,11 @@ export class BridgeRun {
     this.send({ cmd: 'chartBreakpoints', timestamps });
   }
 
-  /** Hard stop; prefer cancel(). */
+  /** Hard stop; prefer cancel(). SIGKILL, because the bridge maps SIGTERM to
+   * the same cooperative cancel as cancel(), which a script stuck inside a bar
+   * never reaches. */
   kill(): void {
-    this.child.kill('SIGTERM');
+    this.child.kill('SIGKILL');
   }
 
   private send(cmd: object): void {
