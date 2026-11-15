@@ -419,6 +419,6 @@ runtime, which is open source under Apache-2.0.
 
 ---
 
-> **Trademark notice.** Pine Script is a trademark of TradingView, Inc. PyneCore and
-> PyneComp are trademarks of PYNESYS LLC. PyneIDE is not affiliated with or endorsed
+> **Trademark notice.** Pine Script is a trademark of TradingView, Inc. PyneIDE, PyneCore
+> and PyneComp are trademarks of PYNESYS LLC. PyneIDE is not affiliated with or endorsed
 > by TradingView.
