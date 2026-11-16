@@ -40,6 +40,8 @@ import type {
   TickEvent,
   TradeRecord,
 } from '../../run/bridgeClient';
+import { TIMEFRAMES } from '../../data/timeframes';
+import { providerTimeframe } from '../../run/liveTarget';
 import { upsertLastBar } from '../barRows';
 import {
   CANDLE_STYLE_OPTIONS,
@@ -2379,6 +2381,84 @@ function closeCandlePopup(): void {
   tbCandleEl?.setAttribute('aria-pressed', 'false');
 }
 
+// --- Timeframe of a live chart -----------------------------------------------
+// The host restarts the live run on the picked timeframe; Custom asks it for one.
+
+const tfPopupEl = ((): HTMLDivElement | null => {
+  if (!document.body) return null;
+  const el = document.createElement('div');
+  el.id = 'tf-popup';
+  el.hidden = true;
+  document.body.appendChild(el);
+  return el;
+})();
+
+/** The timeframe of the live chart on screen, or undefined for any other chart. */
+function liveTimeframe(st: RunState | undefined): string | undefined {
+  const provider = st?.start.live?.provider;
+  return provider ? providerTimeframe(provider) : undefined;
+}
+
+function timeframeRow(label: string, active: boolean, onPick: () => void): HTMLDivElement {
+  const row = document.createElement('div');
+  row.className = 'tf-row';
+  if (active) row.classList.add('active');
+  row.innerHTML = '<span class="tf-name"></span><span class="tf-check"></span>';
+  const name = row.querySelector('.tf-name');
+  if (name) name.textContent = label;
+  const check = row.querySelector('.tf-check');
+  if (check) check.textContent = active ? '✓' : '';
+  row.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeTimeframePopup();
+    onPick();
+  });
+  return row;
+}
+
+function renderTimeframeList(): void {
+  if (!tfPopupEl) return;
+  const current = liveTimeframe(state);
+  tfPopupEl.innerHTML = '';
+  for (const tf of TIMEFRAMES) {
+    tfPopupEl.appendChild(timeframeRow(tf, tf === current, () => {
+      if (tf !== current) vscode.postMessage({ type: 'selectTimeframe', timeframe: tf });
+    }));
+  }
+  const sep = document.createElement('div');
+  sep.className = 'tf-sep';
+  tfPopupEl.appendChild(sep);
+  const custom = current !== undefined && !TIMEFRAMES.includes(current);
+  tfPopupEl.appendChild(timeframeRow(custom ? `Custom… (${current})` : 'Custom…', custom, () =>
+    vscode.postMessage({ type: 'selectTimeframe' })
+  ));
+}
+
+function positionTimeframePopup(): void {
+  if (!tfPopupEl || !tbTimeframeEl) return;
+  const r = tbTimeframeEl.getBoundingClientRect();
+  tfPopupEl.style.left = `${Math.round(r.left)}px`;
+  tfPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+}
+
+function openTimeframePopup(): void {
+  if (!tfPopupEl) return;
+  closePlotsPopup();
+  closeCandlePopup();
+  closeBreakpointsPopup();
+  renderTimeframeList();
+  tfPopupEl.hidden = false;
+  positionTimeframePopup();
+  tbTimeframeEl?.classList.add('active');
+  tbTimeframeEl?.setAttribute('aria-pressed', 'true');
+}
+
+function closeTimeframePopup(): void {
+  if (tfPopupEl) tfPopupEl.hidden = true;
+  tbTimeframeEl?.classList.remove('active');
+  tbTimeframeEl?.setAttribute('aria-pressed', 'false');
+}
+
 // --- Price scale controls: the A / L / % corner between the two axes --------
 // Parked where a trading chart puts them — bottom-right, in the price axis
 // column — because they belong to that axis, not to the chart-wide toolbar.
@@ -3171,6 +3251,7 @@ const tbBreakpointsEl = document.getElementById('tb-breakpoints') as HTMLButtonE
 const tbBreakpointsCountEl = document.getElementById('tb-breakpoints-count');
 const tbSymbolNameEl = document.getElementById('tb-symbol-name');
 const tbSymbolPeriodEl = document.getElementById('tb-symbol-period');
+const tbTimeframeEl = document.getElementById('tb-timeframe') as HTMLButtonElement | null;
 const gotoPopupEl = document.getElementById('goto-popup') as HTMLDivElement | null;
 const tbGotoInputEl = document.getElementById('tb-goto-input') as HTMLInputElement | null;
 const tbGotoDoEl = document.getElementById('tb-goto-do');
@@ -3370,6 +3451,16 @@ function syncToolbar(): void {
   const data = dataPresentation(st);
   if (tbSymbolNameEl) tbSymbolNameEl.textContent = data.symbol;
   if (tbSymbolPeriodEl) tbSymbolPeriodEl.textContent = data.period;
+  // A live chart picks its timeframe on a button of its own
+  const timeframe = liveTimeframe(st);
+  if (tbSymbolPeriodEl) tbSymbolPeriodEl.hidden = timeframe !== undefined;
+  if (tbTimeframeEl) {
+    tbTimeframeEl.hidden = timeframe === undefined;
+    tbTimeframeEl.textContent = timeframe ?? '';
+    tbTimeframeEl.title = timeframe ? `Timeframe: ${timeframe}` : 'Timeframe';
+    tbTimeframeEl.setAttribute('aria-label', timeframe ? `Timeframe: ${timeframe}` : 'Timeframe');
+  }
+  if (timeframe === undefined) closeTimeframePopup();
   if (tbDataEl) {
     const detail = data.period ? `${data.symbol} · ${data.period}` : data.symbol;
     tbDataEl.title = `Select OHLCV data\n${detail}`;
@@ -3386,16 +3477,25 @@ function syncToolbar(): void {
 
 tbDataEl?.addEventListener('click', () => vscode.postMessage({ type: 'selectData' }));
 
+tbTimeframeEl?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeGotoPopup();
+  if (tfPopupEl?.hidden === false) closeTimeframePopup();
+  else openTimeframePopup();
+});
+
 tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
   closeCandlePopup();
+  closeTimeframePopup();
   togglePlotsPopup(e.detail === 0);
 });
 
 tbCandleEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeTimeframePopup();
   if (candlePopupEl?.hidden === false) closeCandlePopup();
   else openCandlePopup();
 });
@@ -3595,6 +3695,7 @@ container.addEventListener('pointerleave', () => {
 
 tbBreakpointsEl?.addEventListener('click', (event) => {
   event.stopPropagation();
+  closeTimeframePopup();
   if (breakpointsPopupEl?.hidden) openBreakpointsPopup();
   else closeBreakpointsPopup();
 });
@@ -3690,9 +3791,17 @@ document.addEventListener('click', (event) => {
   closeCandlePopup();
 });
 
+document.addEventListener('click', (event) => {
+  if (!tfPopupEl || tfPopupEl.hidden) return;
+  const target = event.target as Node;
+  if (tfPopupEl.contains(target) || tbTimeframeEl?.contains(target)) return;
+  closeTimeframePopup();
+});
+
 window.addEventListener('resize', () => {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
   if (candlePopupEl && !candlePopupEl.hidden) positionCandlePopup();
+  if (tfPopupEl && !tfPopupEl.hidden) positionTimeframePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
 });
@@ -3735,6 +3844,7 @@ function closeGotoPopup(): void {
 
 tbGotoEl?.addEventListener('click', (e) => {
   e.stopPropagation();
+  closeTimeframePopup();
   if (gotoPopupEl?.hidden) openGotoPopup();
   else closeGotoPopup();
 });

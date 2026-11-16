@@ -392,6 +392,12 @@
         "icon": "$(search)"
       },
       {
+        "command": "pyneide.openLiveChart",
+        "title": "Open Live Chart",
+        "category": "PyneIDE",
+        "icon": "$(broadcast)"
+      },
+      {
         "command": "pyneide.openPlugins",
         "title": "Manage Plugins",
         "category": "PyneIDE",

@@ -49,7 +49,8 @@ def main() -> int:
                              "requirements (against --data's syminfo) as JSON, without running it")
     parser.add_argument("--data-only", action="store_true",
                         help="Stream the raw .ohlcv candles without running a script "
-                             "(chart preview); ignores --script/--debugpy-port")
+                             "(chart preview); ignores --script/--debugpy-port. With --live: "
+                             "a live chart of the candles only, no output files")
     parser.add_argument("--provider-service", action="store_true",
                         help="Long-lived NDJSON RPC endpoint for the symbol browser "
                              "(providers/brokers/symbols/syminfo/download); ignores "
@@ -150,7 +151,7 @@ def main() -> int:
             pass
 
     if args.live is not None:
-        if not args.script:
+        if not args.script and not args.data_only:
             emitter.emit({"e": "error", "message": "--script is required for a run",
                           "kind": "ValueError", "traceback": ""})
             return 1

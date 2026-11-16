@@ -76,6 +76,9 @@ export type ChartOutMessage =
   | { type: 'setPriceScale'; scale: PriceScaleId }
   | { type: 'setColorScheme'; scheme: ColorSchemeId }
   | { type: 'selectData' }
+  /** A live chart's toolbar timeframe pick; without `timeframe` the host asks
+   * for a custom one. */
+  | { type: 'selectTimeframe'; timeframe?: string }
   | { type: 'selectBreakpointBar'; timestamp: number }
   | { type: 'removeBreakpointBar'; timestamp: number }
   | { type: 'cancelBreakpointSelection' }

@@ -95,6 +95,16 @@ export interface SymbolBrowserDeps {
 
 export class SymbolBrowserPanel {
   private static readonly panels = new Map<string, SymbolBrowserPanel>();
+  /** Opens a live chart without a script on a provider string (the Live chart button). */
+  private static liveChartOpener:
+    | ((provider: string, env: { workdir: string; pythonBin: string }) => void)
+    | undefined;
+
+  static setLiveChartOpener(
+    opener: (provider: string, env: { workdir: string; pythonBin: string }) => void
+  ): void {
+    SymbolBrowserPanel.liveChartOpener = opener;
+  }
 
   private readonly panel: vscode.WebviewPanel;
   private readonly service: ProviderService;
@@ -286,6 +296,13 @@ export class SymbolBrowserPanel {
         break;
       case 'startLive':
         await this.startLive(msg);
+        break;
+      case 'openLiveChart':
+        await this.persist(msg.provider, msg.broker, msg.timeframe);
+        SymbolBrowserPanel.liveChartOpener?.(
+          liveProviderString(msg.provider, msg.broker, msg.symbol, msg.timeframe),
+          { workdir: this.deps.workdir, pythonBin: this.deps.pythonBin }
+        );
         break;
     }
   }
@@ -722,6 +739,7 @@ export class SymbolBrowserPanel {
           aria-label="The strategy trades on the history bars too and carries that position into the live chart. Off: it starts flat when the live feed begins.">?</span>
   </span>
   <button id="download" disabled>Download</button>
+  <button id="live-chart" class="secondary" title="Open a live chart of the symbol without a script" hidden>Live chart</button>
   <button id="cancel" class="secondary" hidden>Cancel</button>
   <div id="progress-wrap">
     <div id="progress-track"><div id="progress-fill"></div></div>

@@ -34,6 +34,25 @@ export function liveProviderString(
   return broker ? `${provider}:${broker}:${symbol}@${timeframe}` : `${provider}:${symbol}@${timeframe}`;
 }
 
+/** The timeframe of a provider string (after its last `@`), or undefined. */
+export function providerTimeframe(provider: string): string | undefined {
+  const at = provider.lastIndexOf('@');
+  return at >= 0 && at < provider.length - 1 ? provider.slice(at + 1) : undefined;
+}
+
+/** The provider string on another timeframe. */
+export function withTimeframe(provider: string, timeframe: string): string {
+  const at = provider.lastIndexOf('@');
+  return `${at >= 0 ? provider.slice(0, at) : provider}@${timeframe}`;
+}
+
+/** The tab title of a live chart without a script: the provider string
+ * without the provider name (`BYBIT:BTC/USDT:USDT@1 — Live`). */
+export function liveChartTitle(provider: string): string {
+  const colon = provider.indexOf(':');
+  return `${colon >= 0 ? provider.slice(colon + 1) : provider} — Live`;
+}
+
 function isLiveTarget(value: unknown): value is LiveTarget {
   if (typeof value !== 'object' || value === null) return false;
   const target = value as Record<string, unknown>;

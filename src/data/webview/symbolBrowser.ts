@@ -10,6 +10,7 @@
  * is dropped.
  */
 import { defaultBroker } from '../brokerDefaults';
+import { TIMEFRAMES } from '../timeframes';
 import type {
   BrokerInfo,
   ProviderInfo,
@@ -30,7 +31,6 @@ const SYMINFO_DEBOUNCE_MS = 150;
 const CUSTOM = '__custom__';
 // Field model mirrored from the TUI wizard (cli/utils/symbol_browser.py): same
 // options, same order, same defaults — only the widgets are VSCode's.
-const TIMEFRAMES = ['1', '5', '15', '30', '60', '240', '1D', '1W', '1M'];
 const FROM_OPTIONS: [string, string][] = [
   ['continue', 'Continue / resume'],
   ['1', '1 day back'],
@@ -88,6 +88,7 @@ const extraHelp = el<HTMLSpanElement>('extra-help');
 const historyTradesWrap = el<HTMLSpanElement>('history-trades-wrap');
 const historyTradesChk = el<HTMLInputElement>('history-trades');
 const downloadBtn = el<HTMLButtonElement>('download');
+const liveChartBtn = el<HTMLButtonElement>('live-chart');
 const cancelBtn = el<HTMLButtonElement>('cancel');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
 const progressFill = el<HTMLDivElement>('progress-fill');
@@ -264,7 +265,12 @@ function setLiveMode(live: LiveModeInfo | null): void {
       renderList();
     }
   }
-  setDownMsg(live ? `Live chart of ${live.script}: pick a symbol and a timeframe.` : '', '');
+  setDownMsg(
+    live
+      ? `${live.script ? `Live chart of ${live.script}` : 'Live chart'}: pick a symbol and a timeframe.`
+      : '',
+    ''
+  );
   updateDownloadEnabled();
 }
 
@@ -779,6 +785,10 @@ brokerSel.addEventListener('change', () => {
 });
 function updateDownloadEnabled(): void {
   downloadBtn.disabled = downloading || !selectedSymbol() || !currentTimeframe() || Boolean(targetError);
+  // A live chart without a script, beside the download of a live provider's symbol
+  liveChartBtn.hidden =
+    liveMode !== null || !providers.find((p) => p.name === providerSel.value)?.live;
+  liveChartBtn.disabled = !selectedSymbol() || !currentTimeframe();
 }
 
 function resolveFrom(): number | 'continue' | undefined {
@@ -800,6 +810,19 @@ function dateToEpoch(value: string): number | undefined {
   const ms = Date.parse(`${value}T00:00:00Z`);
   return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
 }
+
+liveChartBtn.addEventListener('click', () => {
+  const symbol = selectedSymbol();
+  const timeframe = currentTimeframe();
+  if (!symbol || !timeframe || liveMode) return;
+  vscode.postMessage({
+    type: 'openLiveChart',
+    provider: providerSel.value,
+    broker: currentMultiBroker ? brokerSel.value : undefined,
+    symbol,
+    timeframe,
+  });
+});
 
 downloadBtn.addEventListener('click', () => {
   const symbol = selectedSymbol();

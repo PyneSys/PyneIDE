@@ -15,7 +15,7 @@ export interface BrowserDefaults {
 
 /** The Symbol Browser picks the symbol of a live chart: Start Live replaces Download. */
 export interface LiveModeInfo {
-  /** File name of the script the live chart runs. */
+  /** File name of the script the live chart runs; empty for a chart without one. */
   script: string;
   /** A strategy: the "Trade on history" switch is shown. */
   strategy: boolean;
@@ -79,5 +79,7 @@ export type BrowserOutMessage =
       from: string;
       historyTrades: boolean;
     }
+  // Open a live chart of the symbol without a script, in a tab of its own.
+  | { type: 'openLiveChart'; provider: string; broker?: string; symbol: string; timeframe: string }
   // Persist the current selection so the next open restores it.
   | { type: 'persist'; provider?: string; broker?: string; timeframe?: string };

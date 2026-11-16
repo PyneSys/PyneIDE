@@ -12,6 +12,8 @@ const bundled = await build({
       "export { ColorTrack } from './src/chart/webview/colorTrack';",
       "export { DrawingStore, makeXResolver } from './src/chart/webview/drawings';",
       "export { buildTradeMarkerIndex } from './src/chart/webview/tradeMarkers';",
+      "export { liveChartTitle, providerTimeframe, withTimeframe } from './src/run/liveTarget';",
+      "export { parseTimeframe } from './src/data/timeframes';",
     ].join('\n'),
     resolveDir: process.cwd(),
     loader: 'ts',
@@ -24,7 +26,26 @@ vm.runInNewContext(bundled.outputFiles[0].text, { module, exports: module.export
 const {
   ColorTrack, DrawingStore, LIVE_MAX_BARS, LIVE_TRIM_BARS, TailCalc, buildTradeMarkerIndex,
   datumReach, foldColorRows, formatCountdown, liveTrimCount, makeXResolver, msToPeriodEnd, periodMs, upsertLastBar,
+  liveChartTitle, parseTimeframe, providerTimeframe, withTimeframe,
 } = module.exports;
+
+test('a provider string switches timeframe after its last @', () => {
+  assert.equal(providerTimeframe('ccxt:BYBIT:BTC/USDT:USDT@1'), '1');
+  assert.equal(providerTimeframe('capitalcom:EURUSD@1D'), '1D');
+  assert.equal(providerTimeframe('capitalcom:EURUSD'), undefined);
+  assert.equal(withTimeframe('ccxt:BYBIT:BTC/USDT:USDT@1', '240'), 'ccxt:BYBIT:BTC/USDT:USDT@240');
+  assert.equal(withTimeframe('capitalcom:EURUSD', '1D'), 'capitalcom:EURUSD@1D');
+  assert.equal(liveChartTitle('ccxt:BYBIT:BTC/USDT:USDT@1'), 'BYBIT:BTC/USDT:USDT@1 — Live');
+});
+
+test('a custom timeframe is a TradingView timeframe', () => {
+  assert.equal(parseTimeframe(' 90 '), '90');
+  assert.equal(parseTimeframe('2d'), '2D');
+  assert.equal(parseTimeframe('W'), 'W');
+  for (const bad of ['', '0', '0D', '1H', 'D1', '1.5', 'abc', '30S', 'S']) {
+    assert.equal(parseTimeframe(bad), undefined, bad);
+  }
+});
 
 test('a bar with the last bar timestamp replaces it, a later one is appended', () => {
   const bars = [{ t: 1, v: 'a' }, { t: 2, v: 'b' }];

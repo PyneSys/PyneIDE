@@ -139,8 +139,9 @@ export class ChartPanel {
    * replays the same chart. Undefined until the first `start` event. */
   private snap: ChartSnapshot | undefined;
   /** Stable tab title (`<script> — Chart`); never changes on run/debug so the
-   * tab stays recognizable across previews, runs and debug sessions. */
-  private readonly title: string;
+   * tab stays recognizable across previews, runs and debug sessions. A live
+   * chart without a script names its symbol instead, and follows a new pick. */
+  private title: string;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -150,9 +151,17 @@ export class ChartPanel {
     private readonly onViewStateChanged?: (active: boolean) => void,
     private readonly onSelectBreakpointBar?: (timestamp: number) => void,
     private readonly onRemoveBreakpointBar?: (timestamp: number) => void,
-    private readonly onCancelBreakpointSelection?: () => void
+    private readonly onCancelBreakpointSelection?: () => void,
+    private readonly onSelectTimeframe?: (timeframe?: string) => void,
+    title?: string
   ) {
-    this.title = `${path.parse(chartKey).name} — Chart`;
+    this.title = title ?? `${path.parse(chartKey).name} — Chart`;
+  }
+
+  /** Rename the tab (a live chart without a script on a new symbol). */
+  setTitle(title: string): void {
+    this.title = title;
+    if (this.panel) this.panel.title = title;
   }
 
   /** Whether the chart currently has a live webview tab (not just a dormant snapshot). */
@@ -309,8 +318,8 @@ export class ChartPanel {
     this.post({ type: 'barBase', base: s.barBase });
   }
 
-  /** Create (if needed) and reveal the panel. The title is fixed at
-   * construction and never changes on run/debug. */
+  /** Create (if needed) and reveal the panel. The title never changes on
+   * run/debug. */
   reveal(): void {
     if (this.panel) {
       this.panel.reveal(undefined, true);
@@ -376,6 +385,11 @@ export class ChartPanel {
       }
       case 'selectData':
         this.onSelectData();
+        break;
+      case 'selectTimeframe':
+        if (msg.timeframe === undefined || typeof msg.timeframe === 'string') {
+          this.onSelectTimeframe?.(msg.timeframe);
+        }
         break;
       case 'editProperties':
         void vscode.commands.executeCommand('pyneide.editInputs', {
@@ -529,6 +543,15 @@ export class ChartPanel {
     flex: 0 0 auto; color: var(--vscode-descriptionForeground);
     font-size: 11px; font-variant-numeric: tabular-nums;
   }
+  #toolbar .symbol-period[hidden] { display: none; }
+  #toolbar #tb-timeframe {
+    height: 28px; min-width: 28px; padding: 0 8px; border-radius: 7px;
+    font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }
+  #toolbar #tb-timeframe[hidden] { display: none; }
+  #toolbar #tb-timeframe.active {
+    background: var(--vscode-toolbar-activeBackground, var(--vscode-list-hoverBackground, #333));
+  }
   #debug-position { color: var(--vscode-editorWarning-foreground, #cca700); white-space: nowrap; }
   /* Live feed state; the dot pulses while the feed delivers. */
   #live-status {
@@ -654,6 +677,26 @@ export class ChartPanel {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
   }
+  #tf-popup {
+    position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    min-width: 96px; padding: 4px; font-size: 11px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #tf-popup[hidden] { display: none; }
+  #tf-popup .tf-row {
+    display: flex; align-items: center; gap: 7px; padding: 3px 6px;
+    cursor: pointer; border-radius: 3px; font-variant-numeric: tabular-nums;
+  }
+  #tf-popup .tf-row:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #tf-popup .tf-row.active {
+    color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+    background: var(--vscode-list-activeSelectionBackground, #04395e);
+  }
+  #tf-popup .tf-name { flex: 1 1 auto; white-space: nowrap; }
+  #tf-popup .tf-check { flex: 0 0 auto; width: 10px; text-align: center; }
+  #tf-popup .tf-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
   /* Price-scale controls, parked in the corner between the two axes the way a
      trading chart does it: they belong to the price axis, not to the toolbar. */
   #scale-controls {
@@ -1029,6 +1072,8 @@ export class ChartPanel {
         <span id="tb-symbol-period" class="symbol-period"></span>
       </span>
     </button>
+    <button id="tb-timeframe" title="Timeframe of the live chart" aria-label="Timeframe"
+            aria-pressed="false" hidden></button>
   </div>
   <span class="sep"></span>
   <div class="toolbar-group">
@@ -1168,9 +1213,17 @@ export class ChartManager implements RunListener {
   /** Data-preview panels keyed by `.ohlcv` path: kept alive by their own
    * webview (not an editor tab), retired when that webview is closed. */
   private readonly dataPreviews = new Set<string>();
+  /** Live charts without a script, keyed by their own id: like a data preview,
+   * kept alive by their webview and retired when it closes. */
+  private readonly liveCharts = new Set<string>();
   /** Set by the host: invoked when a panel's Data button is clicked, with the
    * script's chart key, to re-pick and reload that chart's data. */
   onSelectData: ((chartKey: string) => void) | undefined;
+  /** Set by the host: a live chart's toolbar timeframe pick (undefined: ask
+   * for a custom one). */
+  onSelectTimeframe: ((chartKey: string, timeframe: string | undefined) => void) | undefined;
+  /** Set by the host: the tab of a live chart without a script was closed. */
+  onLiveChartClosed: ((chartKey: string) => void) | undefined;
   /** Native source breakpoints projected into visual timestamps for a script. */
   breakpointTargetsForChart: ((chartKey: string) => ChartBreakpointTarget[]) | undefined;
   onSelectBreakpointBar: ((chartKey: string, timestamp: number) => void) | undefined;
@@ -1340,6 +1393,27 @@ export class ChartManager implements RunListener {
     this.closeChart(filePath);
   }
 
+  /**
+   * Open (or focus) a live chart without a script, keyed by its own id; its
+   * run's events go to it through {@link onEvent}. Closing its tab retires it.
+   */
+  openLiveChart(chartKey: string, title: string): void {
+    let panel = this.panels.get(chartKey);
+    if (!panel) {
+      panel = this.createPanel(chartKey, () => this.retireLiveChart(chartKey), title);
+      this.panels.set(chartKey, panel);
+      this.liveCharts.add(chartKey);
+    } else {
+      panel.setTitle(title);
+    }
+    panel.reveal();
+  }
+
+  private retireLiveChart(chartKey: string): void {
+    this.closeChart(chartKey);
+    this.onLiveChartClosed?.(chartKey);
+  }
+
   /** Open (or focus) a script's chart panel on demand — used by "Open chart". */
   reveal(chartKey: string): ChartPanel {
     const panel = this.panelFor(chartKey);
@@ -1354,7 +1428,8 @@ export class ChartManager implements RunListener {
   reconcile(): void {
     const live = openChartKeys();
     for (const [key, panel] of this.panels) {
-      if (!panel.isOpen() && !live.has(key) && !this.dataPreviews.has(key) && !this.isPinned?.(key)) {
+      if (!panel.isOpen() && !live.has(key) && !this.dataPreviews.has(key) &&
+          !this.liveCharts.has(key) && !this.isPinned?.(key)) {
         this.closeChart(key);
       }
     }
@@ -1363,6 +1438,7 @@ export class ChartManager implements RunListener {
   /** Dispose a chart's webview (if any) and drop its snapshot. */
   closeChart(chartKey: string): void {
     this.dataPreviews.delete(chartKey);
+    this.liveCharts.delete(chartKey);
     const panel = this.panels.get(chartKey);
     if (!panel) return;
     this.panels.delete(chartKey);
@@ -1372,20 +1448,26 @@ export class ChartManager implements RunListener {
   private panelFor(chartKey: string): ChartPanel {
     let panel = this.panels.get(chartKey);
     if (!panel) {
-      panel = new ChartPanel(
-        this.context,
-        chartKey,
-        () => this.onSelectData?.(chartKey),
-        () => this.reconcile(),
-        (active) => this.updateActiveChart(chartKey, active),
-        (timestamp) => this.onSelectBreakpointBar?.(chartKey, timestamp),
-        (timestamp) => this.onRemoveBreakpointBar?.(chartKey, timestamp),
-        () => this.onCancelBreakpointSelection?.(chartKey)
-      );
+      panel = this.createPanel(chartKey, () => this.reconcile());
       panel.setBreakpointTargets(this.breakpointTargetsForChart?.(chartKey) ?? []);
       this.panels.set(chartKey, panel);
     }
     return panel;
+  }
+
+  private createPanel(chartKey: string, onWebviewClosed: () => void, title?: string): ChartPanel {
+    return new ChartPanel(
+      this.context,
+      chartKey,
+      () => this.onSelectData?.(chartKey),
+      onWebviewClosed,
+      (active) => this.updateActiveChart(chartKey, active),
+      (timestamp) => this.onSelectBreakpointBar?.(chartKey, timestamp),
+      (timestamp) => this.onRemoveBreakpointBar?.(chartKey, timestamp),
+      () => this.onCancelBreakpointSelection?.(chartKey),
+      (timeframe) => this.onSelectTimeframe?.(chartKey, timeframe),
+      title
+    );
   }
 
   private updateActiveChart(chartKey: string, active: boolean): void {

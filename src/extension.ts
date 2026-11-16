@@ -46,6 +46,7 @@ import {
   updateData,
   type DataActionContext,
 } from './run/dataSelect';
+import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveChartService';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
@@ -166,7 +167,39 @@ export function activate(context: vscode.ExtensionContext): void {
   registerPyneDebug(context, runService);
   const chartManager = new ChartManager(context);
   runService.attachChart(chartManager);
-  chartManager.onSelectData = (chartKey) => void runService.reselectChartData(chartKey);
+  const pickLiveTarget = (
+    request: Parameters<typeof SymbolBrowserPanel.pickLive>[2],
+    env: LiveChartEnv
+  ) =>
+    SymbolBrowserPanel.pickLive(
+      context,
+      {
+        pythonBin: env.pythonBin,
+        bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+        workdir: env.workdir,
+        output,
+      },
+      request
+    );
+  // Live charts without a script: their own tabs and bridges, beside the run slot
+  const liveCharts = new LiveChartService(
+    context,
+    chartManager,
+    runService.runOutput,
+    () => resolveLiveChartEnv(manager),
+    pickLiveTarget
+  );
+  liveCharts.register();
+  SymbolBrowserPanel.setLiveChartOpener((provider, env) => void liveCharts.openProvider(provider, env));
+  chartManager.onSelectData = (chartKey) =>
+    void (isLiveChartKey(chartKey)
+      ? liveCharts.reselect(chartKey)
+      : runService.reselectChartData(chartKey));
+  chartManager.onSelectTimeframe = (chartKey, timeframe) =>
+    void (isLiveChartKey(chartKey)
+      ? liveCharts.setTimeframe(chartKey, timeframe)
+      : runService.changeLiveTimeframe(chartKey, timeframe));
+  chartManager.onLiveChartClosed = (chartKey) => liveCharts.onChartClosed(chartKey);
   new ChartBreakpointService(context, chartManager).register();
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.openChartSource', () => chartManager.openSource()),
@@ -226,18 +259,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void openSymbolBrowser(context, manager, output, prefill)
   );
   // Run Live picks its symbol, timeframe and history in the same browser
-  runService.setPickLiveTarget((request, env) =>
-    SymbolBrowserPanel.pickLive(
-      context,
-      {
-        pythonBin: env.pythonBin,
-        bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
-        workdir: env.workdir,
-        output,
-      },
-      request
-    )
-  );
+  runService.setPickLiveTarget(pickLiveTarget);
   // "Convert to full @pyne" quick fix on Edge-profile violations.
   new EdgeQuickFixProvider().register(context);
   // Declared-type hovers when Pylance (or another pyright) supersedes the
@@ -304,6 +326,26 @@ export function activate(context: vscode.ExtensionContext): void {
   const updateTimer = setInterval(() => void manager.autoUpdateCheck(), 60 * 60 * 1000);
   context.subscriptions.push({ dispose: () => clearInterval(updateTimer) });
   void pineLs.initialize();
+}
+
+/**
+ * The workdir and Python of a live chart without a script: the workspace's, as
+ * the Symbol Browser resolves them.
+ */
+async function resolveLiveChartEnv(manager: EnvManager): Promise<LiveChartEnv | undefined> {
+  manager = manager.forResource(undefined);
+  const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
+  const workdir = resolveWorkspaceWorkdir(folder);
+  if (!workdir?.exists) {
+    void vscode.window.showWarningMessage(
+      'PyneIDE: no Pyne workspace found — initialize one first.'
+    );
+    return undefined;
+  }
+  const pythonBin = await manager.ensureReady(
+    'A live chart uses the pyne provider service, so the Python environment must be set up first.'
+  );
+  return pythonBin ? { workdir: workdir.path, pythonBin } : undefined;
 }
 
 /**

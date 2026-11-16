@@ -48,12 +48,15 @@ import {
   type TradeRecord,
 } from './bridgeClient';
 import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
+import { askTimeframe } from './liveChartService';
 import { LiveDownloadProgress } from './liveDownloadProgress';
 import {
   DEFAULT_LIVE_FROM,
   forgetLiveTarget,
   getLiveTarget,
+  providerTimeframe,
   setLiveTarget,
+  withTimeframe,
   type LiveTarget,
 } from './liveTarget';
 import { runtimeErrorLocation } from './runtimeError';
@@ -150,6 +153,10 @@ export class RunService {
   // channel created without it silently falls back to plaintext and loses the
   // level/timestamp colouring (microsoft/vscode#176902, closed as not planned).
   private readonly output = logHub.wrap(vscode.window.createOutputChannel('PyneIDE Run', 'log'));
+  /** The channel of the runs' logs; live charts without a script log there too. */
+  get runOutput(): vscode.OutputChannel {
+    return this.output;
+  }
   /** Runtime errors on Pyne sources, or Pine sources via the .py.map sourcemap. */
   private readonly runtimeDiagnostics = vscode.languages.createDiagnosticCollection('pyne-runtime');
   private readonly statusItem = vscode.window.createStatusBarItem(
@@ -635,6 +642,22 @@ export class RunService {
     }
     if (!script) return;
     await this.executeRun({ ...script, live: target });
+  }
+
+  /**
+   * A script's live chart switched timeframe on its toolbar (undefined: ask for
+   * a custom one): remember the target on the new timeframe and run live on it.
+   */
+  async changeLiveTimeframe(chartKey: string, timeframe: string | undefined): Promise<void> {
+    const target = getLiveTarget(this.context, chartKey);
+    if (!target) return;
+    const picked = timeframe ?? (await askTimeframe(providerTimeframe(target.provider)));
+    if (!picked) return;
+    await setLiveTarget(this.context, chartKey, {
+      ...target,
+      provider: withTimeframe(target.provider, picked),
+    });
+    await this.runLive(vscode.Uri.file(chartKey));
   }
 
   private async pickLive(

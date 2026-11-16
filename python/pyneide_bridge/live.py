@@ -3,6 +3,9 @@
 Downloads the provider's history into memory (nothing is written into the
 workdir's ``data``), runs the script on it, then keeps running on the provider's
 live feed. Data only: the bridge never trades.
+With ``--data-only`` the chart has no script: an empty indicator
+(:data:`CANDLES_SCRIPT`) runs in its place, so only the candles stream and no
+output file is written.
 It has no broker flag and never creates a broker; a provider plugin that is
 also a broker only streams market data here, like any data provider.
 
@@ -31,10 +34,12 @@ live feed then delivers its close.
 from __future__ import annotations
 
 import inspect
+import os
 import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -260,9 +265,12 @@ def live_supported() -> str | None:
     return None
 
 
+#: The script of a live chart without one: an empty overlay indicator.
+CANDLES_SCRIPT = Path(__file__).with_name("live_candles.py")
+
 #: Backtest options a live run does not take, with their flag names.
 _BACKTEST_ONLY = (
-    ("data", "--data"), ("data_only", "--data-only"), ("time_from", "--time-from"),
+    ("data", "--data"), ("time_from", "--time-from"),
     ("time_to", "--time-to"), ("timeframe", "--timeframe"), ("security", "--security"),
     ("debugpy_port", "--debugpy-port"), ("profile", "--profile"),
     ("robustness", "--robustness"),
@@ -270,7 +278,9 @@ _BACKTEST_ONLY = (
 
 
 def run_live(args: Any, emitter: Emitter, control: Control) -> int:
-    """Run the script on a provider's history, then on its live feed."""
+    """Run the script on a provider's history, then on its live feed. With
+    ``--data-only`` the chart has no script: the run streams the candles only
+    and writes no output file."""
     from . import runner as backtest
 
     reason = live_supported()
@@ -284,6 +294,10 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
             raise ValueError(f"{flag} cannot be used with --live")
     if args.live_output_limit is not None and args.live_output_limit < 0:
         raise ValueError("--live-output-limit cannot be negative")
+    data_only = bool(getattr(args, "data_only", False))
+    if data_only and (args.history_trades or args.live_output_limit is not None):
+        raise ValueError("--history-trades and --live-output-limit need a script, "
+                         "not --data-only")
 
     from pynecore.core.live_runner import LiveStop
     from pynecore.core.provider_download import (DownloadStopped,
@@ -292,7 +306,12 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     from pynecore.core.script_runner import ScriptRunner
 
     workdir = Path(args.workdir).resolve()
-    script = backtest._resolve_script(workdir, args.script)
+    if data_only:
+        script = CANDLES_SCRIPT
+        # The script lives in the extension: no settings file is written beside it
+        os.environ["PYNE_SAVE_SCRIPT_TOML"] = "0"
+    else:
+        script = backtest._resolve_script(workdir, args.script)
 
     # Stops a download retry wait and the live stream
     stop = LiveStop()
@@ -317,18 +336,21 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     syminfo = history.syminfo
     bars = history.bars
     assert bars is not None
-    output_dir = workdir / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    plot_path = output_dir / f"{script.stem}.csv"
-    strat_path = output_dir / f"{script.stem}_strat.csv"
-    trade_path = output_dir / f"{script.stem}_trade.csv"
-    viz_path = output_dir / f"{script.stem}_viz.ndjson"
-    # Stale results of an earlier backtest of the script
-    (output_dir / f"{script.stem}_robustness.json").unlink(missing_ok=True)
+    if data_only:
+        plot_path = strat_path = trade_path = viz_path = None
+    else:
+        output_dir = workdir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = output_dir / f"{script.stem}.csv"
+        strat_path = output_dir / f"{script.stem}_strat.csv"
+        trade_path = output_dir / f"{script.stem}_trade.csv"
+        viz_path = output_dir / f"{script.stem}_viz.ndjson"
+        # Stale results of an earlier backtest of the script
+        (output_dir / f"{script.stem}_robustness.json").unlink(missing_ok=True)
 
-    lib_dir = workdir / "scripts" / "lib"
-    if lib_dir.is_dir():
-        sys.path.insert(0, str(lib_dir))
+        lib_dir = workdir / "scripts" / "lib"
+        if lib_dir.is_dir():
+            sys.path.insert(0, str(lib_dir))
 
     time_from_ts = history.time_from_ts if history.time_from_ts is not None \
         else (bars[0].timestamp if bars else 0)
@@ -349,35 +371,40 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
         viz_path=viz_path,
         chart_provider_name=history.parsed_string.provider,
         chart_provider_instance=history.provider_instance,
+        # The security contexts download their history from the chart's start
+        time_from=datetime.fromtimestamp(time_from_ts / 1000, UTC),
         config_dir=workdir / "config",
     )
-    runner.viz_writer = backtest._make_viz_writer(viz_path, args.live, runner)
-    limit_mb = args.live_output_limit if args.live_output_limit is not None \
-        else DEFAULT_OUTPUT_LIMIT_MB
-    output_cap = OutputCap(runner, [plot_path, viz_path], limit_mb, emitter) \
-        if limit_mb > 0 else None
+    output_cap: OutputCap | None = None
+    if viz_path is not None:
+        runner.viz_writer = backtest._make_viz_writer(viz_path, args.live, runner)
+        limit_mb = args.live_output_limit if args.live_output_limit is not None \
+            else DEFAULT_OUTPUT_LIMIT_MB
+        if limit_mb > 0:
+            output_cap = OutputCap(runner, [plot_path, viz_path], limit_mb, emitter)
     is_strategy = backtest._script_type_name(runner.script) == "strategy"
     runs_on_ticks = not is_strategy or bool(getattr(runner.script, "calc_on_every_tick",
                                                     False))
 
     emitter.emit({
         "e": "start",
-        "script": str(script),
-        "scriptTitle": getattr(runner.script, "title", "") or "",
-        "scriptShortTitle": getattr(runner.script, "shorttitle", "") or "",
+        "script": "" if data_only else str(script),
+        "scriptTitle": "" if data_only else getattr(runner.script, "title", "") or "",
+        "scriptShortTitle": "" if data_only else getattr(runner.script, "shorttitle", "") or "",
         "scriptType": backtest._script_type_name(runner.script),
         "overlay": bool(getattr(runner.script, "overlay", False)),
         "initialCapital": num_or_none(runner.script.initial_capital)
         if is_strategy else None,
+        **({"dataOnly": True} if data_only else {}),
         "syminfo": backtest._serialize_syminfo(syminfo),
         "data": args.live,
         "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},
         "live": {"provider": args.live, "historyTrades": bool(args.history_trades)},
         "outputs": {
-            "plot": str(plot_path),
+            "plot": str(plot_path) if plot_path is not None else "",
             "strat": str(strat_path) if is_strategy else None,
             "trades": str(trade_path) if is_strategy else None,
-            "viz": str(viz_path),
+            "viz": str(viz_path) if viz_path is not None else None,
             "profile": None,
             "robustness": None,
         },

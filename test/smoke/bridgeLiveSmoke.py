@@ -251,5 +251,55 @@ class LiveSmoke(unittest.TestCase):
         self.assertEqual(events[-1], {'e': 'end', 'bars': 8, 'cancelled': False})
 
 
+    def test_data_only_streams_the_candles_without_a_script(self):
+        """A live chart without a script streams the history and the live
+        candles, starts as data only and writes no output file"""
+        from pynecore.core.script_runner import LIVE_TRANSITION
+        from pyneide_bridge.control import Control
+
+        capture = Capture()
+        with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:
+            workdir, last_ts = make_workdir(Path(temp), [])
+            ts = last_ts + MINUTE
+
+            def scripted_feed(_history, *, last_historical_timestamp, on_feed_status=None,
+                              stop=None):
+                yield LIVE_TRANSITION
+                capture.wait_for(lambda evs: any(ev['e'] == 'live' for ev in evs))
+                yield candle(ts, 111.0, False)
+                capture.wait_for(lambda evs: len(ticks(evs)) == 1)
+                yield candle(ts, 112.0, True)
+
+            args = SimpleNamespace(
+                workdir=str(workdir), script=None, data_only=True, live='replay:TEST@1',
+                live_from='-5', history_trades=False, live_output_limit=None, batch_size=500)
+            with patch('pynecore.core.provider_download.open_live_stream', scripted_feed):
+                self.assertEqual(run_live(args, capture, Control()), 0)
+            self.assertFalse((workdir / 'output').exists())
+            self.assertFalse((workdir / 'data').exists())
+
+        events = capture.events
+        start = next(ev for ev in events if ev['e'] == 'start')
+        self.assertTrue(start['dataOnly'])
+        self.assertEqual(start['script'], '')
+        self.assertEqual(start['outputs']['plot'], '')
+        self.assertIsNone(start['outputs']['viz'])
+        self.assertEqual(start['live'], {'provider': 'replay:TEST@1', 'historyTrades': False})
+        self.assertNotIn('plotKeys', [ev['e'] for ev in events])
+        self.assertEqual([ev['d'][4] for ev in ticks(events)], [111.0])
+        rows = [row for ev in events if ev['e'] == 'bars' for row in ev['d']]
+        self.assertEqual([row[4] for row in rows], [105.0, 106.0, 107.0, 108.0, 109.0, 112.0])
+        self.assertEqual(events[-1], {'e': 'end', 'bars': 6, 'cancelled': False})
+
+    def test_data_only_refuses_the_script_options(self):
+        """--history-trades and --live-output-limit belong to a script run"""
+        from pyneide_bridge.control import Control
+
+        args = SimpleNamespace(
+            workdir='.', script=None, data_only=True, live='replay:TEST@1', live_from='-5',
+            history_trades=True, live_output_limit=None, batch_size=500)
+        with self.assertRaises(ValueError):
+            run_live(args, Capture(), Control())
+
 if __name__ == '__main__':
     unittest.main()

@@ -164,6 +164,12 @@ timeframe and how much history to start from; later runs reuse that choice, and
 too and carry that position into the live feed (**Trade on history**, on by
 default), or start flat.
 
+A live chart needs no script: **Open Live Chart** (or **Live chart** in the Symbol
+Browser) opens a provider's candles in a tab of its own, and several can stay open
+beside a running script. The timeframe button on a live chart's toolbar switches it
+to another timeframe. A `request.security()` call of a live script reads its symbol
+from the same provider.
+
 The chart follows the newest bar while you stay at its right edge, shows a
 countdown to the bar's close, and the status bar and the chart toolbar show the
 state of the feed (live, reconnecting, market closed). A live chart keeps the
