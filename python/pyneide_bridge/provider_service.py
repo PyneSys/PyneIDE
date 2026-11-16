@@ -42,7 +42,7 @@ from pynecore.core.download_runner import (DownloadProgress, DownloadPlan,
                                            download_to_file)
 from pynecore.core.ohlcv import OHLCVReader
 from pynecore.core.provider_string import parse_provider_string
-from pynecore.core.plugin import (ProviderPlugin, discover_plugins,
+from pynecore.core.plugin import (LiveProviderPlugin, ProviderPlugin, discover_plugins,
                                    get_plugin_metadata, get_plugin_summary,
                                    is_retryable_provider_error, load_plugin)
 from pynecore.core.syminfo import SymInfo
@@ -121,6 +121,7 @@ def _list_providers() -> list[dict[str, Any]]:
             "name": name,
             "display_name": getattr(cls, "plugin_name", "") or name,
             "multi_broker": bool(getattr(cls, "multi_broker", False)),
+            "live": issubclass(cls, LiveProviderPlugin),
             "extra_data": ({"label": extra_data.label, "help": extra_data.help}
                            if extra_data is not None else None),
             "summary": get_plugin_summary(cls) or meta["description"],

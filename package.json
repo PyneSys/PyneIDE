@@ -289,6 +289,20 @@
         "enablement": "pyneide.isPyneScript || resourceLangId == pine"
       },
       {
+        "command": "pyneide.runLive",
+        "title": "Run Live Chart",
+        "category": "PyneIDE",
+        "icon": "$(broadcast)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.changeLiveSymbol",
+        "title": "Select Live Symbol and Run…",
+        "category": "PyneIDE",
+        "icon": "$(broadcast)",
+        "enablement": "pyneide.isPyneScript || resourceLangId == pine"
+      },
+      {
         "command": "pyneide.openChart",
         "title": "Open Chart",
         "category": "PyneIDE",
@@ -318,7 +332,7 @@
         "command": "pyneide.pauseRun",
         "title": "Pause Run at Next Bar",
         "category": "PyneIDE",
-        "enablement": "pyneide.runActive && !pyneide.runPaused"
+        "enablement": "pyneide.runActive && !pyneide.runPaused && !pyneide.runLive"
       },
       {
         "command": "pyneide.resumeRun",
@@ -331,14 +345,14 @@
         "title": "Next Bar",
         "category": "PyneIDE",
         "icon": "$(triangle-right)",
-        "enablement": "pyneide.runActive"
+        "enablement": "pyneide.runActive && !pyneide.runLive"
       },
       {
         "command": "pyneide.runToBar",
         "title": "Run to Bar…",
         "category": "PyneIDE",
         "icon": "$(run-below)",
-        "enablement": "pyneide.runActive"
+        "enablement": "pyneide.runActive && !pyneide.runLive"
       },
       {
         "command": "pyneide.cancelRun",
@@ -637,6 +651,16 @@
         },
         {
           "command": "pyneide.changeRunData",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@3"
+        },
+        {
+          "command": "pyneide.runLive",
+          "when": "resourceLangId == pine || pyneide.isPyneScript",
+          "group": "pyneide@3"
+        },
+        {
+          "command": "pyneide.changeLiveSymbol",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "pyneide@3"
         },
@@ -1414,11 +1438,19 @@
             "order": 3,
             "markdownDescription": "Reveal the **PyneIDE Run** output channel the first time a run writes a log line, so `log.info()` output is not buried under the other channels. The editor keeps the focus; turn off to never switch automatically."
           },
+          "pyneide.live.outputLimitMB": {
+            "type": "integer",
+            "default": 256,
+            "minimum": 0,
+            "scope": "resource",
+            "order": 4,
+            "markdownDescription": "Size limit of a live chart's saved output: the plot CSV and the visualization file together, in MB. At the limit they end as complete files and later bars are shown on the chart but not saved, so a chart reopened later shows the run up to the limit. `0`: no limit."
+          },
           "pyneide.debug.justMyCode": {
             "type": "boolean",
             "default": true,
             "scope": "resource",
-            "order": 4,
+            "order": 5,
             "markdownDescription": "Debug only the script's own code: stepping stays out of PyneCore and standard-library internals. Turn off to step into PyneCore itself."
           },
           "pyneide.chart.candleStyle": {
@@ -1441,7 +1473,7 @@
               "Closing price as a filled area."
             ],
             "scope": "window",
-            "order": 5,
+            "order": 6,
             "markdownDescription": "How price is drawn on the chart. The chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart."
           },
           "pyneide.chart.colorScheme": {
@@ -1458,7 +1490,7 @@
               "Blue up, orange down — readable with any form of color blindness."
             ],
             "scope": "window",
-            "order": 6,
+            "order": 7,
             "markdownDescription": "Which colors the chart says up and down in — rising/falling bars, strategy trade markers, the volume bars and the equity curve. The **Colors** section of the chart toolbar's **Chart style** button writes this setting, so a pick made there is remembered and applies to every chart. Colors a script sets itself are never overridden."
           },
           "pyneide.chart.priceScale": {
@@ -1475,14 +1507,14 @@
               "Percent change from the first visible bar's close."
             ],
             "scope": "window",
-            "order": 7,
+            "order": 8,
             "markdownDescription": "How the chart's price axis maps values to the screen. The **L** and **%** buttons in the chart's bottom-right corner write this setting, so a pick made there is remembered and applies to every chart."
           },
           "pyneide.reportProblem.includeLogs": {
             "type": "boolean",
             "default": true,
             "scope": "machine",
-            "order": 8,
+            "order": 9,
             "markdownDescription": "Attach the recent output-channel logs to a **Report a Problem** submission. Paths and credential-shaped strings are removed before sending; nothing is ever sent without an explicit confirmation."
           }
         }

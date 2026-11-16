@@ -1,7 +1,8 @@
 """Live chart runs: ``--live <provider-string>``.
 
-Downloads the provider's history into the workdir, runs the script on it, then
-keeps running on the provider's live feed. Data only: the bridge never trades.
+Downloads the provider's history into memory (nothing is written into the
+workdir's ``data``), runs the script on it, then keeps running on the provider's
+live feed. Data only: the bridge never trades.
 It has no broker flag and never creates a broker; a provider plugin that is
 also a broker only streams market data here, like any data provider.
 
@@ -48,6 +49,12 @@ DOWNLOAD_PROGRESS_INTERVAL_SECONDS = 0.1
 
 #: The ``kind`` of the error a PyneCore without live chart support gets.
 UNSUPPORTED_KIND = "LiveUnsupported"
+
+#: Default size limit of a live run's plot CSV and viz NDJSON together, in MB.
+DEFAULT_OUTPUT_LIMIT_MB = 256
+
+#: Bytes in an MB of ``--live-output-limit``.
+BYTES_PER_MB = 1024 * 1024
 
 
 class LiveCancelled(Exception):
@@ -102,6 +109,46 @@ class TickThrottle:
         self._last = time.monotonic()
 
 
+class OutputCap:
+    """Stops writing a live run's plot CSV and viz NDJSON once the two files
+    together reach a size.
+
+    The files are what a chart reopened without a run shows, so they end as
+    complete records at the bar of the limit: the viz file gets its drawings
+    snapshot and end record, the CSV is closed. The chart stream goes on.
+    """
+
+    def __init__(self, runner: Any, paths: list[Path], limit_mb: int, emitter: Emitter):
+        self._runner = runner
+        self._paths = paths
+        self._limit_mb = limit_mb
+        self._emitter = emitter
+        self.reached = False
+
+    def size(self) -> int:
+        """The current size of the files, in bytes."""
+        return sum(path.stat().st_size for path in self._paths if path.exists())
+
+    def check(self) -> None:
+        """Stop the files when they reached the limit; called after each closed bar."""
+        if self.reached or self.size() < self._limit_mb * BYTES_PER_MB:
+            return
+        self.reached = True
+        plot_writer = self._runner.plot_writer
+        if plot_writer is not None:
+            # The runner checks the attribute on every bar and at its end
+            self._runner.plot_writer = None
+            plot_writer.close()
+        viz_writer = self._runner.viz_writer
+        if viz_writer is not None:
+            viz_writer.finish()
+        self._emitter.emit({
+            "e": "log", "level": "warning",
+            "message": f"the live run's output files reached {self._limit_mb} MB: later bars are "
+                       "shown on the chart but not saved",
+        })
+
+
 class LiveFeed:
     """The live part of a run: what :func:`~pyneide_bridge.runner._stream_run`
     needs to stream the forming bar.
@@ -109,12 +156,16 @@ class LiveFeed:
     :ivar runs_on_ticks: Whether the script runs on every live update (always for
         an indicator, with ``calc_on_every_tick`` for a strategy).
     :ivar active: Set once the history is over.
+    :ivar output_cap: The size limit of the output files, checked after each live
+        bar close.
     """
 
-    def __init__(self, emitter: Emitter, runs_on_ticks: bool):
+    def __init__(self, emitter: Emitter, runs_on_ticks: bool,
+                 output_cap: OutputCap | None = None):
         self.ticks = TickThrottle(emitter)
         self.runs_on_ticks = runs_on_ticks
         self.active = False
+        self.output_cap = output_cap
 
     @staticmethod
     def watch_transition(source: Iterator[Any], on_live: Callable[[], None]) -> Iterator[Any]:
@@ -200,8 +251,9 @@ def live_supported() -> str | None:
         from pynecore.core.script_runner import ScriptRunner
     except ImportError:
         return unsupported
+    download_params = inspect.signature(download_provider_history_resilient).parameters
     if "stop" not in inspect.signature(open_live_stream).parameters \
-            or "stop" not in inspect.signature(download_provider_history_resilient).parameters \
+            or "stop" not in download_params or "in_memory" not in download_params \
             or "yield_ticks" not in inspect.signature(ScriptRunner.run_iter).parameters \
             or "live_history_trades" not in inspect.signature(ScriptRunner).parameters:
         return unsupported
@@ -230,9 +282,10 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
         value = getattr(args, attr, None)
         if value not in (None, False):
             raise ValueError(f"{flag} cannot be used with --live")
+    if args.live_output_limit is not None and args.live_output_limit < 0:
+        raise ValueError("--live-output-limit cannot be negative")
 
     from pynecore.core.live_runner import LiveStop
-    from pynecore.core.ohlcv import OHLCVReader
     from pynecore.core.provider_download import (DownloadStopped,
                                                  download_provider_history_resilient,
                                                  open_live_stream, require_live_provider)
@@ -248,20 +301,22 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     control.add_cancel_hook(
         lambda: threading.Thread(target=stop.set, name="pyneide-live-stop", daemon=True).start())
 
-    data_dir = workdir / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
     reporter = _DownloadReporter(emitter, control)
     try:
         history = download_provider_history_resilient(
-            args.live, args.live_from, data_dir=data_dir, config_dir=workdir / "config",
-            retry_transient=True, listener=reporter.listener, stop=stop)
+            args.live, args.live_from, data_dir=workdir / "data", config_dir=workdir / "config",
+            retry_transient=True, listener=reporter.listener, stop=stop,
+            # The history is not saved: a file would replace a dataset of the
+            # same symbol and timeframe the user downloaded
+            in_memory=True)
         require_live_provider(history)
     except (LiveCancelled, DownloadStopped):
         emitter.emit({"e": "end", "bars": 0, "cancelled": True})
         return 0
 
     syminfo = history.syminfo
-    data_path = Path(history.ohlcv_path)
+    bars = history.bars
+    assert bars is not None
     output_dir = workdir / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_path = output_dir / f"{script.stem}.csv"
@@ -275,71 +330,74 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     if lib_dir.is_dir():
         sys.path.insert(0, str(lib_dir))
 
-    with OHLCVReader(data_path) as reader:
-        time_from_ts = history.time_from_ts if history.time_from_ts is not None \
-            else int(reader.start_datetime.timestamp() * 1000)
-        time_to_ts = int(reader.end_datetime.timestamp() * 1000)
-        size = reader.get_size(time_from_ts, time_to_ts)
-        last_bar_time = reader.get_last_bar_time(time_from_ts, time_to_ts)
+    time_from_ts = history.time_from_ts if history.time_from_ts is not None \
+        else (bars[0].timestamp if bars else 0)
+    time_to_ts = bars[-1].timestamp if bars else time_from_ts
+    window = [bar for bar in bars if time_from_ts <= bar.timestamp <= time_to_ts]
+    size = len(window)
+    last_bar_time = window[-1].timestamp if window else None
 
-        runner = ScriptRunner(
-            script, reader.read_from(time_from_ts, time_to_ts), syminfo,
-            # The live run's bar count is open-ended, as in ``pyne run --live``
-            last_bar_index=-1,
-            last_bar_time=last_bar_time,
-            live=True,
-            live_history_trades=bool(args.history_trades),
-            history_as_of=history.as_of_ts,
-            plot_path=plot_path, strat_path=strat_path, trade_path=trade_path,
-            viz_path=viz_path,
-            chart_provider_name=history.parsed_string.provider,
-            chart_provider_instance=history.provider_instance,
-            chart_data_path=data_path,
-            config_dir=workdir / "config",
-        )
-        runner.viz_writer = backtest._make_viz_writer(viz_path, data_path, runner)
-        is_strategy = backtest._script_type_name(runner.script) == "strategy"
-        runs_on_ticks = not is_strategy or bool(getattr(runner.script, "calc_on_every_tick",
-                                                        False))
+    runner = ScriptRunner(
+        script, iter(window), syminfo,
+        # The live run's bar count is open-ended, as in ``pyne run --live``
+        last_bar_index=-1,
+        last_bar_time=last_bar_time,
+        live=True,
+        live_history_trades=bool(args.history_trades),
+        history_as_of=history.as_of_ts,
+        plot_path=plot_path, strat_path=strat_path, trade_path=trade_path,
+        viz_path=viz_path,
+        chart_provider_name=history.parsed_string.provider,
+        chart_provider_instance=history.provider_instance,
+        config_dir=workdir / "config",
+    )
+    runner.viz_writer = backtest._make_viz_writer(viz_path, args.live, runner)
+    limit_mb = args.live_output_limit if args.live_output_limit is not None \
+        else DEFAULT_OUTPUT_LIMIT_MB
+    output_cap = OutputCap(runner, [plot_path, viz_path], limit_mb, emitter) \
+        if limit_mb > 0 else None
+    is_strategy = backtest._script_type_name(runner.script) == "strategy"
+    runs_on_ticks = not is_strategy or bool(getattr(runner.script, "calc_on_every_tick",
+                                                    False))
 
-        emitter.emit({
-            "e": "start",
-            "script": str(script),
-            "scriptTitle": getattr(runner.script, "title", "") or "",
-            "scriptShortTitle": getattr(runner.script, "shorttitle", "") or "",
-            "scriptType": backtest._script_type_name(runner.script),
-            "overlay": bool(getattr(runner.script, "overlay", False)),
-            "initialCapital": num_or_none(runner.script.initial_capital)
-            if is_strategy else None,
-            "syminfo": backtest._serialize_syminfo(syminfo),
-            "data": str(data_path),
-            "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},
-            "live": {"provider": args.live, "historyTrades": bool(args.history_trades)},
-            "outputs": {
-                "plot": str(plot_path),
-                "strat": str(strat_path) if is_strategy else None,
-                "trades": str(trade_path) if is_strategy else None,
-                "viz": str(viz_path),
-                "profile": None,
-                "robustness": None,
-            },
-        })
+    emitter.emit({
+        "e": "start",
+        "script": str(script),
+        "scriptTitle": getattr(runner.script, "title", "") or "",
+        "scriptShortTitle": getattr(runner.script, "shorttitle", "") or "",
+        "scriptType": backtest._script_type_name(runner.script),
+        "overlay": bool(getattr(runner.script, "overlay", False)),
+        "initialCapital": num_or_none(runner.script.initial_capital)
+        if is_strategy else None,
+        "syminfo": backtest._serialize_syminfo(syminfo),
+        "data": args.live,
+        "range": {"from": time_from_ts, "to": time_to_ts, "bars": size},
+        "live": {"provider": args.live, "historyTrades": bool(args.history_trades)},
+        "outputs": {
+            "plot": str(plot_path),
+            "strat": str(strat_path) if is_strategy else None,
+            "trades": str(trade_path) if is_strategy else None,
+            "viz": str(viz_path),
+            "profile": None,
+            "robustness": None,
+        },
+    })
 
-        # The stream connects at once: the bars that close while the history
-        # runs arrive as its catch-up, none is lost in between
-        live_iter = open_live_stream(
-            history, last_historical_timestamp=time_to_ts,
-            on_feed_status=lambda status: emitter.emit(_feed_status_event(status)),
-            stop=stop,
-        )
-        runner.ohlcv_iter = _chain(runner.ohlcv_iter, live_iter)
+    # The stream connects at once: the bars that close while the history
+    # runs arrive as its catch-up, none is lost in between
+    live_iter = open_live_stream(
+        history, last_historical_timestamp=time_to_ts,
+        on_feed_status=lambda status: emitter.emit(_feed_status_event(status)),
+        stop=stop,
+    )
+    runner.ohlcv_iter = _chain(runner.ohlcv_iter, live_iter)
 
-        return backtest._stream_run(runner, emitter, control,
-                                    total_bars=size,
-                                    is_strategy=is_strategy,
-                                    batch_size=args.batch_size,
-                                    chart_breakpoints=False,
-                                    live=LiveFeed(emitter, runs_on_ticks))
+    return backtest._stream_run(runner, emitter, control,
+                                total_bars=size,
+                                is_strategy=is_strategy,
+                                batch_size=args.batch_size,
+                                chart_breakpoints=False,
+                                live=LiveFeed(emitter, runs_on_ticks, output_cap))
 
 
 def _chain(history: Iterator[Any], live: Iterator[Any]) -> Iterator[Any]:

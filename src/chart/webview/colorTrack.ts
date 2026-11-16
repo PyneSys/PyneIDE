@@ -37,6 +37,24 @@ export class ColorTrack {
     this.provisional = undefined;
   }
 
+  /** The bars before index `drop` are gone: every index moves down by `drop`,
+   * and a channel's color at the new first bar is the one it had there. */
+  shift(drop: number): void {
+    if (drop <= 0) return;
+    for (const ch of this.channels.values()) {
+      let after = 0;
+      while (after < ch.idx.length && ch.idx[after] <= drop) after++;
+      // The last change at or before the new first bar carries its color on
+      const from = Math.max(0, after - 1);
+      ch.idx = ch.idx.slice(from).map((index) => Math.max(0, index - drop));
+      ch.enc = ch.enc.slice(from);
+      ch.cursor = 0;
+    }
+    if (this.provisional) {
+      this.provisional = { ...this.provisional, barIndex: this.provisional.barIndex - drop };
+    }
+  }
+
   /** Ingest delta rows, resolving each row's bar timestamp to a bar index.
    * The bridge guarantees a delta's bar was already delivered; rows whose
    * timestamp is unknown are dropped. */

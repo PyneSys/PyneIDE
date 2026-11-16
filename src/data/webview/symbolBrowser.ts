@@ -19,6 +19,7 @@ import type {
   BrowserDefaults,
   BrowserInMessage,
   BrowserOutMessage,
+  LiveModeInfo,
 } from '../symbolBrowserMessages';
 
 const ROW_H = 22;
@@ -44,6 +45,14 @@ const TO_OPTIONS: [string, string][] = [
   ['now', 'now'],
   [CUSTOM, 'Custom date…'],
 ];
+/** A live chart's history: the last N bars (the bridge's `--live-from -N`). */
+const LIVE_FROM_OPTIONS: [string, string][] = [
+  ['-500', 'last 500 bars'],
+  ['-1000', 'last 1,000 bars'],
+  ['-2000', 'last 2,000 bars'],
+  ['-5000', 'last 5,000 bars'],
+  ['-10000', 'last 10,000 bars'],
+];
 
 interface VsCodeApi {
   postMessage(message: BrowserOutMessage): void;
@@ -64,8 +73,10 @@ const infoEmpty = el<HTMLDivElement>('info-empty');
 const infoBody = el<HTMLDivElement>('info-body');
 const timeframeSel = el<HTMLSelectElement>('timeframe');
 const timeframeCustom = el<HTMLInputElement>('timeframe-custom');
+const fromLabel = el<HTMLLabelElement>('from-label');
 const fromSel = el<HTMLSelectElement>('from');
 const fromDate = el<HTMLInputElement>('from-date');
+const toLabel = el<HTMLLabelElement>('to-label');
 const toSel = el<HTMLSelectElement>('to');
 const toDate = el<HTMLInputElement>('to-date');
 const truncateLabel = el<HTMLLabelElement>('truncate-label');
@@ -74,6 +85,8 @@ const extraWrap = el<HTMLSpanElement>('extra-wrap');
 const extraChk = el<HTMLInputElement>('extra');
 const extraLabel = el<HTMLSpanElement>('extra-label');
 const extraHelp = el<HTMLSpanElement>('extra-help');
+const historyTradesWrap = el<HTMLSpanElement>('history-trades-wrap');
+const historyTradesChk = el<HTMLInputElement>('history-trades');
 const downloadBtn = el<HTMLButtonElement>('download');
 const cancelBtn = el<HTMLButtonElement>('cancel');
 const progressWrap = el<HTMLDivElement>('progress-wrap');
@@ -93,6 +106,8 @@ let syminfoReqId = 0;
 let lastSyminfoReqId = 0;
 let syminfoTimer: ReturnType<typeof setTimeout> | undefined;
 let downloading = false;
+/** Set while the browser picks a live chart's symbol (Run Live). */
+let liveMode: LiveModeInfo | null = null;
 
 // Download-target state: does the .ohlcv file of the current symbol + timeframe
 // already exist? Drives the Truncate toggle and the smart From default.
@@ -144,6 +159,9 @@ window.addEventListener('message', (ev: MessageEvent<BrowserInMessage>) => {
     case 'prefill':
       onPrefill(msg.symbol, msg.timeframe);
       break;
+    case 'liveMode':
+      setLiveMode(msg.live);
+      break;
   }
 });
 
@@ -163,27 +181,19 @@ function onPrefill(symbol: string, timeframe?: string): void {
 
 function onInit(list: ProviderInfo[], defaults: BrowserDefaults): void {
   providers = list;
-  providerSel.innerHTML = '';
   if (list.length === 0) {
     listStatus.textContent = 'Provider service unavailable.';
   }
-  for (const p of list) {
-    const opt = document.createElement('option');
-    opt.value = p.name;
-    opt.textContent = p.display_name && p.display_name !== p.name ? `${p.name} — ${p.display_name}` : p.name;
-    providerSel.appendChild(opt);
-  }
+  fillProviders();
 
   fillOptions(timeframeSel, [...TIMEFRAMES.map((tf): [string, string] => [tf, tf]), [CUSTOM, 'Custom…']]);
   setTimeframe(defaults.timeframe || '1D');
-  fillOptions(fromSel, FROM_OPTIONS);
-  setFrom('continue');
-  fillOptions(toSel, TO_OPTIONS);
-  setTo('now');
+  fillRangeOptions();
 
-  const startProvider = defaults.provider && list.some((p) => p.name === defaults.provider)
+  const shown = shownProviders();
+  const startProvider = defaults.provider && shown.some((p) => p.name === defaults.provider)
     ? defaults.provider
-    : list[0]?.name;
+    : shown[0]?.name;
   if (startProvider) {
     providerSel.value = startProvider;
     pendingBrokerDefault = defaults.broker;
@@ -191,21 +201,96 @@ function onInit(list: ProviderInfo[], defaults: BrowserDefaults): void {
   }
 }
 
+/** The providers the selector offers: only the live ones while picking a live chart. */
+function shownProviders(): ProviderInfo[] {
+  return liveMode ? providers.filter((p) => p.live) : providers;
+}
+
+function fillProviders(): void {
+  providerSel.innerHTML = '';
+  for (const p of shownProviders()) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.display_name && p.display_name !== p.name ? `${p.name} — ${p.display_name}` : p.name;
+    providerSel.appendChild(opt);
+  }
+}
+
+/** The From / To fields of a download, or the history of a live chart. */
+function fillRangeOptions(): void {
+  if (liveMode) {
+    fillOptions(fromSel, LIVE_FROM_OPTIONS);
+    setFrom(LIVE_FROM_OPTIONS.some(([value]) => value === liveMode?.from)
+      ? liveMode.from
+      : LIVE_FROM_OPTIONS[0][0]);
+  } else {
+    fillOptions(fromSel, FROM_OPTIONS);
+    setFrom('continue');
+  }
+  fillOptions(toSel, TO_OPTIONS);
+  setTo('now');
+}
+
+/**
+ * Enter or leave the live-chart pick. In it the bar asks for the history of the
+ * live chart instead of a download range, only live providers are offered, and
+ * Start Live replaces Download.
+ */
+function setLiveMode(live: LiveModeInfo | null): void {
+  liveMode = live;
+  fromLabel.textContent = live ? 'History' : 'From';
+  toLabel.hidden = live !== null;
+  toSel.hidden = live !== null;
+  historyTradesWrap.hidden = !live?.strategy;
+  historyTradesChk.checked = Boolean(live?.historyTrades);
+  downloadBtn.textContent = live ? 'Start Live' : 'Download';
+  if (providers.length > 0) {
+    const current = providerSel.value;
+    fillProviders();
+    fillRangeOptions();
+    const shown = shownProviders();
+    if (shown.some((p) => p.name === current)) {
+      providerSel.value = current;
+      // Re-apply the provider's fields (the opt-in data switch, the probe)
+      selectProvider(current, true);
+    } else if (shown[0]) {
+      providerSel.value = shown[0].name;
+      selectProvider(shown[0].name);
+    } else {
+      listStatus.textContent = 'No installed provider streams live data.';
+      allSymbols = [];
+      positions = [];
+      selected = -1;
+      renderList();
+    }
+  }
+  setDownMsg(live ? `Live chart of ${live.script}: pick a symbol and a timeframe.` : '', '');
+  updateDownloadEnabled();
+}
+
 let pendingBrokerDefault: string | undefined;
 
-function selectProvider(name: string): void {
+/** @param keepList Only re-apply the provider's fields: the symbol list stays. */
+function selectProvider(name: string, keepList = false): void {
   const info = providers.find((p) => p.name === name);
-  currentMultiBroker = Boolean(info?.multi_broker);
-  brokerSel.hidden = !currentMultiBroker;
-  brokerLabel.hidden = !currentMultiBroker;
-  // The opt-in data switch exists only for providers that declare one, and a
-  // provider switch never carries the previous provider's choice over.
+  // The opt-in data switch exists only for providers that declare one (and is
+  // part of a download, not of a live chart), and a provider switch never
+  // carries the previous provider's choice over.
   const extra = info?.extra_data ?? null;
-  extraWrap.hidden = extra === null;
+  extraWrap.hidden = extra === null || liveMode !== null;
   extraChk.checked = false;
   extraLabel.textContent = extra?.label ?? '';
   extraHelp.title = extra?.help ?? '';
   extraHelp.setAttribute('aria-label', extra?.help ?? '');
+  if (keepList) {
+    // Back from a live pick the download range starts over: From is re-picked
+    // from whether the file exists, as on a symbol change
+    scheduleTargetProbe(liveMode === null);
+    return;
+  }
+  currentMultiBroker = Boolean(info?.multi_broker);
+  brokerSel.hidden = !currentMultiBroker;
+  brokerLabel.hidden = !currentMultiBroker;
   allSymbols = [];
   positions = [];
   selected = -1;
@@ -652,13 +737,14 @@ function resetTarget(): void {
 function setTargetExists(exists: boolean): void {
   const appeared = exists && !targetExists;
   targetExists = exists;
-  truncateLabel.hidden = !exists;
+  // A live chart downloads its own history: there is nothing to truncate
+  truncateLabel.hidden = !exists || liveMode !== null;
   // A hidden toggle must not carry a stale "yes", and the TUI's re-inserted
   // Truncate field always starts at No.
   if (!exists || appeared) truncateChk.checked = false;
   if (smartFromPending) {
     smartFromPending = false;
-    setFrom(exists ? 'continue' : '365');
+    if (!liveMode) setFrom(exists ? 'continue' : '365');
   }
 }
 
@@ -721,6 +807,18 @@ downloadBtn.addEventListener('click', () => {
   const timeframe = currentTimeframe();
   if (!timeframe) {
     setDownMsg('Pick a timeframe.', 'err');
+    return;
+  }
+  if (liveMode) {
+    vscode.postMessage({
+      type: 'startLive',
+      provider: providerSel.value,
+      broker: currentMultiBroker ? brokerSel.value : undefined,
+      symbol,
+      timeframe,
+      from: fromSel.value,
+      historyTrades: liveMode.strategy && historyTradesChk.checked,
+    });
     return;
   }
   const from = resolveFrom();

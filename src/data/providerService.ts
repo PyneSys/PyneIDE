@@ -305,6 +305,8 @@ export interface ProviderInfo {
   name: string;
   display_name: string;
   multi_broker: boolean;
+  /** The provider streams live data: it can feed a live chart. */
+  live: boolean;
   /** The opt-in per-bar data the provider downloads only on request (e.g. a
    * cTrader ask side rebuilt from ticks), or null when it has none. */
   extra_data: ExtraDataInfo | null;

@@ -110,6 +110,8 @@ class LiveSmoke(unittest.TestCase):
                     proc.kill()
                 proc.stdin.close()
                 proc.stdout.close()
+            # The history is kept in memory: nothing goes into the workdir's data
+            self.assertFalse((workdir / 'data').exists())
 
         kinds = [ev['e'] for ev in events]
         self.assertNotIn('error', kinds, events)
@@ -151,7 +153,7 @@ class LiveSmoke(unittest.TestCase):
             workdir, _ = make_workdir(Path(temp), [])
             args = SimpleNamespace(
                 workdir=str(workdir), script='smoke', live='replay:TEST@1', live_from='-5',
-                history_trades=False, batch_size=500)
+                history_trades=False, live_output_limit=None, batch_size=500)
             canceller = threading.Thread(target=lambda: (
                 capture.wait_for(lambda evs: any(ev.get('step') == 'retry' for ev in evs)),
                 control.cancel()), daemon=True)
@@ -191,7 +193,7 @@ class LiveSmoke(unittest.TestCase):
 
             args = SimpleNamespace(
                 workdir=str(workdir), script='smoke', live='replay:TEST@1', live_from='-5',
-                history_trades=False, batch_size=500)
+                history_trades=False, live_output_limit=None, batch_size=500)
             with patch('pynecore.core.provider_download.open_live_stream', scripted_feed):
                 self.assertEqual(run_live(args, capture, Control()), 0)
 
@@ -208,6 +210,45 @@ class LiveSmoke(unittest.TestCase):
         self.assertGreater(kinds.index('bars', kinds.index('live')), max(
             i for i, kind in enumerate(kinds) if kind == 'tick'))
         self.assertEqual(events[-1], {'e': 'end', 'bars': 6, 'cancelled': False})
+
+    def test_output_files_end_at_the_size_limit_and_the_chart_goes_on(self):
+        """At the size limit the plot CSV and viz NDJSON end as complete records
+        at the bar of the limit, while the later bars still reach the chart"""
+        from pynecore.core.script_runner import LIVE_TRANSITION
+        from pyneide_bridge.control import Control
+
+        capture = Capture()
+        with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:
+            workdir, last_ts = make_workdir(Path(temp), [])
+
+            def scripted_feed(_history, *, last_historical_timestamp, on_feed_status=None,
+                              stop=None):
+                yield LIVE_TRANSITION
+                for i in range(1, 4):
+                    yield candle(last_ts + i * MINUTE, 110.0 + i, True)
+
+            args = SimpleNamespace(
+                workdir=str(workdir), script='smoke', live='replay:TEST@1', live_from='-5',
+                history_trades=False, live_output_limit=1, batch_size=500)
+            # 1 "MB" of 1 byte: the history alone is over the limit
+            with patch('pynecore.core.provider_download.open_live_stream', scripted_feed), \
+                    patch('pyneide_bridge.live.BYTES_PER_MB', 1):
+                self.assertEqual(run_live(args, capture, Control()), 0)
+            csv_rows = (workdir / 'output' / 'smoke.csv').read_text().splitlines()[1:]
+            viz = [json.loads(line) for line in
+                   (workdir / 'output' / 'smoke_viz.ndjson').read_text().splitlines()]
+
+        events = capture.events
+        # The 5 history bars and the first live close are saved, the rest is not
+        self.assertEqual(len(csv_rows), 6)
+        self.assertEqual(sum(1 for rec in viz if rec['t'] == 'bar'), 6)
+        self.assertEqual(viz[-1], {'t': 'end', 'bars': 6})
+        warnings = [ev['message'] for ev in events if ev['e'] == 'log']
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('reached 1 MB', warnings[0])
+        closes = [row[4] for ev in events if ev['e'] == 'bars' for row in ev['d']]
+        self.assertEqual(closes[-3:], [111.0, 112.0, 113.0])
+        self.assertEqual(events[-1], {'e': 'end', 'bars': 8, 'cancelled': False})
 
 
 if __name__ == '__main__':

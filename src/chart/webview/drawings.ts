@@ -285,12 +285,14 @@ export interface XResolver {
  */
 export function makeXResolver(
   bars: Array<{ timestamp: number }>,
-  tsToIndex: ReadonlyMap<number, number>
+  tsToIndex: ReadonlyMap<number, number>,
+  barBase: () => number = () => 0
 ): XResolver {
   return {
     toIndex(x, xloc) {
       if (x === null || x === undefined || !Number.isFinite(x)) return null;
-      if (xloc !== 'bar_time') return x;
+      // A bar_index x: `bars` starts at bar index barBase()
+      if (xloc !== 'bar_time') return x - barBase();
       const exact = tsToIndex.get(x);
       if (exact !== undefined) return exact;
       const n = bars.length;

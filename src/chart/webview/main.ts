@@ -362,8 +362,11 @@ interface RunState {
   plotMeta: Map<string, PlotMetaRecord>;
   /** Per-bar dynamic color reconstruction from the sparse `colors` deltas. */
   colorTrack: ColorTrack;
-  /** Bar timestamp (ms) -> bar index, for joining color deltas to bars. */
+  /** Bar timestamp (ms) -> index into `bars`, for joining color deltas to bars. */
   tsToIndex: Map<number, number>;
+  /** Bar index of `bars[0]`: a live chart drops its oldest bars, so every index
+   * into `bars` (and the chart's data list) is the bar index minus this. */
+  barBase: number;
   /** Live drawing objects (line/label/box/table/polyline/linefill). */
   drawings: DrawingStore;
   /** store.tableVersion last rendered into the HTML table layer. */
@@ -394,11 +397,12 @@ interface RunState {
   paneDrawIndicatorId?: string;
   /** Bar index -> trade glyphs, rebuilt whenever trades/bars grow. */
   tradeMarkers?: TradeMarkerIndex;
-  /** [trades.length, bars.length, tickTradesVersion] the index above was built from. */
-  tradeMarkersBuiltFor?: [number, number, number];
+  /** [trades.length, bars.length, tickTradesVersion, barBase] the index above was built from. */
+  tradeMarkersBuiltFor?: [number, number, number, number];
   /** A live chart's history is in (the bridge's `live` event): from here on
    * bars and ticks reach the chart one at a time through the data loader's bar
-   * subscription, and the chart never reloads (`resetData`) its data again. */
+   * subscription, and the chart reloads (`resetData`) its data only when it
+   * drops its oldest bars (see rebaseBars). */
   live: boolean;
   /** The data loader's bar subscription; set while the chart holds data. */
   pushBar?: (bar: KLineData) => void;
@@ -1057,7 +1061,7 @@ function startRun(start: StartEvent): void {
       const text = utils.formatDate(dateTimeFormat, timestamp, template);
       if (type !== 'crosshair') return text;
       const idx = state?.tsToIndex.get(timestamp);
-      return idx === undefined ? text : `${text} (${idx})`;
+      return idx === undefined || !state ? text : `${text} (${idx + state.barBase})`;
     },
     formatExtendText: ({ data }) => barCloseCountdown(data),
   });
@@ -1078,6 +1082,7 @@ function startRun(start: StartEvent): void {
     plotMeta: new Map(),
     colorTrack: new ColorTrack(),
     tsToIndex: new Map(),
+    barBase: 0,
     barcolorMetas: [],
     drawings: new DrawingStore(hiddenDrawings),
     renderedTableVersion: -1,
@@ -1746,7 +1751,7 @@ function rebuildPlotIndicators(st: RunState): void {
 function ensureDrawingIndicators(st: RunState): void {
   const wantOverlay = st.drawings.hasCanvasFor(true, st.start.overlay);
   const wantPane = st.drawings.hasCanvasFor(false, st.start.overlay);
-  const xres = makeXResolver(st.bars, st.tsToIndex);
+  const xres = makeXResolver(st.bars, st.tsToIndex, () => st.barBase);
   const makeDef = (name: string, overlay: boolean) => ({
     name,
     shortName: NO_LEGEND,
@@ -1812,7 +1817,8 @@ function markerTheme(): TradeMarkerTheme {
   return tradeMarkerTheme;
 }
 
-/** Rebuild the bar-index -> glyph map when the trade or bar count moved. The
+/** Rebuild the bar-index -> glyph map when the trade or bar count (or the
+ * first bar of a live chart) moved. The
  * stamp check keeps this off the per-frame path; a full rebuild (rather than
  * an incremental append) also absorbs the fact that open trades arrive after
  * the closed ones, so `st.trades` is not strictly chronological. */
@@ -1823,12 +1829,13 @@ function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
     !built ||
     built[0] !== st.trades.length ||
     built[1] !== st.bars.length ||
-    built[2] !== st.tickTradesVersion
+    built[2] !== st.tickTradesVersion ||
+    built[3] !== st.barBase
   ) {
     // A live tick's trades are drawn until the bar's close commits them
     const trades = st.tickTrades.length ? [...st.trades, ...st.tickTrades] : st.trades;
-    st.tradeMarkers = buildTradeMarkerIndex(trades, st.bars, st.tsToIndex);
-    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length, st.tickTradesVersion];
+    st.tradeMarkers = buildTradeMarkerIndex(trades, st.bars, st.tsToIndex, st.barBase);
+    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length, st.tickTradesVersion, st.barBase];
   }
   return st.tradeMarkers;
 }
@@ -2586,6 +2593,50 @@ function addBar(st: RunState, bar: PyneBar): void {
   }
 }
 
+/**
+ * Drop the bars before bar index `base` (the host's snapshot dropped them past
+ * the live chart's bar limit, see liveWindow): every index into the bars moves
+ * down, and the chart reloads its data with the view kept where it was.
+ */
+function rebaseBars(st: RunState, base: number): void {
+  const drop = Math.min(base - st.barBase, st.bars.length);
+  if (drop <= 0) {
+    st.barBase = Math.max(st.barBase, base);
+    return;
+  }
+  // Where the chart's view sits, read while the chart still holds the old bars
+  const anchor = st.pushBar && st.fedBars > 0 ? liveViewAnchor(st) : undefined;
+  st.bars.splice(0, drop);
+  st.barBase = base;
+  st.tsToIndex.clear();
+  for (let i = 0; i < st.bars.length; i++) st.tsToIndex.set(st.bars[i].timestamp, i);
+  st.colorTrack.shift(drop);
+  const shift = (index: number | undefined): number | undefined =>
+    index === undefined || index < drop ? undefined : index - drop;
+  dataWindowHover = shift(dataWindowHover);
+  dataWindowHeld = shift(dataWindowHeld);
+  st.dirty = true;
+  if (!st.live || !st.pushBar) return;
+  // A live chart takes no further reload on its own: reload it here
+  st.viewAnchor = anchor;
+  st.chart.resetData();
+  restoreView(st);
+  st.viewAnchor = undefined;
+}
+
+/** The view of a live chart, to put back after its bars were dropped. */
+function liveViewAnchor(st: RunState): ViewAnchor {
+  const range = st.chart.getVisibleRange();
+  // The newest bar at the right edge: the view follows it (see captureView)
+  const atRealtime = range.to >= st.fedBars;
+  const rightIndex = range.to - 1;
+  return {
+    barSpace: st.chart.getBarSpace().bar,
+    rightTimestamp: atRealtime ? null : st.bars[rightIndex]?.timestamp ?? null,
+    rightX: atRealtime ? undefined : barX(st.chart, rightIndex),
+  };
+}
+
 /** Drop what the ticks of the forming bar showed: its close (and the color,
  * drawing and trade changes after it) is the committed state. */
 function closeForming(st: RunState): void {
@@ -2744,7 +2795,7 @@ const performanceCrosshair = tabBodyEl
       (point) => {
         const index = state?.tsToIndex.get(point.timestamp);
         const time = new Date(point.timestamp).toISOString().replace('T', ' ').slice(0, 19);
-        return index === undefined ? time : `${time} (${index})`;
+        return index === undefined || !state ? time : `${time} (${index + state.barBase})`;
       },
       revealTradeAtTimestamp
     )
@@ -3491,7 +3542,7 @@ function dataWindowModel(st: RunState): DataWindowModel | undefined {
   }
   const tz = st.start.syminfo.timezone;
   return {
-    barIndex: index,
+    barIndex: index + st.barBase,
     time: formatBarTime(bar.timestamp, typeof tz === 'string' ? tz : undefined),
     mode,
     sections,
@@ -3750,6 +3801,9 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         completeChart(state, true);
         syncLiveStatus();
       }
+      break;
+    case 'barBase':
+      if (state) rebaseBars(state, msg.base);
       break;
     case 'tick':
       if (state) applyTick(state, msg.tick);

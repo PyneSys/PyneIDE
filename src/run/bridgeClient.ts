@@ -431,11 +431,13 @@ export interface BridgeRunOptions {
   robustness?: Record<string, unknown>;
   /**
    * Live chart instead of `data`: download the provider string's history into
-   * `<workdir>/data`, run the script on it, then on the provider's live feed.
+   * memory, run the script on it, then on the provider's live feed.
    * `from`: history start (date, days or -N bars, default -500 bars);
-   * `historyTrades`: a strategy trades on the history too. Data only, no trading.
+   * `historyTrades`: a strategy trades on the history too; `outputLimitMB`: the
+   * plot CSV and viz NDJSON stop growing at this size (0: no limit). Data only,
+   * no trading.
    */
-  live?: { provider: string; from?: string; historyTrades?: boolean };
+  live?: { provider: string; from?: string; historyTrades?: boolean; outputLimitMB?: number };
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -467,6 +469,9 @@ export class BridgeRun {
       args.push('--live', opts.live.provider);
       if (opts.live.from !== undefined) args.push('--live-from', opts.live.from);
       if (opts.live.historyTrades) args.push('--history-trades');
+      if (opts.live.outputLimitMB !== undefined) {
+        args.push('--live-output-limit', String(opts.live.outputLimitMB));
+      }
     }
     if (opts.script) args.push('--script', opts.script);
     if (opts.dataOnly) args.push('--data-only');

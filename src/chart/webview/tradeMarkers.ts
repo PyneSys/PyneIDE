@@ -96,16 +96,21 @@ function signedSize(size: number | null): string | undefined {
   return `${rounded > 0 ? '+' : ''}${rounded}`;
 }
 
-/** Bar index for a trade timestamp, falling back to the runner's bar number
- * when the timestamp is not on the chart (e.g. a resampled series). */
+/** Index into the bars for a trade timestamp, falling back to the runner's bar
+ * number when the timestamp is not on the chart (e.g. a resampled series). The
+ * bar number counts from the run's first bar, the bars from `barBase`: a bar
+ * a live chart already dropped has no index. */
 function barIndexFor(
   tsToIndex: ReadonlyMap<number, number>,
   timestamp: number,
   barFallback: number,
+  barBase: number,
 ): number | undefined {
   const byTime = tsToIndex.get(timestamp);
   if (byTime !== undefined) return byTime;
-  return Number.isInteger(barFallback) ? barFallback : undefined;
+  if (!Number.isInteger(barFallback)) return undefined;
+  const index = barFallback - barBase;
+  return index >= 0 ? index : undefined;
 }
 
 function push(index: TradeMarkerIndex, barIndex: number, item: TradeMarkerItem): void {
@@ -118,17 +123,20 @@ function push(index: TradeMarkerIndex, barIndex: number, item: TradeMarkerItem):
  * Resolve every trade to its bar and glyphs. Keying by bar index makes the
  * result independent of `trades` ordering — open trades arrive after the closed
  * ones, so the array itself is not strictly chronological.
+ *
+ * @param barBase Bar index of `bars[0]` (a live chart drops its oldest bars).
  */
 export function buildTradeMarkerIndex(
   trades: readonly TradeRecord[],
   bars: readonly AnchorBar[],
   tsToIndex: ReadonlyMap<number, number>,
+  barBase = 0,
 ): TradeMarkerIndex {
   const index: TradeMarkerIndex = new Map();
   for (const trade of trades) {
     const long = (trade.size ?? 0) > 0;
 
-    const entryIndex = barIndexFor(tsToIndex, trade.entryTime, trade.entryBar);
+    const entryIndex = barIndexFor(tsToIndex, trade.entryTime, trade.entryBar, barBase);
     const entryBar = entryIndex === undefined ? undefined : bars[entryIndex];
     if (entryIndex !== undefined && entryBar) {
       // The fill price marker, at the exact entry price.
@@ -156,7 +164,7 @@ export function buildTradeMarkerIndex(
 
     // An open trade has no exit price — entry markers only.
     if (trade.exitPrice == null || !Number.isFinite(trade.exitPrice)) continue;
-    const exitIndex = barIndexFor(tsToIndex, trade.exitTime, trade.exitBar);
+    const exitIndex = barIndexFor(tsToIndex, trade.exitTime, trade.exitBar, barBase);
     if (exitIndex === undefined || !bars[exitIndex]) continue;
     push(index, exitIndex, {
       kind: 'price',

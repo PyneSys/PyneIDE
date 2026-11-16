@@ -1,14 +1,18 @@
 /**
  * Run Pyne/Pine scripts through the runner bridge.
  *
- * Owns the `pyneide.runScript` / `pyneide.debugScript` / `pyneide.profileScript`
- * commands, the Run, Debug and Profile CodeLenses / editor-title buttons (via the
- * `pyneide.isPyneScript`
+ * Owns the `pyneide.runScript` / `pyneide.runLive` / `pyneide.debugScript` /
+ * `pyneide.profileScript` commands, the Run, Live, Debug and Profile CodeLenses /
+ * editor-title buttons (via the `pyneide.isPyneScript`
  * context key), the minimal data picker, the run lifecycle (status bar,
  * cancellation, logs), the bar-level controls (pause / next bar / run to
  * bar N — commands surfaced in the debug toolbar and a status bar menu),
  * and the debug flow (bridge with a debugpy listener + `pyne` attach
  * session). The chart webview subscribes to the same event stream.
+ *
+ * A live chart (Run Live) runs the script on a provider's history, then on its
+ * live feed: data only, it never trades. It has no bar controls, debugger,
+ * profiler or robustness tests.
  *
  * Bar controls compose with debugger stops: while execution sits at a
  * breakpoint, "Next bar" arms a feed pause at the next bar boundary and
@@ -22,6 +26,7 @@ import * as vscode from 'vscode';
 import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartDebugPosition } from '../chart/messages';
 import type { ChartManager } from '../chart/chartPanel';
+import type { LivePickRequest } from '../data/symbolBrowserPanel';
 import type { CompileService } from '../compile/service';
 import { mapTracebackFrames } from '../compile/sourcemap';
 import { buildOutputPreview, resolveScriptOutputPair } from '../data/outputPreview';
@@ -38,10 +43,19 @@ import {
   BridgeRun,
   type BridgeEvent,
   type ErrorEvent,
+  type FeedStatusEvent,
   type RobustnessEvent,
   type TradeRecord,
 } from './bridgeClient';
 import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
+import { LiveDownloadProgress } from './liveDownloadProgress';
+import {
+  DEFAULT_LIVE_FROM,
+  forgetLiveTarget,
+  getLiveTarget,
+  setLiveTarget,
+  type LiveTarget,
+} from './liveTarget';
 import { runtimeErrorLocation } from './runtimeError';
 import {
   SecurityDataService,
@@ -58,18 +72,39 @@ export interface RunListener {
 
 export type RunControlAction = 'pause' | 'resume' | 'step' | 'cancel';
 
+/** Picks a live chart's target in the Symbol Browser (callback injection avoids
+ * a run<->data dependency cycle); undefined when the pick is given up. */
+export type PickLiveTarget = (
+  request: LivePickRequest,
+  env: { workdir: string; pythonBin: string }
+) => Promise<LiveTarget | undefined>;
+
+/** The state of the live chart run in flight (status bar, control menu). */
+interface LiveRunState {
+  target: LiveTarget;
+  /** `SYMBOL TIMEFRAME` from the run's `start` event; empty while it downloads. */
+  label: string;
+  /** The history is over, the run is on the live feed. */
+  onFeed: boolean;
+  feed: FeedStatusEvent | undefined;
+}
+
 /** How long a debug launch waits for the bridge to report its debugpy port. */
 const DEBUG_ENDPOINT_TIMEOUT_MS = 30000;
 /** Grace given to a cancelled run to exit before a restart hard-kills it. */
 const RUN_DRAIN_GRACE_MS = 4000;
 
-interface PreparedRun {
+interface PreparedScript {
   pythonBin: string;
+  /** The runnable .py (a Pine source's compiled output). */
   scriptPath: string;
-  data: string;
   workdir: string;
   /** The user's source path — the chart key this run streams to (Part B). */
   chartKey: string;
+}
+
+interface PreparedRun extends PreparedScript {
+  data: string;
   /** Explicit `--security KEY=stem` args for unresolved cross-symbol feeds
    * (map-resolved feeds need none; the core reads the symbol map itself). */
   security?: string[];
@@ -172,6 +207,10 @@ export class RunService {
   private codeLensProvider: RunCodeLensProvider | undefined;
   /** Shows the result of a Profile run in the editor. */
   private profileView: ProfileView | undefined;
+  /** Opens the Symbol Browser to pick a live chart's target. */
+  private pickLiveTarget: PickLiveTarget | undefined;
+  /** Set while the active run is a live chart. */
+  private live: LiveRunState | undefined;
 
   /** How many trailing bars of a run-to-bar crawl on the per-bar breakpoint
    * (the rest fly with breakpoints removed). */
@@ -194,6 +233,11 @@ export class RunService {
   /** Wire the Symbol Browser opener used by the security "Download…" choice. */
   setShowSymbolBrowser(cb: ShowSymbolBrowser): void {
     this.securityData.setShowSymbolBrowser(cb);
+  }
+
+  /** Wire the Symbol Browser pick of a live chart's target. */
+  setPickLiveTarget(cb: PickLiveTarget): void {
+    this.pickLiveTarget = cb;
   }
 
   /** Wire the editor view that shows the result of a Profile run. */
@@ -246,6 +290,10 @@ export class RunService {
       ),
       vscode.commands.registerCommand('pyneide.changeRunData', (uri?: vscode.Uri) =>
         this.changeRunData(uri)
+      ),
+      vscode.commands.registerCommand('pyneide.runLive', (uri?: vscode.Uri) => this.runLive(uri)),
+      vscode.commands.registerCommand('pyneide.changeLiveSymbol', (uri?: vscode.Uri) =>
+        this.runLive(uri, true)
       ),
       vscode.commands.registerCommand('pyneide.openChart', (uri?: vscode.Uri) =>
         this.openChart(uri)
@@ -382,7 +430,8 @@ export class RunService {
       return data;
     }
     if (chartOpen && (hasResults || this.activeChartKey === chartKey)) {
-      await this.rerunOpenChart(chartKey);
+      // New backtest data: a live chart on it gives way to a backtest
+      await this.rerunOpenChart(chartKey, false);
     } else if (this.activeChartKey !== chartKey) {
       this.startPreview(chartKey, ctx.workdir, ctx.pythonBin, data);
     }
@@ -528,8 +577,9 @@ export class RunService {
   }
 
   /** Re-run a visible script chart after something its result depends on
-   * changed (input TOML saved, bound OHLCV data re-picked). */
-  async rerunOpenChart(chartKey: string): Promise<void> {
+   * changed (input TOML saved, bound OHLCV data re-picked). With `keepLive`, a
+   * live chart streaming to it restarts as a live chart. */
+  async rerunOpenChart(chartKey: string, keepLive = true): Promise<void> {
     if (
       this.debugSession ||
       this.activeRunIsDebug ||
@@ -538,9 +588,11 @@ export class RunService {
       return;
     }
 
+    let live = false;
     if (this.activeRun) {
       // Never interrupt an unrelated script just because another chart changed.
       if (this.activeChartKey !== chartKey) return;
+      live = keepLive && this.live !== undefined;
       await this.drainActiveRun();
     }
 
@@ -548,8 +600,60 @@ export class RunService {
     if (this.debugSession || this.activeRunIsDebug || !this.chartManager.hasOpenChart(chartKey)) {
       return;
     }
+    if (live) {
+      await this.runLive(vscode.Uri.file(chartKey));
+      return;
+    }
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(chartKey));
     await this.runDocument(doc);
+  }
+
+  /**
+   * Run Live: the script on a provider's history, then on its live feed (data
+   * only, the run never trades). The target is remembered per script: the
+   * first Run Live, and every one with `reselect`, picks it in the Symbol
+   * Browser.
+   */
+  async runLive(uri?: vscode.Uri, reselect = false): Promise<void> {
+    const ctx = await this.resolveChartContext(uri);
+    if (!ctx) return;
+    const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
+    let target = reselect ? undefined : getLiveTarget(this.context, chartKey);
+    if (!target) {
+      target = await this.pickLive(ctx.doc, ctx.workdir, ctx.pythonBin);
+      if (!target) return;
+      await setLiveTarget(this.context, chartKey, target);
+    }
+    // Same guard as runDocument: a second click while this one prepares
+    if (this.startPending) return;
+    this.startPending = true;
+    let script: PreparedScript | undefined;
+    try {
+      script = await this.prepareScript(ctx.doc);
+    } finally {
+      this.startPending = false;
+    }
+    if (!script) return;
+    await this.executeRun({ ...script, live: target });
+  }
+
+  private async pickLive(
+    doc: vscode.TextDocument,
+    workdir: string,
+    pythonBin: string
+  ): Promise<LiveTarget | undefined> {
+    if (!this.pickLiveTarget) return undefined;
+    const chartKey = canonicalChartKey(doc.uri.fsPath);
+    const previous = getLiveTarget(this.context, chartKey);
+    return this.pickLiveTarget(
+      {
+        scriptName: path.basename(doc.uri.fsPath),
+        strategy: STRATEGY_DECLARATION_RE.test(doc.getText().slice(0, STRATEGY_HEAD_CHARS)),
+        from: previous?.from ?? DEFAULT_LIVE_FROM,
+        historyTrades: previous?.historyTrades ?? true,
+      },
+      { workdir, pythonBin }
+    );
   }
 
   /**
@@ -761,6 +865,44 @@ export class RunService {
     doc: vscode.TextDocument,
     overrides?: { data?: string; security?: string[] }
   ): Promise<PreparedRun | undefined> {
+    const script = await this.prepareScript(doc);
+    if (!script) return undefined;
+    const { pythonBin, scriptPath, workdir, chartKey: sourceKey } = script;
+
+    // Data is bound to the user's source file, folded onto the canonical chart
+    // key (a .pine and its compiled .py share one chart + one data binding), so
+    // it stays stable across recompiles and matches the chart's key (Part B).
+    let data = overrides?.data ?? getRememberedData(this.context, workdir, sourceKey);
+    if (!data) {
+      this.output.appendLine(`Workdir resolved: ${workdir} — opening data picker.`);
+      data = await pickRunData(this.context, workdir, sourceKey, pythonBin, this.output);
+    }
+    if (!data) {
+      this.output.appendLine('Run stopped: no data selected.');
+      return undefined;
+    }
+
+    // Resolve request.security() data requirements. A debug restart reuses the
+    // frozen args (overrides.security) so it never re-prompts; a fresh run asks
+    // only for what the core cannot resolve from the chart feed or symbol map.
+    let security = overrides?.security;
+    if (security === undefined) {
+      const resolved = await this.resolveSecurity(pythonBin, scriptPath, data, workdir, sourceKey);
+      if (resolved === undefined) {
+        this.output.appendLine('Run stopped: security data selection cancelled.');
+        return undefined;
+      }
+      security = resolved;
+    }
+
+    return { pythonBin, scriptPath, data, workdir, chartKey: sourceKey, security };
+  }
+
+  /**
+   * The run pipeline up to the data: stop the run in flight, save, check the
+   * library calls, compile (Pine), and resolve the environment and the workdir.
+   */
+  private async prepareScript(doc: vscode.TextDocument): Promise<PreparedScript | undefined> {
     // There is exactly one run slot, so starting a run means the one in flight
     // has to go. Asking to run is unambiguous — restart instead of refusing.
     if (this.activeRun) {
@@ -838,35 +980,7 @@ export class RunService {
       this.output.appendLine('Run stopped: no Pyne workdir resolved.');
       return undefined;
     }
-
-    // Data is bound to the user's source file, folded onto the canonical chart
-    // key (a .pine and its compiled .py share one chart + one data binding), so
-    // it stays stable across recompiles and matches the chart's key (Part B).
-    const sourceKey = canonicalChartKey(doc.uri.fsPath);
-    let data = overrides?.data ?? getRememberedData(this.context, workdir, sourceKey);
-    if (!data) {
-      this.output.appendLine(`Workdir resolved: ${workdir} — opening data picker.`);
-      data = await pickRunData(this.context, workdir, sourceKey, pythonBin, this.output);
-    }
-    if (!data) {
-      this.output.appendLine('Run stopped: no data selected.');
-      return undefined;
-    }
-
-    // Resolve request.security() data requirements. A debug restart reuses the
-    // frozen args (overrides.security) so it never re-prompts; a fresh run asks
-    // only for what the core cannot resolve from the chart feed or symbol map.
-    let security = overrides?.security;
-    if (security === undefined) {
-      const resolved = await this.resolveSecurity(pythonBin, scriptPath, data, workdir, sourceKey);
-      if (resolved === undefined) {
-        this.output.appendLine('Run stopped: security data selection cancelled.');
-        return undefined;
-      }
-      security = resolved;
-    }
-
-    return { pythonBin, scriptPath, data, workdir, chartKey: sourceKey, security };
+    return { pythonBin, scriptPath, workdir, chartKey: canonicalChartKey(doc.uri.fsPath) };
   }
 
   /**
@@ -1128,6 +1242,8 @@ export class RunService {
   control(action: RunControlAction): void {
     const run = this.activeRun;
     if (!run) return;
+    // A live feed cannot wait: holding it back would only pile the updates up
+    if (this.live && action !== 'cancel') return;
     // Any manual control aborts a run-to-bar: restore the fly's breakpoints and
     // disarm the proxy's target bar.
     this.abortFly();
@@ -1164,7 +1280,7 @@ export class RunService {
   }
 
   private async runToBar(): Promise<void> {
-    if (!this.activeRun) return;
+    if (!this.activeRun || this.live) return;
     // When stopped at a breakpoint the LIVE bar_index is the true current bar;
     // this.barsDone (the async progress counter) can lag it badly under the
     // debug batchSize=1 chart-render backlog. Read it once and use it for the
@@ -1251,6 +1367,10 @@ export class RunService {
 
   private async controlMenu(): Promise<void> {
     if (!this.activeRun) return;
+    if (this.live) {
+      await this.liveControlMenu();
+      return;
+    }
     type Item = vscode.QuickPickItem & { action: RunControlAction | 'runToBar' };
     const items: Item[] =
       this.paused || this.debugStopped
@@ -1273,8 +1393,26 @@ export class RunService {
     else this.control(pick.action);
   }
 
+  private async liveControlMenu(): Promise<void> {
+    const chartKey = this.activeChartKey;
+    const live = this.live;
+    if (!chartKey || !live) return;
+    type Item = vscode.QuickPickItem & { action: 'stop' | 'chart' };
+    const items: Item[] = [
+      { label: '$(debug-stop) Stop live chart', action: 'stop' },
+      { label: '$(graph-line) Show chart', action: 'chart' },
+    ];
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: `${this.activeScriptName}: live chart of ${live.target.provider}`,
+    });
+    if (!pick) return;
+    if (pick.action === 'stop') this.control('cancel');
+    else this.chartManager?.reveal(chartKey);
+  }
+
   private setRunActive(active: boolean): void {
     void vscode.commands.executeCommand('setContext', 'pyneide.runActive', active);
+    void vscode.commands.executeCommand('setContext', 'pyneide.runLive', active && this.live !== undefined);
     if (!active) this.setPaused(false);
     this.updateStatusItem(active);
     this.updateContextKey();
@@ -1291,6 +1429,11 @@ export class RunService {
       this.statusItem.hide();
       return;
     }
+    if (this.live) {
+      this.updateLiveStatusItem(this.live);
+      return;
+    }
+    this.statusItem.tooltip = 'Pyne run — pause, step, stop';
     if (this.robustnessPhase) {
       this.statusItem.text = `$(beaker) ${this.activeScriptName} ${this.robustnessPhase}`;
       this.statusItem.show();
@@ -1303,12 +1446,41 @@ export class RunService {
     this.statusItem.show();
   }
 
+  private updateLiveStatusItem(live: LiveRunState): void {
+    const name = this.activeScriptName;
+    const what = live.label ? `${name} · ${live.label}` : name;
+    const feed = live.feed;
+    let text: string;
+    if (!live.label) {
+      text = `$(cloud-download) ${name}: loading history`;
+    } else if (!live.onFeed) {
+      text = `$(sync~spin) ${what}: history ${this.barsDone.toLocaleString()}/${this.barsTotal.toLocaleString()}`;
+    } else if (feed?.state === 'reconnecting') {
+      text = `$(warning) ${what}: reconnecting` + (feed.attempt > 0 ? ` (attempt ${feed.attempt})` : '');
+    } else if (feed?.state === 'connecting') {
+      text = `$(broadcast) ${what}: connecting`;
+    } else if (feed?.state === 'market_closed') {
+      text = `$(broadcast) ${what}: market closed`;
+    } else if (feed?.state === 'stopped') {
+      text = `$(broadcast) ${what}: stopped`;
+    } else {
+      text = `$(broadcast) LIVE ${what}`;
+    }
+    this.statusItem.text = text;
+    this.statusItem.tooltip =
+      `Live chart of ${live.target.provider} — stop, show the chart` +
+      (feed?.error ? `\nLast error: ${feed.error}` : '');
+    this.statusItem.show();
+  }
+
   // --- run execution ----------------------------------------------------------
 
+  /** Run a script through the bridge: a backtest on `data`, or a live chart on `live`. */
   private async executeRun(opts: {
     pythonBin: string;
     scriptPath: string;
-    data: string;
+    data?: string;
+    live?: LiveTarget;
     workdir: string;
     chartKey: string;
     security?: string[];
@@ -1322,16 +1494,18 @@ export class RunService {
     this.supersedePreview(chartKey);
     this.activeChartKey = chartKey;
     this.activeRunIsDebug = opts.debug !== undefined;
-    const mode = opts.debug
-      ? 'Debug'
-      : opts.profile
-        ? 'Profile'
-        : opts.robustness
-          ? 'Robustness'
-          : 'Run';
-    this.output.appendLine(
-      `--- ${mode}: ${scriptName} on ${opts.data} (workdir: ${opts.workdir})`
-    );
+    this.live = opts.live ? { target: opts.live, label: '', onFeed: false, feed: undefined } : undefined;
+    const mode = opts.live
+      ? 'Live'
+      : opts.debug
+        ? 'Debug'
+        : opts.profile
+          ? 'Profile'
+          : opts.robustness
+            ? 'Robustness'
+            : 'Run';
+    const source = opts.live ? opts.live.provider : (opts.data ?? '');
+    this.output.appendLine(`--- ${mode}: ${scriptName} on ${source} (workdir: ${opts.workdir})`);
 
     let stats: Record<string, number | null> | undefined;
     let errorMessage: string | undefined;
@@ -1343,6 +1517,13 @@ export class RunService {
     let cancelled = false;
     let profileFile: string | null | undefined;
     let robustness: RobustnessEvent | undefined;
+    /** A live run got past its download: the provider string is good. */
+    let started = false;
+    // Set once the run exists: the Cancel of the download notification stops it
+    let stop = (): void => {};
+    const download = opts.live
+      ? new LiveDownloadProgress(`PyneIDE: live chart of ${opts.live.provider}`, () => stop())
+      : undefined;
 
     // Script log output is easy to lose among the other channels, so the first
     // log line of a run brings this one up. Once per run only — a per-bar
@@ -1371,7 +1552,18 @@ export class RunService {
       pythonBin: opts.pythonBin,
       bridgeRoot: vscode.Uri.joinPath(this.context.extensionUri, 'python').fsPath,
       script: opts.scriptPath,
-      data: opts.data,
+      ...(opts.live
+        ? {
+            live: {
+              provider: opts.live.provider,
+              from: opts.live.from,
+              historyTrades: opts.live.historyTrades,
+              outputLimitMB: vscode.workspace
+                .getConfiguration('pyneide.live', vscode.Uri.file(opts.scriptPath))
+                .get<number>('outputLimitMB', 256),
+            },
+          }
+        : { data: opts.data }),
       workdir: opts.workdir,
       ...(opts.security && opts.security.length ? { security: opts.security } : {}),
       // Debug: listen on a free port and per-bar flushes, so the chart
@@ -1383,6 +1575,29 @@ export class RunService {
         switch (event.e) {
           case 'start':
             profileFile = event.outputs.profile;
+            started = true;
+            download?.close();
+            if (this.live) {
+              this.live.label = [event.syminfo.tickerid, event.syminfo.period]
+                .filter(Boolean)
+                .join(' ');
+              this.updateStatusItem(true);
+            }
+            break;
+          case 'download':
+            download?.update(event);
+            break;
+          case 'live':
+            if (this.live) {
+              this.live.onFeed = true;
+              this.updateStatusItem(true);
+            }
+            break;
+          case 'feedStatus':
+            if (this.live) {
+              this.live.feed = event;
+              this.updateStatusItem(true);
+            }
             break;
           case 'debugpy':
             opts.debug?.onEndpoint(event.host, event.port);
@@ -1467,10 +1682,15 @@ export class RunService {
       },
     });
     this.activeRun = run;
+    stop = () => {
+      if (this.activeRun === run) void this.stopRun(run);
+    };
     if (opts.debug) run.setChartBreakpointTimestamps(this.fastChartBreakpointTimestamps);
 
     const code = await run.exited;
+    download?.close();
     this.activeRun = undefined;
+    this.live = undefined;
     this.robustnessPhase = undefined;
     this.chartManager?.setDebugPosition(chartKey, undefined);
     this.activeChartKey = undefined;
@@ -1491,7 +1711,12 @@ export class RunService {
 
     if (errorMessage) {
       this.chartManager?.closeChart(chartKey);
-      await forgetRememberedData(this.context, chartKey);
+      if (!opts.live) {
+        await forgetRememberedData(this.context, chartKey);
+      } else if (!started) {
+        // The download or the provider failed: the next Run Live picks again
+        await forgetLiveTarget(this.context, chartKey);
+      }
       const source = runtimeErrorLocation(
         errorEvent ?? { traceback: errorTraceback ?? '' }, opts.scriptPath, opts.workdir,
         /\.pine$/i.test(chartKey));
@@ -1528,7 +1753,8 @@ export class RunService {
           barsTotal: this.barsTotal,
           debug: opts.debug !== undefined,
           securityCount: opts.security?.length ?? 0,
-          data: path.basename(opts.data),
+          data: opts.live ? undefined : path.basename(opts.data ?? ''),
+          live: opts.live !== undefined,
           sourceLine: source?.line,
         },
         traceback: errorTraceback,
@@ -1557,7 +1783,7 @@ export class RunService {
     );
     const netProfit = stats?.['Net Profit'];
     const summary =
-      `PyneIDE: run finished — ${endBars} bars` +
+      `PyneIDE: ${opts.live ? 'live chart stopped' : 'run finished'} — ${endBars} bars` +
       (trades.length ? `, ${trades.length} trades` : '') +
       (netProfit !== undefined && netProfit !== null ? `, net profit ${netProfit.toFixed(2)}` : '');
     // Non-intrusive: the chart toolbar now owns CSV access, so a transient
@@ -1597,7 +1823,7 @@ export class RunService {
   }
 }
 
-/** "Run ..." / "Debug" / "Profile" / "Robustness" CodeLenses on the first line of Pyne/Pine scripts. */
+/** "Run ..." / "Live" / "Debug" / "Profile" / "Robustness" CodeLenses on the first line of Pyne/Pine scripts. */
 class RunCodeLensProvider implements vscode.CodeLensProvider {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeCodeLenses = this.changed.event;
@@ -1631,6 +1857,11 @@ class RunCodeLensProvider implements vscode.CodeLensProvider {
       }),
     ];
     lenses.push(
+      new vscode.CodeLens(range, {
+        title: '$(broadcast) Live',
+        command: 'pyneide.runLive',
+        arguments: [doc.uri],
+      }),
       new vscode.CodeLens(range, {
         title: '$(bug) Debug',
         command: 'pyneide.debugScript',

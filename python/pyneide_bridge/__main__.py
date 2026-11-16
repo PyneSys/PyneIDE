@@ -56,7 +56,7 @@ def main() -> int:
                              "--script/--data")
     parser.add_argument("--live", default=None, metavar="PROVIDER_STRING",
                         help="Live chart: download the provider string's history "
-                             "(e.g. ccxt:BYBIT:BTC/USDT:USDT@1) into workdir/data, run "
+                             "(e.g. ccxt:BYBIT:BTC/USDT:USDT@1) into memory, run "
                              "--script on it, then on the provider's live feed. Data only, "
                              "no trading; replaces --data")
     parser.add_argument("--live-from", default=None, metavar="FROM",
@@ -65,6 +65,10 @@ def main() -> int:
     parser.add_argument("--history-trades", action="store_true",
                         help="With --live on a strategy: trade on the history bars too and "
                              "carry that position into the live phase (default: start flat)")
+    parser.add_argument("--live-output-limit", type=int, default=None, metavar="MB",
+                        help="With --live: stop saving the plot CSV and viz NDJSON once they "
+                             "reach MB together, the chart goes on (default: 256, 0: no "
+                             "limit)")
     parser.add_argument("--time-from", type=int, default=None,
                         help="Start of the run window (epoch seconds, UTC)")
     parser.add_argument("--time-to", type=int, default=None,
@@ -156,8 +160,9 @@ def main() -> int:
         except Exception as exc:
             emitter.emit(error_event(exc))
             return 1
-    if args.history_trades or args.live_from is not None:
-        emitter.emit({"e": "error", "message": "--history-trades and --live-from need --live",
+    if args.history_trades or args.live_from is not None or args.live_output_limit is not None:
+        emitter.emit({"e": "error",
+                      "message": "--history-trades, --live-from and --live-output-limit need --live",
                       "kind": "ValueError", "traceback": ""})
         return 1
 

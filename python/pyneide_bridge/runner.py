@@ -42,10 +42,11 @@ def _equity_excursions(position: Any) -> list[float | None]:
     ]
 
 
-def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
+def _make_viz_writer(path: Path, data: str | Path, runner: Any) -> Any:
     """Create pynecore's native writer with IDE-owned persistence fields.
 
-    The source-data path lets a persisted chart recover its binding. Strategy
+    The source data (the ``.ohlcv`` path, or a live chart's provider string) lets
+    a persisted chart recover its binding. Strategy
     equity and the engine's equity excursions are stored on each bar because
     the plot CSV intentionally contains plots only; without them a chart
     reopened from disk could not rebuild the full-run performance view. A bar
@@ -58,13 +59,30 @@ def _make_viz_writer(path: Path, data_path: Path, runner: Any) -> Any:
 
     class _DataPathVizWriter(VizWriter):
         trades: list[dict[str, Any]]
+        finished = False
+
+        def finish(self) -> None:
+            """End the file at the current bar as a complete record (drawings
+            snapshot, then the end record); the later bars are not written."""
+            if not self.is_open:
+                return
+            try:
+                self.write_drawings_snapshot()
+                self.write_end(self.bars)
+            finally:
+                self.close()
+                self.finished = True
 
         def _emit(self, obj: dict) -> None:
+            # A finished file takes no more records, but write_bar still drains
+            # the plot meta queue the runner fills on every bar
+            if self.finished:
+                return
             if obj.get("t") == "hdr":
                 initial_capital = getattr(runner.script, "initial_capital", None)
                 obj = {
                     **obj,
-                    "data": str(data_path),
+                    "data": str(data),
                     "initialCapital": num_or_none(initial_capital),
                 }
             elif obj.get("t") == "bar":
@@ -1116,6 +1134,8 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 viz_tap.collect_colors(time_ms)
             if viz_tap.journal:
                 viz_tap.collect_drawings(bars_done - 1)
+            if live is not None and live.active and live.output_cap is not None:
+                live.output_cap.check()
             if (live is not None and live.active) or len(batch) >= batch_size or \
                     time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
                 flush()

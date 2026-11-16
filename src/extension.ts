@@ -225,6 +225,19 @@ export function activate(context: vscode.ExtensionContext): void {
   runService.setShowSymbolBrowser((prefill) =>
     void openSymbolBrowser(context, manager, output, prefill)
   );
+  // Run Live picks its symbol, timeframe and history in the same browser
+  runService.setPickLiveTarget((request, env) =>
+    SymbolBrowserPanel.pickLive(
+      context,
+      {
+        pythonBin: env.pythonBin,
+        bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+        workdir: env.workdir,
+        output,
+      },
+      request
+    )
+  );
   // "Convert to full @pyne" quick fix on Edge-profile violations.
   new EdgeQuickFixProvider().register(context);
   // Declared-type hovers when Pylance (or another pyright) supersedes the

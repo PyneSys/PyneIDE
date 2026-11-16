@@ -20,9 +20,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function fixture() {
+function fixture({ open = true } = {}) {
   const requests = [], messages = [], notifications = [], cancellations = [];
+  const state = new Map();
   let receive;
+  let disposed = 0;
+  let onDispose = () => {};
   class ProviderServiceError extends Error {}
   class ProviderService {
     requestWithHandle(method, params) {
@@ -32,6 +35,7 @@ function fixture() {
       return { id, result: pending.promise };
     }
     cancel(id) { cancellations.push(id); }
+    dispose() {}
   }
   const vscode = {
     ViewColumn: { Active: 1 },
@@ -44,7 +48,12 @@ function fixture() {
           postMessage: (msg) => { messages.push(msg); },
           onDidReceiveMessage: (callback) => { receive = callback; },
         },
-        onDidDispose() {},
+        reveal() {},
+        dispose() {
+          disposed++;
+          onDispose();
+        },
+        onDidDispose(callback) { onDispose = callback; },
       }),
       showInformationMessage: () => {
         const pending = deferred();
@@ -59,11 +68,28 @@ function fixture() {
     require: (name) => name === 'vscode' ? vscode
       : name === './providerService' ? { ProviderService, ProviderServiceError } : require(name),
   });
-  module.exports.SymbolBrowserPanel.show({ extensionUri: '/extension' }, {
+  const context = {
+    extensionUri: '/extension',
+    globalState: { get: (key) => state.get(key), update: async (key, value) => { state.set(key, value); } },
+  };
+  const deps = {
     pythonBin: 'python', bridgeRoot: '/bridge', workdir: '/work', output: { appendLine() {} },
-  });
-  return { requests, messages, notifications, cancellations, send: (msg) => receive(msg) };
+  };
+  const panel = module.exports.SymbolBrowserPanel;
+  if (open) panel.show(context, deps);
+  return {
+    requests, messages, notifications, cancellations, state, send: (msg) => receive(msg),
+    show: () => panel.show(context, deps),
+    pickLive: (request) => panel.pickLive(context, deps, request),
+    disposed: () => disposed,
+  };
 }
+
+const liveRequest = { scriptName: 'trend.py', strategy: true, from: '-500', historyTrades: true };
+const startLive = {
+  type: 'startLive', provider: 'ccxt', broker: 'BYBIT', symbol: 'BTC/USDT:USDT', timeframe: '1',
+  from: '-1000', historyTrades: false,
+};
 
 const download = {
   type: 'download', provider: 'capitalcom', symbol: 'EURUSD', timeframe: '240',
@@ -128,4 +154,40 @@ test('the opt-in data choice reaches the bridge as extra_data', async () => {
   await flush();
   f.notifications[1].resolve(undefined);
   await flush();
+});
+
+test('Start Live resolves the pick with the provider string and closes a panel opened for it', async () => {
+  const f = fixture({ open: false });
+  const pick = f.pickLive(liveRequest);
+  f.send(startLive);
+  assert.deepEqual({ ...(await pick) }, {
+    provider: 'ccxt:BYBIT:BTC/USDT:USDT@1', from: '-1000', historyTrades: false,
+  });
+  assert.equal(f.disposed(), 1);
+  assert.equal(f.state.get('pyneide.symbolBrowser.timeframe'), '1');
+});
+
+test('an open panel enters the live pick, and opening it for a download gives the pick up', async () => {
+  const f = fixture();
+  const pick = f.pickLive({ ...liveRequest, strategy: false });
+  assert.deepEqual({ ...f.messages.at(-1).live }, {
+    script: 'trend.py', strategy: false, from: '-500', historyTrades: true,
+  });
+  f.show();
+  assert.equal(await pick, undefined);
+  assert.equal(f.messages.at(-1).live, null);
+  // A Start Live without a pick waiting does nothing
+  f.send(startLive);
+  await flush();
+  assert.equal(f.disposed(), 0);
+});
+
+test('an indicator never trades on the history, whatever the switch says', async () => {
+  const f = fixture();
+  const pick = f.pickLive({ ...liveRequest, strategy: false });
+  f.send({ ...startLive, broker: undefined, provider: 'replay', symbol: 'TEST', historyTrades: true });
+  assert.deepEqual({ ...(await pick) }, { provider: 'replay:TEST@1', from: '-1000', historyTrades: false });
+  // The panel was open before the pick: it stays, back in download mode
+  assert.equal(f.disposed(), 0);
+  assert.equal(f.messages.at(-1).live, null);
 });

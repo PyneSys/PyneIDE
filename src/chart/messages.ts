@@ -36,8 +36,12 @@ export type ChartInMessage =
   /** Rows in time order; a row with the last row's timestamp replaces it. */
   | { type: 'bars'; rows: BarRow[] }
   /** A live chart's history is complete: from here on the chart takes single
-   * bar updates and never reloads its data. */
+   * bar updates and reloads its data only when it drops its oldest bars. */
   | { type: 'live' }
+  /** A live chart dropped its oldest bars: `base` is the bar index of its first
+   * bar now. Drop the bars before it (sent after the bars that pushed it over
+   * the limit, and on a replay before the bars). */
+  | { type: 'barBase'; base: number }
   /** The forming bar's latest update; the next tick or the bar's close
    * replaces it. */
   | { type: 'tick'; tick: TickEvent }

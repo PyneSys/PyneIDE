@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { explainError, providerTarget } from '../net/errors';
+import { liveProviderString, type LiveTarget } from '../run/liveTarget';
 import { writeSymbolMapEntry } from '../run/symbolMapFile';
 import { OhlcvEditorProvider } from './ohlcvEditor';
 import { parseSymInfo } from './syminfo';
@@ -31,7 +32,12 @@ import {
   type ProviderInfo,
   type SymInfoDict,
 } from './providerService';
-import type { BrowserDefaults, BrowserInMessage, BrowserOutMessage } from './symbolBrowserMessages';
+import type {
+  BrowserDefaults,
+  BrowserInMessage,
+  BrowserOutMessage,
+  LiveModeInfo,
+} from './symbolBrowserMessages';
 
 const LAST_PROVIDER_KEY = 'pyneide.symbolBrowser.provider';
 const LAST_BROKER_KEY = 'pyneide.symbolBrowser.broker';
@@ -66,6 +72,16 @@ export interface SecurityPrefill {
   chartKey?: string;
 }
 
+/** The pick of a live chart's symbol, timeframe and history (Run Live). */
+export interface LivePickRequest {
+  /** File name of the script the live chart runs. */
+  scriptName: string;
+  strategy: boolean;
+  /** The settings the pick starts from: the script's last live target. */
+  from: string;
+  historyTrades: boolean;
+}
+
 export interface SymbolBrowserDeps {
   pythonBin: string;
   /** Directory that CONTAINS the pyneide_bridge package (`<ext>/python`). */
@@ -88,6 +104,10 @@ export class SymbolBrowserPanel {
   private activeDownloadId: number | undefined;
   /** Armed security-download prefill (map write + Run offer after download). */
   private prefill: SecurityPrefill | undefined;
+  /** Armed live-chart pick: Start Live resolves it, anything else cancels it. */
+  private livePick:
+    | { request: LivePickRequest; resolve: (target: LiveTarget | undefined) => void; created: boolean }
+    | undefined;
 
   static show(
     context: vscode.ExtensionContext,
@@ -97,12 +117,43 @@ export class SymbolBrowserPanel {
     const existing = SymbolBrowserPanel.panels.get(JSON.stringify([deps.workdir, deps.pythonBin]));
     if (existing) {
       existing.panel.reveal(vscode.ViewColumn.Active);
+      // Opened for something else: a live pick still waiting is given up
+      existing.cancelLivePick();
       if (prefill) existing.arm(prefill);
       return;
     }
     SymbolBrowserPanel.panels.set(JSON.stringify([deps.workdir, deps.pythonBin]), new SymbolBrowserPanel(context, deps, prefill));
   }
 
+  /**
+   * Pick the symbol, timeframe and history of a live chart. Resolves with the
+   * live target on Start Live, or undefined when the pick is given up (the panel
+   * closed, or opened for a download or another pick). A panel opened only for
+   * the pick closes after Start Live; one that was already open stays.
+   */
+  static pickLive(
+    context: vscode.ExtensionContext,
+    deps: SymbolBrowserDeps,
+    request: LivePickRequest
+  ): Promise<LiveTarget | undefined> {
+    const key = JSON.stringify([deps.workdir, deps.pythonBin]);
+    let panel = SymbolBrowserPanel.panels.get(key);
+    const created = panel === undefined;
+    if (panel) {
+      panel.panel.reveal(vscode.ViewColumn.Active);
+    } else {
+      panel = new SymbolBrowserPanel(context, deps);
+      SymbolBrowserPanel.panels.set(key, panel);
+    }
+    const target = panel;
+    return new Promise((resolve) => {
+      target.cancelLivePick();
+      target.prefill = undefined;
+      target.livePick = { request, resolve, created };
+      // A new panel's webview is not listening yet: 'ready' posts the mode then
+      if (!created) target.postLiveMode();
+    });
+  }
   /**
    * Re-read the provider list after a plugin was installed or removed. The
    * service discovers entry points at import time, so the live process has to
@@ -148,6 +199,49 @@ export class SymbolBrowserPanel {
     void this.panel.webview.postMessage(message);
   }
 
+  private postLiveMode(): void {
+    const request = this.livePick?.request;
+    const live: LiveModeInfo | null = request
+      ? {
+          script: request.scriptName,
+          strategy: request.strategy,
+          from: request.from,
+          historyTrades: request.historyTrades,
+        }
+      : null;
+    this.post({ type: 'liveMode', live });
+  }
+
+  /** Give up the live pick waiting on this panel, if any. */
+  private cancelLivePick(): void {
+    const pick = this.livePick;
+    if (!pick) return;
+    this.livePick = undefined;
+    pick.resolve(undefined);
+    this.postLiveMode();
+  }
+
+  private async startLive(msg: {
+    provider: string;
+    broker?: string;
+    symbol: string;
+    timeframe: string;
+    from: string;
+    historyTrades: boolean;
+  }): Promise<void> {
+    const pick = this.livePick;
+    if (!pick) return;
+    this.livePick = undefined;
+    await this.persist(msg.provider, msg.broker, msg.timeframe);
+    pick.resolve({
+      provider: liveProviderString(msg.provider, msg.broker, msg.symbol, msg.timeframe),
+      from: msg.from,
+      historyTrades: pick.request.strategy && msg.historyTrades,
+    });
+    if (pick.created) this.panel.dispose();
+    else this.postLiveMode();
+  }
+
   /** Re-arm a prefill on the already-open panel and seed the webview. */
   private arm(prefill: SecurityPrefill): void {
     this.prefill = prefill;
@@ -167,6 +261,7 @@ export class SymbolBrowserPanel {
       case 'ready':
         await this.sendInit();
         if (this.prefill) this.postPrefill(this.prefill);
+        if (this.livePick) this.postLiveMode();
         break;
       case 'selectProvider':
         await this.sendBrokers(msg.provider);
@@ -188,6 +283,9 @@ export class SymbolBrowserPanel {
         break;
       case 'persist':
         await this.persist(msg.provider, msg.broker, msg.timeframe);
+        break;
+      case 'startLive':
+        await this.startLive(msg);
         break;
     }
   }
@@ -464,6 +562,9 @@ export class SymbolBrowserPanel {
 
   private dispose(): void {
     SymbolBrowserPanel.panels.delete(JSON.stringify([this.deps.workdir, this.deps.pythonBin]));
+    const pick = this.livePick;
+    this.livePick = undefined;
+    pick?.resolve(undefined);
     this.service.dispose();
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
@@ -480,6 +581,8 @@ export class SymbolBrowserPanel {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   html, body { height: 100%; margin: 0; padding: 0; }
+  /* The display of a class (.check is flex) would beat the hidden attribute */
+  [hidden] { display: none !important; }
   body {
     display: flex; flex-direction: column;
     font-family: var(--vscode-font-family);
@@ -601,16 +704,22 @@ export class SymbolBrowserPanel {
   <label>Timeframe</label>
   <select id="timeframe"></select>
   <input type="text" id="timeframe-custom" class="custom" placeholder="e.g. 3, 90, 1D" hidden />
-  <label>From</label>
+  <label id="from-label">From</label>
   <select id="from"></select>
   <input type="date" id="from-date" hidden />
-  <label>To</label>
+  <label id="to-label">To</label>
   <select id="to"></select>
   <input type="date" id="to-date" hidden />
   <label class="check" id="truncate-label" hidden><input type="checkbox" id="truncate" /> truncate</label>
   <span class="check" id="extra-wrap" hidden>
     <label class="check"><input type="checkbox" id="extra" /> <span id="extra-label"></span></label>
     <span class="help" id="extra-help" role="img" tabindex="0">?</span>
+  </span>
+  <span class="check" id="history-trades-wrap" hidden>
+    <label class="check"><input type="checkbox" id="history-trades" /> Trade on history</label>
+    <span class="help" role="img" tabindex="0"
+          title="The strategy trades on the history bars too and carries that position into the live chart. Off: it starts flat when the live feed begins."
+          aria-label="The strategy trades on the history bars too and carries that position into the live chart. Off: it starts flat when the live feed begins.">?</span>
   </span>
   <button id="download" disabled>Download</button>
   <button id="cancel" class="secondary" hidden>Cancel</button>

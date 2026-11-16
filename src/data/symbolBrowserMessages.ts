@@ -13,6 +13,17 @@ export interface BrowserDefaults {
   timeframe?: string;
 }
 
+/** The Symbol Browser picks the symbol of a live chart: Start Live replaces Download. */
+export interface LiveModeInfo {
+  /** File name of the script the live chart runs. */
+  script: string;
+  /** A strategy: the "Trade on history" switch is shown. */
+  strategy: boolean;
+  /** History start as the bridge's `--live-from` (`-N` bars). */
+  from: string;
+  historyTrades: boolean;
+}
+
 /** Host -> webview. */
 export type BrowserInMessage =
   | { type: 'init'; providers: ProviderInfo[]; defaults: BrowserDefaults }
@@ -29,7 +40,9 @@ export type BrowserInMessage =
   | { type: 'downloadDone'; ohlcvPath: string; barsWritten: number; symbol: string }
   | { type: 'downloadError'; kind: string; message: string; retryable: boolean }
   // Seed the search box + timeframe for a security-download prefill.
-  | { type: 'prefill'; symbol: string; timeframe?: string };
+  | { type: 'prefill'; symbol: string; timeframe?: string }
+  // Enter (with the run's settings) or leave the live-chart pick.
+  | { type: 'liveMode'; live: LiveModeInfo | null };
 
 /** Webview -> host. */
 export type BrowserOutMessage =
@@ -57,5 +70,14 @@ export type BrowserOutMessage =
       extraData: boolean;
     }
   | { type: 'cancelDownload' }
+  | {
+      type: 'startLive';
+      provider: string;
+      broker?: string;
+      symbol: string;
+      timeframe: string;
+      from: string;
+      historyTrades: boolean;
+    }
   // Persist the current selection so the next open restores it.
   | { type: 'persist'; provider?: string; broker?: string; timeframe?: string };

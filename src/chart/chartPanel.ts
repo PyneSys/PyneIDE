@@ -34,6 +34,7 @@ import type { RunListener } from '../run/runService';
 import { upsertLastBar } from './barRows';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
+import { foldColorRows, liveTrimCount } from './liveWindow';
 import { parseLabelLink } from './labelLinks';
 import { toColorSchemeId, type ColorSchemeId } from './colorScheme';
 import { toPriceScaleId, type PriceScaleId } from './priceScale';
@@ -99,6 +100,8 @@ interface ChartSnapshot {
   robustness: RobustnessReport | undefined;
   /** A live chart's history is complete (the bridge's `live` event). */
   live: boolean;
+  /** Bar index of `bars[0]`: a live chart drops its oldest bars (see liveWindow). */
+  barBase: number;
   /** The forming bar's latest update; dropped by the bar's close. */
   tick: TickEvent | undefined;
   feedStatus: FeedStatusEvent | undefined;
@@ -118,6 +121,7 @@ function emptySnapshot(start: StartEvent): ChartSnapshot {
     stats: undefined,
     robustness: undefined,
     live: false,
+    barBase: 0,
     tick: undefined,
     feedStatus: undefined,
     ended: undefined,
@@ -230,6 +234,7 @@ export class ChartPanel {
           }
         }
         this.post({ type: 'bars', rows: event.d });
+        this.trimLive();
         break;
       case 'live':
         if (this.snap) this.snap.live = true;
@@ -289,6 +294,19 @@ export class ChartPanel {
       default:
         break;
     }
+  }
+
+  /** Drop a live chart's oldest bars past its bar limit, and tell the webview
+   * (which got the same bars) the bar index its first bar has now. */
+  private trimLive(): void {
+    const s = this.snap;
+    if (!s?.start.live) return;
+    const drop = liveTrimCount(s.bars.length);
+    if (drop === 0) return;
+    s.bars.splice(0, drop);
+    s.barBase += drop;
+    s.colors = foldColorRows(s.colors, s.bars[0][0]);
+    this.post({ type: 'barBase', base: s.barBase });
   }
 
   /** Create (if needed) and reveal the panel. The title is fixed at
@@ -422,7 +440,7 @@ export class ChartPanel {
   }
 
   /** Rebuild the current webview from the host snapshot (reset → meta → keys →
-   * bars → colors → drawings → trades → stats → robustness → live → feed status →
+   * bar base → bars → colors → drawings → trades → stats → robustness → live → feed status →
    * tick → end; metas must precede the
    * bars that reference them, colors/drawings follow the bars their
    * timestamps / bar indices join against). Safe to call only once the
@@ -436,6 +454,7 @@ export class ChartPanel {
       void webview.postMessage({ type: 'plotMeta', metas: [...s.plotMeta.values()] });
     }
     if (s.plotKeys.length) void webview.postMessage({ type: 'plotKeys', keys: s.plotKeys });
+    if (s.barBase) void webview.postMessage({ type: 'barBase', base: s.barBase });
     if (s.bars.length) void webview.postMessage({ type: 'bars', rows: s.bars });
     if (s.colors.length) void webview.postMessage({ type: 'colors', d: s.colors });
     if (s.drawings.size) {

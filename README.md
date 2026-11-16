@@ -63,6 +63,7 @@ model; PyneIDE ships analysis built for it.
 
 - ✓ Live Pine Script diagnostics, completion, hover and signature help — its own language server.
 - ✓ One-click compile and run on an interactive, streaming candlestick chart.
+- ✓ Live charts: run a script on a provider's live feed and watch it update tick by tick.
 - ✓ A script's `input.*()` calls as an editable form — save and the chart re-runs, your source untouched.
 - ✓ A real step-through debugger: go **bar by bar** and set breakpoints on a chart bar — which the TradingView platform doesn't offer.
 - ✓ A line-by-line profiler that shows where a script spends its time, on Pine and Pyne code alike.
@@ -151,6 +152,28 @@ built in.
 ![The Layers popup toggling individual plots off and back on, with the chart updating instantly](media/chart.gif)
 
 *Toggle a plot off in the Layers popup and it's gone instantly — nothing re-runs.*
+
+## Live charts
+
+**Run Live** (the **Live** CodeLens on a script) runs the script on a provider's
+recent history, then keeps it running on the provider's live feed: the forming
+candle, the plots, the drawings and a strategy's trades update with every tick.
+The first Run Live of a script opens the Symbol Browser to pick the symbol, the
+timeframe and how much history to start from; later runs reuse that choice, and
+**Select Live Symbol and Run…** changes it. A strategy can trade on the history
+too and carry that position into the live feed (**Trade on history**, on by
+default), or start flat.
+
+The chart follows the newest bar while you stay at its right edge, shows a
+countdown to the bar's close, and the status bar and the chart toolbar show the
+state of the feed (live, reconnecting, market closed). A live chart keeps the
+last 20,000 bars.
+
+Live charts are for watching a script, not for trading: PyneIDE never places an
+order. The connection goes straight from your machine to the provider (see
+[Privacy and data handling](#privacy-and-data-handling)). The run's plot CSV and
+visualization file stop growing at 256 MB by default (`pyneide.live.outputLimitMB`);
+the chart keeps updating past that.
 
 ## Find the slow lines
 
@@ -383,9 +406,10 @@ all rights to your code. Your account also carries the usual account and usage
 records. The linked documents are the authoritative wording — the summary here
 only tells you *when* PyneIDE triggers any of it.
 
-**Market data — third-party APIs.** Symbol lookup and OHLCV downloads go
-straight from your machine to the data provider you picked — an exchange or
-broker, through its own API, with the credentials you configured. These requests
+**Market data — third-party APIs.** Symbol lookup, OHLCV downloads and the live
+feed of a live chart go straight from your machine to the data provider you
+picked — an exchange or broker, through its own API, with the credentials you
+configured. These requests
 do **not** pass through PyneSys, and what the provider logs is governed by that
 provider's own terms. Your API keys stay in the local workdir configuration.
 
