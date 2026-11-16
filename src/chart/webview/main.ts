@@ -3,7 +3,8 @@
  *
  * Data flow: bar rows accumulate in `allBars`; a throttled tick calls
  * `chart.resetData()`, whose data loader serves the full array (v10 has no
- * push API — the loader model IS the API). Plots are grouped into two
+ * push API — the loader model IS the API). A live chart switches to the
+ * loader's bar subscription once its history is in (see "Live chart"). Plots are grouped into two
  * dynamic indicators (candle pane vs a separate pane); each plot renders
  * with its pynecore PlotMeta (color/linewidth/style/force_overlay, per-bar
  * dynamic colors via ColorTrack — see plotStyles.ts), falling back to the
@@ -32,11 +33,14 @@ import type {
   BarRow,
   DrawingFamily,
   EquityExcursions,
+  FeedStatusEvent,
   PlotMetaRecord,
   RobustnessReport,
   StartEvent,
+  TickEvent,
   TradeRecord,
 } from '../../run/bridgeClient';
+import { upsertLastBar } from '../barRows';
 import {
   CANDLE_STYLE_OPTIONS,
   DEFAULT_CANDLE_STYLE,
@@ -84,6 +88,7 @@ import {
   type TableState,
 } from './drawings';
 import { LabelTooltip } from './labelTooltip';
+import { TailCalc, datumReach, formatCountdown, msToPeriodEnd, periodMs } from './liveSeries';
 import {
   buildFigure,
   buildHlineFigure,
@@ -389,8 +394,27 @@ interface RunState {
   paneDrawIndicatorId?: string;
   /** Bar index -> trade glyphs, rebuilt whenever trades/bars grow. */
   tradeMarkers?: TradeMarkerIndex;
-  /** [trades.length, bars.length] the index above was built from. */
-  tradeMarkersBuiltFor?: [number, number];
+  /** [trades.length, bars.length, tickTradesVersion] the index above was built from. */
+  tradeMarkersBuiltFor?: [number, number, number];
+  /** A live chart's history is in (the bridge's `live` event): from here on
+   * bars and ticks reach the chart one at a time through the data loader's bar
+   * subscription, and the chart never reloads (`resetData`) its data again. */
+  live: boolean;
+  /** The data loader's bar subscription; set while the chart holds data. */
+  pushBar?: (bar: KLineData) => void;
+  /** How many of `bars` the chart holds. */
+  fedBars: number;
+  /** The chart's last bar must be pushed again: replaced, or its colors or
+   * drawings changed (a push makes the chart recalculate and repaint). */
+  lastBarStale: boolean;
+  /** Timestamp of the forming bar the latest tick drew, until its close. */
+  tickTs?: number;
+  /** The trades the forming bar closed so far, by the latest tick. */
+  tickTrades: TradeRecord[];
+  tickTradesVersion: number;
+  feedStatus?: FeedStatusEvent;
+  /** `trades.length` the trades table was last rendered with, live. */
+  renderedTrades: number;
   tradeMarkerIndicatorId?: string;
   /** Visible barcolor plots, read by the candle color callback at draw time. */
   barcolorMetas: PlotMetaRecord[];
@@ -690,7 +714,60 @@ function candleStyles(): DeepPartial<Styles> {
   }
 }
 
-function chartStyles(): DeepPartial<Styles> {
+/**
+ * The last price line with its axis label, live only: a backtest's last bar is
+ * just the end of the data. Below the label the time left until the bar closes
+ * (the chart repaints it every second, the text comes from `formatExtendText`).
+ * `st` is the run the styles are for: undefined for a chart whose run is not
+ * installed yet.
+ */
+function lastPriceMarkStyles(
+  p: ChartPalette,
+  st: RunState | undefined
+): DeepPartial<Styles['candle']['priceMark']['last']> {
+  const live = st?.live === true;
+  return {
+    show: live,
+    upColor: p.up,
+    downColor: p.down,
+    noChangeColor: NO_CHANGE_COLOR,
+    extendTexts: [{
+      // Shown, the chart runs a repaint timer for it: only while a feed runs
+      show: live && !st?.ended,
+      position: 'below_price',
+      updateInterval: 1000,
+      style: 'fill',
+      size: 11,
+      paddingLeft: 4,
+      paddingTop: 2,
+      paddingRight: 4,
+      paddingBottom: 3,
+      color: '#ffffff',
+      family: 'Helvetica Neue',
+      weight: 'normal',
+      borderColor: 'transparent',
+      borderStyle: 'solid',
+      borderSize: 0,
+      borderDashedValue: [2, 2],
+      borderRadius: 2,
+      backgroundColor: null,
+    }],
+  };
+}
+
+/** The countdown under the last price label: the time left in the current bar
+ * period, on a connected feed with a fixed bar length. Before the next bar's
+ * first update the last bar has already ended, so the period is counted on
+ * from it. */
+function barCloseCountdown(bar: KLineData): string {
+  const st = state;
+  if (!st?.live || st.ended || (st.feedStatus && st.feedStatus.state !== 'live')) return '';
+  const length = periodMs(st.start.syminfo.period);
+  return length === undefined ? '' : formatCountdown(msToPeriodEnd(bar.timestamp, length, Date.now()));
+}
+
+/** Every themed chart style, for the given run (see `lastPriceMarkStyles`). */
+function chartStyles(st: RunState | undefined): DeepPartial<Styles> {
   const dark = isDark();
   const text = cssVar('--vscode-editor-foreground', dark ? '#ccc' : '#333');
   const grid = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
@@ -710,7 +787,7 @@ function chartStyles(): DeepPartial<Styles> {
       vertical: { color: grid },
     },
     candle: {
-      priceMark: { last: { show: false } },
+      priceMark: { last: lastPriceMarkStyles(p, st) },
       ...candle.candle,
       ...legend.candle,
     },
@@ -971,7 +1048,8 @@ function startRun(start: StartEvent): void {
 
   captureCandleDefaults(chart);
   compactLegend = container.clientWidth < COMPACT_LEGEND_WIDTH;
-  chart.setStyles(chartStyles());
+  // `state` still holds the previous run: the new one starts as not live
+  chart.setStyles(chartStyles(undefined));
   // The crosshair date label also shows the bar_index — a big help while
   // developing a script, since log/debug output is indexed by it.
   chart.setFormatter({
@@ -981,6 +1059,7 @@ function startRun(start: StartEvent): void {
       const idx = state?.tsToIndex.get(timestamp);
       return idx === undefined ? text : `${text} (${idx})`;
     },
+    formatExtendText: ({ data }) => barCloseCountdown(data),
   });
   const tz = start.syminfo.timezone;
   if (typeof tz === 'string' && tz) {
@@ -1014,6 +1093,12 @@ function startRun(start: StartEvent): void {
     showVolume: false,
     breakpointOverlays: new Map(),
     viewAnchor,
+    live: false,
+    fedBars: 0,
+    lastBarStale: false,
+    tickTrades: [],
+    tickTradesVersion: 0,
+    renderedTrades: 0,
   };
   // The bottom panel is part of the held picture too: emptying its rows and
   // equity curve while the chart still shows the old run would be the same
@@ -1028,10 +1113,16 @@ function startRun(start: StartEvent): void {
 
   chart.setDataLoader({
     getBars: ({ callback }) => {
+      st.fedBars = st.bars.length;
+      st.lastBarStale = false;
       callback(st.bars.slice(), false);
     },
-    subscribeBar: () => {},
-    unsubscribeBar: () => {},
+    subscribeBar: ({ callback }) => {
+      st.pushBar = callback;
+    },
+    unsubscribeBar: () => {
+      st.pushBar = undefined;
+    },
   });
   chart.setSymbol({
     ticker: String(start.syminfo.tickerid ?? start.syminfo.ticker ?? 'SYMBOL'),
@@ -1433,13 +1524,18 @@ function rebuildPlotIndicators(st: RunState): void {
     const valueIdx = [...lineIdx, ...candleIdx];
     const futureBars = Math.max(0, ...valueIdx.map((i) => metaForKey(st, st.plotKeys[i])?.offset ?? 0));
     const datumIdx = [...valueIdx, ...statusIdx];
+    // A live update recomputes only the datums it can reach (see TailCalc).
+    const tail = new TailCalc<PlotDatum>({
+      future: futureBars,
+      back: datumReach(datumIdx.map((i) => metaForKey(st, st.plotKeys[i]) ?? {})).back,
+    });
     return {
       name,
       shortName: 'Plots',
       precision,
       figures,
       calc: (dataList: PyneBar[]) =>
-        Array.from({ length: dataList.length + futureBars }, (_d, barIndex) => {
+        tail.calc(dataList, (barIndex) => {
           const out: PlotDatum = {};
           for (const i of datumIdx) {
             const meta = metaForKey(st, st.plotKeys[i]);
@@ -1589,9 +1685,10 @@ function rebuildPlotIndicators(st: RunState): void {
     st.overlayBgIndicatorId = undefined;
   }
 
-  // Pane group: a fixed pane id so plots and markers land on one pane.
-  // The plots indicator is created first WITHOUT stacking (wiping the pane
-  // clean), then the marker layer stacks on top of it.
+  // Pane group: a fixed pane id so plots and markers land on one pane. Every
+  // layer stacks: created without stacking, KLineChart would remove every other
+  // indicator of the pane, the drawing layer among them, which
+  // ensureDrawingIndicators would not recreate (its id is still set).
   if (paneGroup.lineIdx.length || paneHlines.length || paneGroup.candles.length ||
       paneFills.length || paneStatus.length) {
     const precision = panePrecision(
@@ -1611,7 +1708,7 @@ function rebuildPlotIndicators(st: RunState): void {
     );
     if (st.paneIndicatorId) st.chart.removeIndicator({ id: st.paneIndicatorId });
     st.paneIndicatorId =
-      st.chart.createIndicator({ name: 'PynePlotsPane', paneId: PLOTS_PANE_ID }) ?? undefined;
+      st.chart.createIndicator({ name: 'PynePlotsPane', paneId: PLOTS_PANE_ID }, true) ?? undefined;
   } else if (st.paneIndicatorId) {
     st.chart.removeIndicator({ id: st.paneIndicatorId });
     st.paneIndicatorId = undefined;
@@ -1725,10 +1822,13 @@ function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
     !st.tradeMarkers ||
     !built ||
     built[0] !== st.trades.length ||
-    built[1] !== st.bars.length
+    built[1] !== st.bars.length ||
+    built[2] !== st.tickTradesVersion
   ) {
-    st.tradeMarkers = buildTradeMarkerIndex(st.trades, st.bars, st.tsToIndex);
-    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length];
+    // A live tick's trades are drawn until the bar's close commits them
+    const trades = st.tickTrades.length ? [...st.trades, ...st.tickTrades] : st.trades;
+    st.tradeMarkers = buildTradeMarkerIndex(trades, st.bars, st.tsToIndex);
+    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length, st.tickTradesVersion];
   }
   return st.tradeMarkers;
 }
@@ -1740,7 +1840,8 @@ function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
  * marker cap is needed.
  */
 function ensureTradeMarkerIndicator(st: RunState): void {
-  const want = tradeMarkersVisible && st.start.scriptType === 'strategy' && st.trades.length > 0;
+  const want = tradeMarkersVisible && st.start.scriptType === 'strategy' &&
+    st.trades.length + st.tickTrades.length > 0;
   if (want && !st.tradeMarkerIndicatorId) {
     registerIndicator({
       name: TRADE_MARKER_INDICATOR_NAME,
@@ -2242,7 +2343,7 @@ function applyCandleStyle(): void {
 function applyColorScheme(): void {
   tradeMarkerTheme = undefined;
   publishPaletteVars(palette());
-  state?.chart.setStyles(chartStyles());
+  state?.chart.setStyles(chartStyles(state));
   drawPerformance();
   if (candlePopupEl && !candlePopupEl.hidden) renderCandleList();
 }
@@ -2436,10 +2537,14 @@ function uiTick(): void {
     st.dirty = false;
     const t0 = performance.now();
     const paneChange = assignPlotPanes(st);
-    st.chart.resetData();
-    // resetData snaps the viewport to the newest bar: follow the freshly
-    // streamed bars, or hold the position this run inherited.
-    restoreView(st);
+    if (st.live) {
+      flushLive(st);
+    } else {
+      st.chart.resetData();
+      // resetData snaps the viewport to the newest bar: follow the freshly
+      // streamed bars, or hold the position this run inherited.
+      restoreView(st);
+    }
     if (paneChange || st.metaDirty) {
       st.metaDirty = false;
       rebuildPlotIndicators(st);
@@ -2449,10 +2554,169 @@ function uiTick(): void {
     ensureDrawingIndicators(st);
     syncBreakpointOverlays(st);
     if (!isFrozen()) renderDrawingTables(st);
+    if (st.live) {
+      ensureTradeMarkerIndicator(st);
+      if (st.trades.length !== st.renderedTrades && activeTab === 'trades' && !isFrozen()) {
+        st.renderedTrades = st.trades.length;
+        renderTables();
+      }
+    }
     refreshDataWindow();
     elapsed = performance.now() - t0;
   }
   setTimeout(uiTick, Math.max(UI_TICK_MS, elapsed * 3));
+}
+
+// --- Live chart --------------------------------------------------------------
+// Until the bridge's `live` event a live chart streams its history like a
+// backtest. From there on every closed bar and every tick reaches the chart
+// through the data loader's bar subscription, once per frame: the chart appends
+// the bar or replaces its last one, recalculates the plots' tail only (see
+// TailCalc), and keeps the view where it is — following the newest bar while it
+// sits at the right edge, holding still when the user scrolled back.
+
+let liveFrame: number | undefined;
+
+/** Add a bar row (a closed bar or a tick's forming bar) to the run's bars. */
+function addBar(st: RunState, bar: PyneBar): void {
+  if (upsertLastBar(st.bars, bar, (b) => b.timestamp)) {
+    if (st.fedBars === st.bars.length) st.lastBarStale = true;
+  } else {
+    st.tsToIndex.set(bar.timestamp, st.bars.length - 1);
+  }
+}
+
+/** Drop what the ticks of the forming bar showed: its close (and the color,
+ * drawing and trade changes after it) is the committed state. */
+function closeForming(st: RunState): void {
+  st.tickTs = undefined;
+  st.colorTrack.clearProvisional();
+  st.drawings.revertProvisional();
+  if (st.tickTrades.length) {
+    st.tickTrades = [];
+    st.tickTradesVersion++;
+  }
+}
+
+function applyTick(st: RunState, tick: TickEvent): void {
+  const bar = rowToBar(tick.d);
+  addBar(st, bar);
+  st.tickTs = bar.timestamp;
+  if (tick.colors) st.colorTrack.setProvisional(st.bars.length - 1, tick.colors);
+  else st.colorTrack.clearProvisional();
+  if (tick.drawings) st.drawings.applyProvisional(tick.drawings);
+  else st.drawings.revertProvisional();
+  if (tick.trades?.length || st.tickTrades.length) {
+    st.tickTrades = tick.trades ?? [];
+    st.tickTradesVersion++;
+  }
+  liveChanged(st);
+}
+
+/** Something the chart's last bar shows changed: push it (and any new bar) on
+ * the next frame, and let the UI tick catch up the rest. */
+function liveChanged(st: RunState): void {
+  st.dirty = true;
+  if (!st.live) return;
+  if (st.fedBars > 0) st.lastBarStale = true;
+  if (liveFrame !== undefined) return;
+  liveFrame = requestAnimationFrame(() => {
+    liveFrame = undefined;
+    if (state === st) flushLive(st);
+  });
+}
+
+/** Hand the chart the bars it does not hold yet, and its last bar again when
+ * that one changed. */
+function flushLive(st: RunState): void {
+  const push = st.pushBar;
+  if (!push) return;
+  if (st.lastBarStale && st.fedBars > 0) push(st.bars[st.fedBars - 1]);
+  for (let i = st.fedBars; i < st.bars.length; i++) push(st.bars[i]);
+  st.fedBars = st.bars.length;
+  st.lastBarStale = false;
+}
+
+/**
+ * Lay the chart out complete: at a backtest's end, and once a live chart's
+ * history is in. `reload` rebuilds the chart's data from `bars`; a live chart
+ * that ends only takes its pending bars.
+ */
+function completeChart(st: RunState, reload: boolean): void {
+  st.dirty = false;
+  assignPlotPanes(st);
+  if (reload) {
+    st.chart.resetData();
+    restoreView(st);
+  } else {
+    flushLive(st);
+  }
+  // Final position reached; from here the view belongs to the user again.
+  st.viewAnchor = undefined;
+  rebuildPlotIndicators(st);
+  renderPlotList(st);
+  ensureDrawingIndicators(st);
+  syncBreakpointOverlays(st);
+  if (!isFrozen()) renderDrawingTables(st);
+  ensureTradeMarkerIndicator(st);
+  if (st.robustness) {
+    activeTab = 'robustness';
+    setCollapsed(false);
+  } else if (st.start.scriptType === 'strategy') {
+    activeTab = 'performance';
+    setCollapsed(false);
+  }
+  st.renderedTrades = st.trades.length;
+  renderTables();
+  syncToolbar();
+  refreshDataWindow();
+  // The new chart is complete: swap the held picture for it.
+  unfreezeAfterPaint();
+}
+
+const liveStatusEl = document.getElementById('live-status');
+
+/** The toolbar's feed indicator: shown on a live chart only. */
+function syncLiveStatus(): void {
+  if (!liveStatusEl) return;
+  const st = state;
+  if (!st?.start.live) {
+    liveStatusEl.hidden = true;
+    return;
+  }
+  const status = st.feedStatus;
+  // The feed connects while the history still runs; the chart is live once
+  // the history is in
+  let kind: string = status?.state ?? 'connecting';
+  if (st.ended) kind = 'stopped';
+  else if (!st.live) kind = 'loading';
+  let text: string;
+  switch (kind) {
+    case 'loading':
+      text = 'Loading history';
+      break;
+    case 'live':
+      text = 'LIVE';
+      break;
+    case 'reconnecting':
+      text = status?.attempt ? `Reconnecting · attempt ${status.attempt}` : 'Reconnecting';
+      break;
+    case 'market_closed':
+      text = 'Market closed';
+      break;
+    case 'stopped':
+      text = 'Stopped';
+      break;
+    default:
+      text = 'Connecting';
+  }
+  liveStatusEl.hidden = false;
+  liveStatusEl.dataset.state = kind;
+  liveStatusEl.textContent = text;
+  liveStatusEl.title = [
+    st.start.live.provider,
+    status?.error ? `Last error: ${status.error}` : undefined,
+  ].filter((part): part is string => !!part).join('\n');
 }
 
 setTimeout(uiTick, UI_TICK_MS);
@@ -3467,17 +3731,35 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       dataWindowHeld = undefined;
       startRun(msg.start);
       refreshDataWindow();
+      syncLiveStatus();
       break;
     case 'bars': {
       if (!state) break;
-      for (const row of msg.rows) {
-        const bar = rowToBar(row);
-        state.tsToIndex.set(bar.timestamp, state.bars.length);
-        state.bars.push(bar);
+      for (const row of msg.rows) addBar(state, rowToBar(row));
+      const lastTs = msg.rows[msg.rows.length - 1]?.[0];
+      if (state.tickTs !== undefined && lastTs !== undefined && lastTs >= state.tickTs) {
+        closeForming(state);
       }
-      state.dirty = true;
+      liveChanged(state);
       break;
     }
+    case 'live':
+      if (state && !state.live) {
+        state.live = true;
+        state.chart.setStyles({ candle: { priceMark: { last: lastPriceMarkStyles(palette(), state) } } });
+        completeChart(state, true);
+        syncLiveStatus();
+      }
+      break;
+    case 'tick':
+      if (state) applyTick(state, msg.tick);
+      break;
+    case 'feedStatus':
+      if (state) {
+        state.feedStatus = msg.status;
+        syncLiveStatus();
+      }
+      break;
     case 'plotKeys':
       if (state) {
         state.plotKeys = msg.keys;
@@ -3494,18 +3776,21 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'colors':
       if (state) {
         state.colorTrack.addRows(msg.d, state.tsToIndex);
-        state.dirty = true;
+        liveChanged(state);
       }
       break;
     case 'drawings':
       if (state) {
         state.drawings.apply(msg.d);
-        state.dirty = true;
+        liveChanged(state);
       }
       break;
     case 'trades':
     case 'openTrades':
-      if (state) state.trades.push(...msg.trades);
+      if (state) {
+        state.trades.push(...msg.trades);
+        if (state.live) liveChanged(state);
+      }
       break;
     case 'stats':
       if (state) state.stats = msg.stats;
@@ -3556,30 +3841,12 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
     case 'end':
       if (state) {
         state.ended = true;
-        state.dirty = false;
-        assignPlotPanes(state);
-        state.chart.resetData();
-        restoreView(state);
-        // Final position reached; from here the view belongs to the user again.
-        state.viewAnchor = undefined;
-        rebuildPlotIndicators(state);
-        renderPlotList(state);
-        ensureDrawingIndicators(state);
-        syncBreakpointOverlays(state);
-        if (!isFrozen()) renderDrawingTables(state);
-        ensureTradeMarkerIndicator(state);
-        if (state.robustness) {
-          activeTab = 'robustness';
-          setCollapsed(false);
-        } else if (state.start.scriptType === 'strategy') {
-          activeTab = 'performance';
-          setCollapsed(false);
+        // A live chart keeps its view and the last tick it drew
+        completeChart(state, !state.live);
+        if (state.live) {
+          state.chart.setStyles({ candle: { priceMark: { last: lastPriceMarkStyles(palette(), state) } } });
         }
-        renderTables();
-        syncToolbar();
-        refreshDataWindow();
-        // The new chart is complete: swap the held picture for it.
-        unfreezeAfterPaint();
+        syncLiveStatus();
       }
       break;
   }

@@ -23,12 +23,15 @@ import type {
   BridgeEvent,
   ColorDeltaRow,
   DrawingEventRecord,
+  FeedStatusEvent,
   PlotMetaRecord,
   RobustnessReport,
   StartEvent,
+  TickEvent,
   TradeRecord,
 } from '../run/bridgeClient';
 import type { RunListener } from '../run/runService';
+import { upsertLastBar } from './barRows';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
 import { parseLabelLink } from './labelLinks';
@@ -94,7 +97,31 @@ interface ChartSnapshot {
   openTrades: TradeRecord[];
   stats: Record<string, number | null> | undefined;
   robustness: RobustnessReport | undefined;
+  /** A live chart's history is complete (the bridge's `live` event). */
+  live: boolean;
+  /** The forming bar's latest update; dropped by the bar's close. */
+  tick: TickEvent | undefined;
+  feedStatus: FeedStatusEvent | undefined;
   ended: { bars: number; cancelled: boolean } | undefined;
+}
+
+function emptySnapshot(start: StartEvent): ChartSnapshot {
+  return {
+    start,
+    bars: [],
+    plotKeys: [],
+    plotMeta: new Map(),
+    colors: [],
+    drawings: new Map(),
+    trades: [],
+    openTrades: [],
+    stats: undefined,
+    robustness: undefined,
+    live: false,
+    tick: undefined,
+    feedStatus: undefined,
+    ended: undefined,
+  };
 }
 
 /** One chart webview, bound to a single script's chart key. */
@@ -170,19 +197,7 @@ export class ChartPanel {
    * `ready` message, so a fresh panel needs no extra push here.
    */
   previewData(start: StartEvent, bars: BarRow[]): void {
-    this.snap = {
-      start,
-      bars,
-      plotKeys: [],
-      plotMeta: new Map(),
-      colors: [],
-      drawings: new Map(),
-      trades: [],
-      openTrades: [],
-      stats: undefined,
-      robustness: undefined,
-      ended: { bars: bars.length, cancelled: false },
-    };
+    this.snap = { ...emptySnapshot(start), bars, ended: { bars: bars.length, cancelled: false } };
     this.reveal();
     if (this.ready) this.replayFromSnapshot();
   }
@@ -200,26 +215,33 @@ export class ChartPanel {
         const start = isChartablePath(this.chartKey)
           ? { ...event, script: this.chartKey }
           : event;
-        this.snap = {
-          start,
-          bars: [],
-          plotKeys: [],
-          plotMeta: new Map(),
-          colors: [],
-          drawings: new Map(),
-          trades: [],
-          openTrades: [],
-          stats: undefined,
-          robustness: undefined,
-          ended: undefined,
-        };
+        this.snap = emptySnapshot(start);
         this.reveal();
         this.post({ type: 'reset', start });
         break;
       }
       case 'bars':
-        if (this.snap) for (const row of event.d) this.snap.bars.push(row);
+        if (this.snap) {
+          for (const row of event.d) upsertLastBar(this.snap.bars, row, (r) => r[0]);
+          // A closed bar supersedes the ticks of its own bar (rows are in time order)
+          const lastTs = event.d[event.d.length - 1]?.[0];
+          if (this.snap.tick && lastTs !== undefined && lastTs >= this.snap.tick.d[0]) {
+            this.snap.tick = undefined;
+          }
+        }
         this.post({ type: 'bars', rows: event.d });
+        break;
+      case 'live':
+        if (this.snap) this.snap.live = true;
+        this.post({ type: 'live' });
+        break;
+      case 'tick':
+        if (this.snap) this.snap.tick = event;
+        this.post({ type: 'tick', tick: event });
+        break;
+      case 'feedStatus':
+        if (this.snap) this.snap.feedStatus = event;
+        this.post({ type: 'feedStatus', status: event });
         break;
       case 'plotKeys':
         if (this.snap) this.snap.plotKeys = event.keys;
@@ -400,7 +422,8 @@ export class ChartPanel {
   }
 
   /** Rebuild the current webview from the host snapshot (reset → meta → keys →
-   * bars → colors → drawings → trades → stats → robustness → end; metas must precede the
+   * bars → colors → drawings → trades → stats → robustness → live → feed status →
+   * tick → end; metas must precede the
    * bars that reference them, colors/drawings follow the bars their
    * timestamps / bar indices join against). Safe to call only once the
    * webview is ready. */
@@ -422,6 +445,9 @@ export class ChartPanel {
     if (s.openTrades.length) void webview.postMessage({ type: 'openTrades', trades: s.openTrades });
     if (s.stats) void webview.postMessage({ type: 'stats', stats: s.stats });
     if (s.robustness) void webview.postMessage({ type: 'robustness', report: s.robustness });
+    if (s.live) void webview.postMessage({ type: 'live' });
+    if (s.feedStatus) void webview.postMessage({ type: 'feedStatus', status: s.feedStatus });
+    if (s.tick) void webview.postMessage({ type: 'tick', tick: s.tick });
     if (s.ended) {
       void webview.postMessage({ type: 'end', bars: s.ended.bars, cancelled: s.ended.cancelled });
     }
@@ -485,6 +511,25 @@ export class ChartPanel {
     font-size: 11px; font-variant-numeric: tabular-nums;
   }
   #debug-position { color: var(--vscode-editorWarning-foreground, #cca700); white-space: nowrap; }
+  /* Live feed state; the dot pulses while the feed delivers. */
+  #live-status {
+    display: inline-flex; align-items: center; gap: 5px; margin-left: 6px;
+    padding: 1px 8px 1px 7px; border-radius: 9px; white-space: nowrap;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.03em;
+    color: var(--vscode-descriptionForeground);
+    border: 1px solid var(--vscode-panel-border, #444);
+  }
+  #live-status[hidden] { display: none; }
+  #live-status::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+  }
+  #live-status[data-state="live"] { color: var(--vscode-testing-iconPassed, #73c991); }
+  #live-status[data-state="live"]::before { animation: live-pulse 1.6s ease-in-out infinite; }
+  #live-status[data-state="reconnecting"] { color: var(--vscode-editorWarning-foreground, #cca700); }
+  #live-status[data-state="market_closed"] { color: var(--vscode-descriptionForeground); }
+  #live-status[data-state="stopped"]::before { border-radius: 1px; }
+  @keyframes live-pulse { 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { #live-status::before { animation: none !important; } }
   #toolbar .icon-button {
     position: relative; display: inline-flex; align-items: center; justify-content: center;
     width: 28px; height: 28px; padding: 0; border-radius: 5px;
@@ -1027,6 +1072,7 @@ export class ChartPanel {
     </button>
   </div>
   <span id="debug-position" hidden></span>
+  <span id="live-status" role="status" hidden></span>
   <span class="spacer"></span>
   <span class="sep"></span>
   <div class="toolbar-group">

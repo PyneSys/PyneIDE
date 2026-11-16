@@ -7,9 +7,11 @@ import type {
   BarRow,
   ColorDeltaRow,
   DrawingEventRecord,
+  FeedStatusEvent,
   PlotMetaRecord,
   RobustnessReport,
   StartEvent,
+  TickEvent,
   TradeRecord,
 } from '../run/bridgeClient';
 import type { CandleStyleId } from './candleStyle';
@@ -31,7 +33,15 @@ export interface ChartDebugPosition {
 
 export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }
+  /** Rows in time order; a row with the last row's timestamp replaces it. */
   | { type: 'bars'; rows: BarRow[] }
+  /** A live chart's history is complete: from here on the chart takes single
+   * bar updates and never reloads its data. */
+  | { type: 'live' }
+  /** The forming bar's latest update; the next tick or the bar's close
+   * replaces it. */
+  | { type: 'tick'; tick: TickEvent }
+  | { type: 'feedStatus'; status: FeedStatusEvent }
   | { type: 'plotKeys'; keys: string[] }
   | { type: 'plotMeta'; metas: PlotMetaRecord[] }
   | { type: 'colors'; d: ColorDeltaRow[] }

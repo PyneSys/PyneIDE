@@ -166,6 +166,11 @@ export class DrawingStore {
     );
   }
 
+  /** What a live tick's changes overwrote: the object each touched key held
+   * before (undefined: none), in the order first touched. */
+  private undo: { map: Map<number, object>; id: number; prev: object | undefined; table: boolean }[] =
+    [];
+
   clear(): void {
     this.lines.clear();
     this.labels.clear();
@@ -173,10 +178,13 @@ export class DrawingStore {
     this.tables.clear();
     this.polylines.clear();
     this.linefills.clear();
+    this.undo = [];
     this.version++;
     this.tableVersion++;
   }
 
+  /** Apply committed changes. A live tick's changes must be reverted first:
+   * the committed ones are relative to the last closed bar. */
   apply(events: DrawingEventRecord[]): void {
     let tables = false;
     for (const ev of events) {
@@ -187,6 +195,38 @@ export class DrawingStore {
       if (ev.obj === 'table') tables = true;
     }
     if (events.length) this.version++;
+    if (tables) this.tableVersion++;
+  }
+
+  /** Show a live tick's changes (against the last closed bar), replacing the
+   * previous tick's. */
+  applyProvisional(events: DrawingEventRecord[]): void {
+    this.revertProvisional();
+    const touched = new Set<string>();
+    for (const ev of events) {
+      const map = this.familyMap(ev.obj);
+      if (!map) continue;
+      const key = `${ev.obj}#${ev.id}`;
+      if (!touched.has(key)) {
+        touched.add(key);
+        this.undo.push({ map, id: ev.id, prev: map.get(ev.id), table: ev.obj === 'table' });
+      }
+    }
+    this.apply(events);
+  }
+
+  /** Back to the committed state of the last closed bar. */
+  revertProvisional(): void {
+    if (!this.undo.length) return;
+    let tables = false;
+    for (let i = this.undo.length - 1; i >= 0; i--) {
+      const { map, id, prev, table } = this.undo[i];
+      if (prev === undefined) map.delete(id);
+      else map.set(id, prev);
+      tables ||= table;
+    }
+    this.undo = [];
+    this.version++;
     if (tables) this.tableVersion++;
   }
 

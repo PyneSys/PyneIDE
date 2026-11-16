@@ -18,9 +18,23 @@ interface Channel {
 
 export class ColorTrack {
   private channels = new Map<string, Channel>();
+  /** A live tick's colors: every dynamic channel at the forming bar, over the
+   * committed changes, until the next tick or the bar's close. */
+  private provisional: { barIndex: number; colors: Record<string, ColorEnc> } | undefined;
 
   clear(): void {
     this.channels.clear();
+    this.provisional = undefined;
+  }
+
+  /** Show a tick's full color set at the forming bar; replaces the previous
+   * tick's set. */
+  setProvisional(barIndex: number, colors: Record<string, ColorEnc>): void {
+    this.provisional = { barIndex, colors };
+  }
+
+  clearProvisional(): void {
+    this.provisional = undefined;
   }
 
   /** Ingest delta rows, resolving each row's bar timestamp to a bar index.
@@ -53,6 +67,10 @@ export class ColorTrack {
   /** Last change at or before barIndex; undefined before the first change
    * (callers fall back to the meta's static color). */
   colorAt(channel: string, barIndex: number): ColorEnc | undefined {
+    const p = this.provisional;
+    if (p && p.barIndex === barIndex && Object.prototype.hasOwnProperty.call(p.colors, channel)) {
+      return p.colors[channel];
+    }
     const ch = this.channels.get(channel);
     if (!ch || ch.idx.length === 0 || ch.idx[0] > barIndex) return undefined;
     let c = Math.min(ch.cursor, ch.idx.length - 1);
