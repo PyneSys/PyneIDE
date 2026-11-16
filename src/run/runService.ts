@@ -1493,7 +1493,8 @@ export class RunService {
       this.chartManager?.closeChart(chartKey);
       await forgetRememberedData(this.context, chartKey);
       const source = runtimeErrorLocation(
-        errorEvent ?? { traceback: errorTraceback ?? '' }, opts.scriptPath, opts.workdir);
+        errorEvent ?? { traceback: errorTraceback ?? '' }, opts.scriptPath, opts.workdir,
+        /\.pine$/i.test(chartKey));
       let location = '';
       if (source) {
         location = ` (${path.basename(source.path)}:${source.line})`;

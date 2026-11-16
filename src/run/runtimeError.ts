@@ -25,24 +25,27 @@ const SCRIPT_STOP_CODE = 'R0005';
 
 /** Where a failed run stopped. A coded error names it itself (`at`, located by
  * PyneCore with the Pine line of a compiled script); an error without `at` is
- * located from its traceback. */
+ * located from its traceback. The Pine line is used only when the user ran the
+ * `.pine` source (`fromPine`): a run of the `.py` names the line of the `.py`,
+ * even when its `.pine` source is next to it. */
 export function runtimeErrorLocation(
   error: Pick<ErrorEvent, 'traceback' | 'code' | 'at'>,
   scriptPath: string,
-  workdir: string
+  workdir: string,
+  fromPine: boolean
 ): RuntimeErrorLocation | undefined {
   const at = error.at;
   if (error.code !== undefined && at && Number.isSafeInteger(at.line) && at.line > 0) {
     const scriptStop = error.code === SCRIPT_STOP_CODE;
     const pinePath = at.path.replace(/\.py$/i, '.pine');
-    if (at.pineLine !== null && pinePath !== at.path) {
+    if (fromPine && at.pineLine !== null && pinePath !== at.path) {
       return { path: pinePath, line: at.pineLine, scriptStop };
     }
     return { path: realPath(at.path), line: at.line, scriptStop };
   }
   // A coded error raised outside bar execution (e.g. at script import) carries
   // no `at`: locate it from the traceback, keeping the code's classification.
-  const location = tracebackLocation(error.traceback, scriptPath, workdir);
+  const location = tracebackLocation(error.traceback, scriptPath, workdir, fromPine);
   if (location && error.code !== undefined) location.scriptStop = error.code === SCRIPT_STOP_CODE;
   return location;
 }
@@ -53,7 +56,8 @@ export function runtimeErrorLocation(
 function tracebackLocation(
   traceback: string,
   scriptPath: string,
-  workdir: string
+  workdir: string,
+  fromPine: boolean
 ): RuntimeErrorLocation | undefined {
   const script = realPath(scriptPath);
   const roots = [path.dirname(script), realPath(path.join(workdir, 'scripts'))];
@@ -74,6 +78,7 @@ function tracebackLocation(
   }
   if (!source) return undefined;
   source.scriptStop = scriptStop;
+  if (!fromPine) return source;
 
   // Invalid/stale maps deliberately fall back to the executed Python source.
   const pinePath = source.path.replace(/\.py$/i, '.pine');

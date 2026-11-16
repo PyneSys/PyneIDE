@@ -236,6 +236,16 @@ test('compiled Pine failures select the mapped original line in Profile runs too
   assert.deepEqual(f.closedCharts, [pine]);
 });
 
+test('a run of the compiled .py selects its own line even with a valid Pine map beside it', async (t) => {
+  const f = fixture(t);
+  const pine = f.script.replace(/\.py$/, '.pine');
+  fs.writeFileSync(pine, '//@version=6\nindicator("Demo")\nruntime.error("bad input")\n');
+  fs.writeFileSync(`${f.script}.map`, JSON.stringify({ version: 1, mappings: [[2, 2], [3, 3]] }));
+  await f.run([[f.script, 3], [`${core}/lib/runtime.py`, 17, 'error']]);
+  assert.equal(f.opened[0].file, f.script);
+  assert.equal(f.opened[0].options.selection.start.line, 2);
+});
+
 for (const invalid of ['stale', 'converted', 'malformed']) {
   test(`${invalid} Pine maps fall back to the executed Python line`, async (t) => {
     const f = fixture(t);
@@ -297,6 +307,19 @@ test('a coded error of a compiled Pine script opens the Pine line PyneCore found
   assert.match(f.notices[0].message, /script runtime error: R0001: Division by zero\./);
   assert.equal(f.opened[0].file, pine);
   assert.equal(f.opened[0].options.selection.start.line, 3);
+});
+
+test('a coded error of a run of the compiled .py opens the .py line, not the Pine line', async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.script.replace(/\.py$/, '.pine'), '//@version=6\nindicator("Demo")\nx = 1\ny = 2\n');
+  await f.run([[f.script, 3]], {
+    kind: 'DivisionByZeroError', message: 'Division by zero.', coded: {
+      code: 'R0001', params: {}, bar: 7, time: 0, inSecurity: false,
+      at: { module: 'main', path: f.script, line: 3, col: 5, pineLine: 4 },
+    },
+  });
+  assert.equal(f.opened[0].file, f.script);
+  assert.equal(f.opened[0].options.selection.start.line, 2);
 });
 
 test('a missing source does not turn a script exception into a report prompt', async (t) => {
