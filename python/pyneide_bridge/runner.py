@@ -986,12 +986,17 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
 
     :param live: A live chart's :class:`~pyneide_bridge.live.LiveFeed`; ``None``
         for a backtest. A live run streams the history like a backtest, then
-        every closed bar at once and the forming bar as ``tick`` events.
+        every closed bar at once and the forming bar as ``tick`` events. A
+        strategy's open trades go out as a full ``openTrades`` set whenever
+        it changed (their profit and excursions move with every bar); a
+        backtest sends them once, at the end.
     """
     from pynecore import lib
 
     plot_keys: list[str] = []
     plot_index: dict[str, int] = {}
+    # The open trades the chart was last sent, ``None`` before the first set
+    open_sent: list[dict[str, Any]] | None = None
     batch: list[list[Any]] = []
     trade_batch: list[dict[str, Any]] = []
     bars_done = 0
@@ -1001,6 +1006,20 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
     last_flush = time.monotonic()
     cancelled = False
     viz_tap = _VizTap(lib)
+
+    def open_trades() -> list[dict[str, Any]]:
+        position = runner.script.position
+        if position is None:
+            return []
+        return [_serialize_trade(t) for t in position.open_trades]
+
+    def emit_open_trades() -> None:
+        """Send the strategy's open trades when they differ from the last set sent."""
+        nonlocal open_sent
+        current = open_trades()
+        if current != (open_sent or []):
+            emitter.emit({"e": "openTrades", "d": current})
+        open_sent = current
 
     def flush() -> None:
         # Order matters: metas before the bars that reference them, color
@@ -1069,12 +1088,16 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
                 event["drawings"] = viz_tap.tick_drawings(index)
             if is_strategy:
                 event["trades"] = [_serialize_trade(t) for t in item[2]]
+                event["openTrades"] = open_trades()
         return event
 
     def on_live() -> None:
         flush()
         live.active = True
         emitter.emit({"e": "live"})
+        if is_strategy:
+            # The trades the history left open (with Trade on history)
+            emit_open_trades()
 
     if chart_breakpoints:
         runner.ohlcv_iter = _chart_breakpoint_iter(
@@ -1139,6 +1162,10 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
             if (live is not None and live.active) or len(batch) >= batch_size or \
                     time.monotonic() - last_flush > FLUSH_AGE_SECONDS:
                 flush()
+            if is_strategy and live is not None and live.active:
+                # Only here, at a closed bar: flush() also runs mid-tick (a new
+                # plot key, a pause), where the position holds the tick's state
+                emit_open_trades()
     finally:
         if live is not None:
             live.ticks.drop()
@@ -1157,9 +1184,12 @@ def _stream_run(runner: Any, emitter: Emitter, control: Control, *,
     if is_strategy:
         position = runner.script.position
         if position is not None:
-            open_trades = [_serialize_trade(t) for t in position.open_trades]
-            if open_trades:
-                emitter.emit({"e": "openTrades", "d": open_trades})
+            # A live chart already holds the set of its last closed bar; the
+            # position may still carry a forming bar's tick state here
+            if live is None or open_sent is None:
+                still_open = open_trades()
+                if still_open:
+                    emitter.emit({"e": "openTrades", "d": still_open})
             try:
                 from pynecore.core.strategy_stats import calculate_strategy_statistics
                 if hasattr(runner, "equity_curve"):

@@ -374,7 +374,12 @@ interface RunState {
   /** store.tableVersion last rendered into the HTML table layer. */
   renderedTableVersion: number;
   renderedTableLayout: string;
+  /** The closed trades, in the order they arrived. */
   trades: TradeRecord[];
+  /** The trades still open, by the latest `openTrades` set (it replaces, not appends). */
+  openTrades: TradeRecord[];
+  /** Bumped whenever `trades` or `openTrades` changes. */
+  tradesVersion: number;
   stats: Record<string, number | null> | undefined;
   /** The robustness tests of the run, when it was started with them. */
   robustness: RobustnessReport | undefined;
@@ -399,7 +404,7 @@ interface RunState {
   paneDrawIndicatorId?: string;
   /** Bar index -> trade glyphs, rebuilt whenever trades/bars grow. */
   tradeMarkers?: TradeMarkerIndex;
-  /** [trades.length, bars.length, tickTradesVersion, barBase] the index above was built from. */
+  /** [tradesVersion, bars.length, tickTradesVersion, barBase] the index above was built from. */
   tradeMarkersBuiltFor?: [number, number, number, number];
   /** A live chart's history is in (the bridge's `live` event): from here on
    * bars and ticks reach the chart one at a time through the data loader's bar
@@ -417,9 +422,11 @@ interface RunState {
   tickTs?: number;
   /** The trades the forming bar closed so far, by the latest tick. */
   tickTrades: TradeRecord[];
+  /** The trades open after the latest tick; `undefined` without a tick that ran. */
+  tickOpenTrades?: TradeRecord[];
   tickTradesVersion: number;
   feedStatus?: FeedStatusEvent;
-  /** `trades.length` the trades table was last rendered with, live. */
+  /** `listedTradesStamp` the trades table was last rendered with, live. */
   renderedTrades: number;
   tradeMarkerIndicatorId?: string;
   /** Visible barcolor plots, read by the candle color callback at draw time. */
@@ -1090,6 +1097,8 @@ function startRun(start: StartEvent): void {
     renderedTableVersion: -1,
     renderedTableLayout: '',
     trades: [],
+    openTrades: [],
+    tradesVersion: 0,
     stats: undefined,
     robustness: undefined,
     dirty: false,
@@ -1105,7 +1114,7 @@ function startRun(start: StartEvent): void {
     lastBarStale: false,
     tickTrades: [],
     tickTradesVersion: 0,
-    renderedTrades: 0,
+    renderedTrades: -1,
   };
   // The bottom panel is part of the held picture too: emptying its rows and
   // equity curve while the chart still shows the old run would be the same
@@ -1819,25 +1828,38 @@ function markerTheme(): TradeMarkerTheme {
   return tradeMarkerTheme;
 }
 
-/** Rebuild the bar-index -> glyph map when the trade or bar count (or the
+/** The trades of the trades table: the closed ones, then the ones still open.
+ * A live tick's trades stand in until the bar's close commits them, the same
+ * set the trade markers draw. */
+function listedTrades(st: RunState): TradeRecord[] {
+  const open = st.tickOpenTrades ?? st.openTrades;
+  if (!st.tickTrades.length && !open.length) return st.trades;
+  return [...st.trades, ...st.tickTrades, ...open];
+}
+
+/** Changes whenever {@link listedTrades} may: both versions only grow. */
+function listedTradesStamp(st: RunState): number {
+  return st.tradesVersion + st.tickTradesVersion;
+}
+
+/** Rebuild the bar-index -> glyph map when the trades, the bar count (or the
  * first bar of a live chart) moved. The
  * stamp check keeps this off the per-frame path; a full rebuild (rather than
- * an incremental append) also absorbs the fact that open trades arrive after
- * the closed ones, so `st.trades` is not strictly chronological. */
+ * an incremental append) also absorbs the fact that the open trades follow
+ * the closed ones, so the list is not strictly chronological. */
 function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
   const built = st.tradeMarkersBuiltFor;
   if (
     !st.tradeMarkers ||
     !built ||
-    built[0] !== st.trades.length ||
+    built[0] !== st.tradesVersion ||
     built[1] !== st.bars.length ||
     built[2] !== st.tickTradesVersion ||
     built[3] !== st.barBase
   ) {
-    // A live tick's trades are drawn until the bar's close commits them
-    const trades = st.tickTrades.length ? [...st.trades, ...st.tickTrades] : st.trades;
+    const trades = listedTrades(st);
     st.tradeMarkers = buildTradeMarkerIndex(trades, st.bars, st.tsToIndex, st.barBase);
-    st.tradeMarkersBuiltFor = [st.trades.length, st.bars.length, st.tickTradesVersion, st.barBase];
+    st.tradeMarkersBuiltFor = [st.tradesVersion, st.bars.length, st.tickTradesVersion, st.barBase];
   }
   return st.tradeMarkers;
 }
@@ -1850,7 +1872,7 @@ function tradeMarkerIndex(st: RunState): TradeMarkerIndex {
  */
 function ensureTradeMarkerIndicator(st: RunState): void {
   const want = tradeMarkersVisible && st.start.scriptType === 'strategy' &&
-    st.trades.length + st.tickTrades.length > 0;
+    listedTrades(st).length > 0;
   if (want && !st.tradeMarkerIndicatorId) {
     registerIndicator({
       name: TRADE_MARKER_INDICATOR_NAME,
@@ -2643,8 +2665,8 @@ function uiTick(): void {
     if (!isFrozen()) renderDrawingTables(st);
     if (st.live) {
       ensureTradeMarkerIndicator(st);
-      if (st.trades.length !== st.renderedTrades && activeTab === 'trades' && !isFrozen()) {
-        st.renderedTrades = st.trades.length;
+      if (listedTradesStamp(st) !== st.renderedTrades && activeTab === 'trades' && !isFrozen()) {
+        st.renderedTrades = listedTradesStamp(st);
         renderTables();
       }
     }
@@ -2723,8 +2745,9 @@ function closeForming(st: RunState): void {
   st.tickTs = undefined;
   st.colorTrack.clearProvisional();
   st.drawings.revertProvisional();
-  if (st.tickTrades.length) {
+  if (st.tickTrades.length || st.tickOpenTrades) {
     st.tickTrades = [];
+    st.tickOpenTrades = undefined;
     st.tickTradesVersion++;
   }
 }
@@ -2737,8 +2760,9 @@ function applyTick(st: RunState, tick: TickEvent): void {
   else st.colorTrack.clearProvisional();
   if (tick.drawings) st.drawings.applyProvisional(tick.drawings);
   else st.drawings.revertProvisional();
-  if (tick.trades?.length || st.tickTrades.length) {
+  if (tick.trades?.length || st.tickTrades.length || tick.openTrades || st.tickOpenTrades) {
     st.tickTrades = tick.trades ?? [];
+    st.tickOpenTrades = tick.openTrades;
     st.tickTradesVersion++;
   }
   liveChanged(st);
@@ -2797,7 +2821,7 @@ function completeChart(st: RunState, reload: boolean): void {
     activeTab = 'performance';
     setCollapsed(false);
   }
-  st.renderedTrades = st.trades.length;
+  st.renderedTrades = listedTradesStamp(st);
   renderTables();
   syncToolbar();
   refreshDataWindow();
@@ -3002,7 +3026,7 @@ function drawPerformance(): void {
 
 function revealTradeAtTimestamp(timestamp: number): void {
   if (!state || !tabBodyEl) return;
-  const index = tradeAtTimestamp(state.trades, timestamp);
+  const index = tradeAtTimestamp(listedTrades(state), timestamp);
   if (index === undefined) return;
   selectedTradeIndex = index;
   activeTab = 'trades';
@@ -3102,14 +3126,15 @@ panelSplitterEl?.addEventListener('keydown', (event) => {
 
 function renderTrades(): string {
   const st = state;
-  if (!st || st.trades.length === 0) {
+  const trades = st ? listedTrades(st) : [];
+  if (!st || trades.length === 0) {
     return '<span class="muted">No trades (yet). Indicators produce no trades.</span>';
   }
   const d = mintickDecimals(st.start.syminfo.mintick);
   const formatTime = createBarTimeFormatter(st.chart.getTimezone());
   const tradeTime = (ts: number): string =>
     ts > 0 && Number.isFinite(new Date(ts).getTime()) ? formatTime(ts).slice(0, 16) : '—';
-  const rows = st.trades
+  const rows = trades
     .map((t, i) => {
       const long = (t.size ?? 0) > 0;
       const selected = i === selectedTradeIndex;
@@ -3186,7 +3211,7 @@ function renderTables(): void {
   if (tabRobustnessEl) tabRobustnessEl.hidden = !state?.robustness;
   if (tabPerformanceEl) tabPerformanceEl.hidden = state?.start.scriptType !== 'strategy';
   if (strategyPropertiesEl) strategyPropertiesEl.hidden = state?.start.scriptType !== 'strategy';
-  if (tabTradesEl && state) tabTradesEl.textContent = `Trades (${state.trades.length})`;
+  if (tabTradesEl && state) tabTradesEl.textContent = `Trades (${listedTrades(state).length})`;
   if (bottomEl.classList.contains('collapsed')) return;
   tabBodyEl.innerHTML =
     activeTab === 'performance'
@@ -3229,7 +3254,7 @@ tabBodyEl?.addEventListener('click', (event) => {
   const details = (event.target as Element).closest<HTMLButtonElement>('[data-trade-details]');
   if (details) {
     const index = Number(details.dataset.tradeDetails);
-    const trade = state?.trades[index];
+    const trade = state ? listedTrades(state)[index] : undefined;
     if (trade) showTradeDetails(trade, index);
     return;
   }
@@ -3469,7 +3494,8 @@ function syncToolbar(): void {
   if (tbMeasureEl) tbMeasureEl.disabled = !st;
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
-    const hasTrades = st?.ended === true && st.trades.length > 0 && !!st.start.outputs.trades;
+    const hasTrades = st?.ended === true && listedTrades(st).length > 0 &&
+      !!st.start.outputs.trades;
     tbCsvTradesEl.hidden = st?.start.scriptType !== 'strategy';
     tbCsvTradesEl.disabled = !hasTrades;
   }
@@ -3950,9 +3976,16 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       }
       break;
     case 'trades':
-    case 'openTrades':
       if (state) {
         state.trades.push(...msg.trades);
+        state.tradesVersion++;
+        if (state.live) liveChanged(state);
+      }
+      break;
+    case 'openTrades':
+      if (state) {
+        state.openTrades = msg.trades;
+        state.tradesVersion++;
         if (state.live) liveChanged(state);
       }
       break;

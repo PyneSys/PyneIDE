@@ -19,9 +19,13 @@ Events on top of a backtest's stream:
   apart, the latest one wins. ``d`` is a ``bars`` row; ``ran`` tells whether the
   script ran on it. When it ran, ``colors`` holds every dynamic color channel,
   ``drawings`` the drawing changes against the last closed bar, and a
-  strategy's ``trades`` the trades the bar closed so far. All of it is
-  provisional: the next tick replaces it, the bar's close (a ``bars`` row with
-  the same timestamp) supersedes it. Without a run only the candle is new.
+  strategy's ``trades`` the trades the bar closed so far and ``openTrades``
+  the trades open after it. All of it is provisional: the next tick replaces
+  it, the bar's close (a ``bars`` row with the same timestamp) supersedes it.
+  Without a run only the candle is new.
+- ``openTrades`` (a strategy's): the full set of open trades, sent at the
+  transition and after every closed bar that changed it. Each set replaces
+  the previous one; an empty set means no trade is open.
 - ``feedStatus``: the live feed's state (``connecting``, ``live``,
   ``reconnecting`` with ``attempt``/``offlineSeconds``/``error``,
   ``market_closed``, ``stopped``).

@@ -51,6 +51,7 @@ export type ChartInMessage =
   | { type: 'colors'; d: ColorDeltaRow[] }
   | { type: 'drawings'; d: DrawingEventRecord[] }
   | { type: 'trades'; trades: TradeRecord[] }
+  /** The full set of open trades; each set replaces the previous one. */
   | { type: 'openTrades'; trades: TradeRecord[] }
   | { type: 'stats'; stats: Record<string, number | null> }
   /** Robustness tests of the run, sent after its last bar (before `end`). */

@@ -343,6 +343,7 @@ export type BridgeEvent =
   | { e: 'colors'; d: ColorDeltaRow[] }
   | { e: 'drawings'; d: DrawingEventRecord[] }
   | { e: 'trades'; d: TradeRecord[] }
+  /** The full set of open trades; each set replaces the previous one. */
   | { e: 'openTrades'; d: TradeRecord[] }
   | { e: 'progress'; done: number; total: number }
   | { e: 'robustnessProgress'; phase: string; done: number; total: number }
@@ -381,6 +382,8 @@ export interface TickEvent {
   drawings?: DrawingEventRecord[];
   /** Strategy: the trades the bar has closed so far. */
   trades?: TradeRecord[];
+  /** Strategy: the trades open after this update (a full set). */
+  openTrades?: TradeRecord[];
 }
 
 /** State of the live feed. */

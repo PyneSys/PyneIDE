@@ -35,11 +35,23 @@ def main():
     plot(close, "close")
 '''
 
+STRATEGY = '''"""@pyne"""
+from pynecore.lib import script, strategy, close
+
+
+@script.strategy("Live open trades", overlay=True, calc_on_every_tick=True)
+def main():
+    if 111 <= close < 113:
+        strategy.entry("L", strategy.long)
+    if close >= 113:
+        strategy.close("L")
+'''
+
 MINUTE = 60_000
 
 
 def make_workdir(temp: Path, live_rows: list) -> tuple[Path, int]:
-    """A workdir with the script and a replay fixture of 10 closed minutes."""
+    """A workdir with the scripts and a replay fixture of 10 closed minutes."""
     last_ts = (int(time.time()) // 60 - 2) * MINUTE
     warmup = [[last_ts - (9 - i) * MINUTE, 100.0 + i, 101.0 + i, 99.0 + i, 100.0 + i, 1.0]
               for i in range(10)]
@@ -47,6 +59,7 @@ def make_workdir(temp: Path, live_rows: list) -> tuple[Path, int]:
     fixture.write_text(json.dumps({'warmup': warmup, 'live': live_rows}), encoding='utf-8')
     (temp / 'scripts').mkdir()
     (temp / 'scripts' / 'smoke.py').write_text(SCRIPT, encoding='utf-8')
+    (temp / 'scripts' / 'strategy.py').write_text(STRATEGY, encoding='utf-8')
     (temp / 'config' / 'plugins').mkdir(parents=True)
     (temp / 'config' / 'plugins' / 'replay.toml').write_text(
         f'fixture_path = "{fixture.as_posix()}"\n', encoding='utf-8')
@@ -210,6 +223,50 @@ class LiveSmoke(unittest.TestCase):
         self.assertGreater(kinds.index('bars', kinds.index('live')), max(
             i for i, kind in enumerate(kinds) if kind == 'tick'))
         self.assertEqual(events[-1], {'e': 'end', 'bars': 6, 'cancelled': False})
+
+    def test_open_trades_follow_every_closed_bar_and_tick(self):
+        """A strategy's open trades reach the chart as a full set after every
+        closed bar that changed them, a tick carries its own provisional set, and
+        the close of the position sends the empty set"""
+        from pynecore.core.script_runner import LIVE_TRANSITION
+        from pyneide_bridge.control import Control
+
+        capture = Capture()
+        with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:
+            workdir, last_ts = make_workdir(Path(temp), [])
+
+            def scripted_feed(_history, *, last_historical_timestamp, on_feed_status=None,
+                              stop=None):
+                yield LIVE_TRANSITION
+                capture.wait_for(lambda evs: any(ev['e'] == 'live' for ev in evs))
+                # Entry order on the close of 111, filled on the next update
+                yield candle(last_ts + MINUTE, 111.0, True)
+                yield candle(last_ts + 2 * MINUTE, 111.5, False)
+                capture.wait_for(lambda evs: len(ticks(evs)) == 1)
+                yield candle(last_ts + 2 * MINUTE, 112.0, True)
+                # Close order on the close of 113, filled on the next update
+                yield candle(last_ts + 3 * MINUTE, 113.0, True)
+                yield candle(last_ts + 4 * MINUTE, 110.0, True)
+
+            args = SimpleNamespace(
+                workdir=str(workdir), script='strategy', live='replay:TEST@1', live_from='-5',
+                history_trades=False, live_output_limit=None, batch_size=500)
+            with patch('pynecore.core.provider_download.open_live_stream', scripted_feed):
+                self.assertEqual(run_live(args, capture, Control()), 0)
+
+        events = capture.events
+        self.assertNotIn('error', [ev['e'] for ev in events], events)
+        tick = ticks(events)[0]
+        self.assertTrue(tick['ran'])
+        self.assertEqual([t['entryId'] for t in tick['openTrades']], ['L'])
+        open_sets = [ev['d'] for ev in events if ev['e'] == 'openTrades']
+        self.assertEqual([len(s) for s in open_sets], [1, 1, 0], open_sets)
+        # The open trade's profit moves with the bar: each set replaces the last
+        self.assertNotEqual(open_sets[0][0]['profit'], open_sets[1][0]['profit'])
+        self.assertEqual(open_sets[0][0]['exitTime'], -1)
+        closed = [t for ev in events if ev['e'] == 'trades' for t in ev['d']]
+        self.assertEqual([t['entryId'] for t in closed], ['L'])
+        self.assertEqual(events[-1]['e'], 'end')
 
     def test_output_files_end_at_the_size_limit_and_the_chart_goes_on(self):
         """At the size limit the plot CSV and viz NDJSON end as complete records
