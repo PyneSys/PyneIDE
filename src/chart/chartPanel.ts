@@ -506,12 +506,22 @@ export class ChartPanel {
   html, body { height: 100%; margin: 0; padding: 0; }
   body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); }
   #toolbar {
-    flex: 0 0 36px; display: flex; align-items: center; gap: 0;
+    position: relative; flex: 0 0 36px; display: flex; align-items: center;
     box-sizing: border-box; padding: 3px 6px; user-select: none;
     border-bottom: 1px solid var(--vscode-panel-border, #444);
     background: var(--vscode-editor-background);
   }
-  #toolbar .toolbar-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  #toolbar-items {
+    flex: 1; min-width: 0; display: flex; align-items: center; overflow: hidden;
+  }
+  #toolbar .toolbar-group { flex: none; display: flex; align-items: center; gap: 2px; }
+  #toolbar .toolbar-group > *, #tb-more { flex: none; }
+  #toolbar .toolbar-group:not(:has(> :not([hidden], .in-overflow))),
+  #toolbar #toolbar-items .in-overflow { display: none; }
+  #toolbar .toolbar-group:has(> :not([hidden], .in-overflow)) ~ .toolbar-group:not(.toolbar-status)::before {
+    content: ""; width: 1px; height: 20px; margin: 0 4px 0 6px;
+    background: var(--vscode-panel-border, #444);
+  }
   #toolbar button {
     border: 0; color: var(--vscode-foreground); background: transparent;
     cursor: pointer; font: inherit;
@@ -525,7 +535,7 @@ export class ChartPanel {
   #toolbar button:disabled { opacity: 0.35; cursor: default; }
   #toolbar .symbol-button {
     display: flex; align-items: center; gap: 7px; max-width: min(280px, 34vw);
-    height: 28px; min-width: 0; padding: 0 8px 0 5px; border-radius: 7px;
+    height: 28px; min-width: 35px; padding: 0 8px 0 5px; border-radius: 7px;
   }
   #toolbar .symbol-mark {
     display: flex; align-items: center; justify-content: center; flex: 0 0 auto;
@@ -595,11 +605,29 @@ export class ChartPanel {
     background: var(--vscode-badge-background, #4d4d4d);
     font-size: 8px; font-weight: 700; line-height: 11px; text-align: center;
   }
-  #toolbar .sep {
-    width: 1px; height: 20px; flex: 0 0 auto;
-    background: var(--vscode-panel-border, #444); margin: 0 6px;
-  }
   #toolbar .spacer { flex: 1; }
+  #toolbar #tb-more[aria-expanded="true"] {
+    background: var(--vscode-toolbar-activeBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #toolbar-overflow {
+    position: absolute; z-index: 20; top: calc(100% + 3px); right: 6px;
+    display: flex; flex-direction: column; gap: 1px; width: max-content;
+    max-width: calc(100% - 12px); max-height: calc(100vh - 44px); overflow: auto;
+    box-sizing: border-box; padding: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #toolbar-overflow[hidden], #toolbar-overflow [hidden] { display: none; }
+  #toolbar-overflow .toolbar-overflow-item {
+    flex: none; padding: 4px 10px; border-radius: 3px; text-align: left;
+    font-size: 12px; overflow-wrap: anywhere;
+  }
+  #toolbar-overflow button[aria-pressed="true"] {
+    background: var(--vscode-list-activeSelectionBackground, #04395e);
+    color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+  }
+  #toolbar-overflow span { color: var(--vscode-descriptionForeground); }
   #goto-popup {
     position: absolute; z-index: 20; display: flex; align-items: center; gap: 4px;
     box-sizing: border-box; width: min(340px, calc(100% - 12px)); padding: 6px;
@@ -650,7 +678,8 @@ export class ChartPanel {
   }
   #candle-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
-    min-width: 165px; padding: 4px; font-size: 11px; user-select: none;
+    min-width: min(165px, calc(100vw - 12px)); max-width: calc(100vw - 12px);
+    box-sizing: border-box; padding: 4px; font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -670,7 +699,7 @@ export class ChartPanel {
     fill: none; stroke: currentColor; stroke-width: 1.2;
     stroke-linecap: round; stroke-linejoin: round;
   }
-  #candle-popup .candle-name { flex: 1 1 auto; white-space: nowrap; }
+  #candle-popup .candle-name { flex: 1 1 auto; overflow-wrap: anywhere; }
   #candle-popup .candle-check { flex: 0 0 auto; width: 10px; text-align: center; }
   #candle-popup .candle-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
   #candle-popup .candle-section {
@@ -679,7 +708,8 @@ export class ChartPanel {
   }
   #tf-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
-    min-width: 96px; padding: 4px; font-size: 11px; user-select: none;
+    min-width: min(96px, calc(100vw - 12px)); max-width: calc(100vw - 12px);
+    box-sizing: border-box; padding: 4px; font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -694,7 +724,7 @@ export class ChartPanel {
     color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
     background: var(--vscode-list-activeSelectionBackground, #04395e);
   }
-  #tf-popup .tf-name { flex: 1 1 auto; white-space: nowrap; }
+  #tf-popup .tf-name { flex: 1 1 auto; overflow-wrap: anywhere; }
   #tf-popup .tf-check { flex: 0 0 auto; width: 10px; text-align: center; }
   #tf-popup .tf-sep { height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444); }
   /* Price-scale controls, parked in the corner between the two axes the way a
@@ -723,8 +753,9 @@ export class ChartPanel {
   }
   #breakpoints-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
-    min-width: 250px; max-width: min(420px, calc(100% - 12px)); max-height: 60%;
-    overflow: auto; padding: 4px; font-size: 11px; user-select: none;
+    min-width: min(250px, calc(100vw - 12px)); max-width: min(420px, calc(100vw - 12px));
+    max-height: 60%; overflow: auto; box-sizing: border-box; padding: 4px;
+    font-size: 11px; user-select: none;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -1059,6 +1090,7 @@ export class ChartPanel {
 </head>
 <body>
 <div id="toolbar">
+<div id="toolbar-items">
   <div class="toolbar-group">
     <button id="tb-data" class="symbol-button" title="Select the OHLCV data for this script">
       <span class="symbol-mark" aria-hidden="true">
@@ -1075,7 +1107,6 @@ export class ChartPanel {
     <button id="tb-timeframe" title="Timeframe of the live chart" aria-label="Timeframe"
             aria-pressed="false" hidden></button>
   </div>
-  <span class="sep"></span>
   <div class="toolbar-group">
     <button id="tb-layers" class="icon-button" title="Layers and indicators"
             aria-label="Layers and indicators" aria-pressed="false">
@@ -1109,7 +1140,6 @@ export class ChartPanel {
       </svg>
     </button>
   </div>
-  <span class="sep"></span>
   <div class="toolbar-group">
     <button id="tb-measure" class="icon-button" title="Measure price movement"
             aria-label="Measure price movement" aria-pressed="false">
@@ -1135,10 +1165,11 @@ export class ChartPanel {
       <span id="tb-breakpoints-count" class="count-badge"></span>
     </button>
   </div>
-  <span id="debug-position" hidden></span>
-  <span id="live-status" role="status" hidden></span>
+  <div class="toolbar-group toolbar-status">
+    <span id="debug-position" hidden></span>
+    <span id="live-status" role="status" hidden></span>
+  </div>
   <span class="spacer"></span>
-  <span class="sep"></span>
   <div class="toolbar-group">
     <button id="tb-csv-plot" class="icon-button" title="Open plot output CSV"
             aria-label="Open plot output CSV" disabled>
@@ -1155,6 +1186,16 @@ export class ChartPanel {
       </svg>
     </button>
   </div>
+</div>
+  <button id="tb-more" class="icon-button" title="More chart actions" aria-label="More chart actions"
+          aria-controls="toolbar-overflow" aria-expanded="false" hidden>
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="5" cy="10" r="0.8" fill="currentColor"></circle>
+      <circle cx="10" cy="10" r="0.8" fill="currentColor"></circle>
+      <circle cx="15" cy="10" r="0.8" fill="currentColor"></circle>
+    </svg>
+  </button>
+  <div id="toolbar-overflow" role="group" aria-labelledby="tb-more" hidden></div>
 </div>
 <div id="script-legend" hidden></div>
 <div id="chart-row">

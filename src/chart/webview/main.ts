@@ -91,6 +91,7 @@ import {
 } from './drawings';
 import { LabelTooltip } from './labelTooltip';
 import { TailCalc, datumReach, formatCountdown, msToPeriodEnd, periodMs } from './liveSeries';
+import { initToolbarOverflow, toolbarAnchor } from './toolbarOverflow';
 import {
   buildFigure,
   buildHlineFigure,
@@ -2171,11 +2172,10 @@ function renderPlotList(st: RunState): void {
 
 /** Anchor the popup just below the "Layers" toolbar button. */
 function positionPlotsPopup(): void {
-  if (!plotsPopupEl || !tbLayersEl) return;
-  const r = tbLayersEl.getBoundingClientRect();
-  plotsPopupEl.style.maxHeight = `${Math.max(40, Math.min(window.innerHeight * 0.6, window.innerHeight - r.bottom - 10))}px`;
-  plotsPopupEl.style.left = `${Math.round(Math.max(6, Math.min(r.left, window.innerWidth - plotsPopupEl.offsetWidth - 6)))}px`;
-  plotsPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+  const anchor = toolbarAnchor(tbLayersEl);
+  if (!plotsPopupEl || !anchor) return;
+  plotsPopupEl.style.maxHeight = `${Math.max(40, Math.min(window.innerHeight * 0.6, window.innerHeight - anchor.getBoundingClientRect().bottom - 10))}px`;
+  positionToolbarPopup(plotsPopupEl, anchor);
 }
 
 function openPlotsPopup(focusRows = false): void {
@@ -2205,7 +2205,7 @@ plotsPopupEl?.addEventListener('keydown', (event) => {
   event.preventDefault();
   event.stopPropagation();
   closePlotsPopup();
-  tbLayersEl?.focus();
+  toolbarAnchor(tbLayersEl)?.focus();
 });
 
 // --- Chart style popup: how price itself is drawn --------------------------
@@ -2380,10 +2380,7 @@ function applyColorScheme(): void {
 }
 
 function positionCandlePopup(): void {
-  if (!candlePopupEl || !tbCandleEl) return;
-  const r = tbCandleEl.getBoundingClientRect();
-  candlePopupEl.style.left = `${Math.round(r.left)}px`;
-  candlePopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+  positionToolbarPopup(candlePopupEl, toolbarAnchor(tbCandleEl));
 }
 
 function openCandlePopup(): void {
@@ -2457,10 +2454,7 @@ function renderTimeframeList(): void {
 }
 
 function positionTimeframePopup(): void {
-  if (!tfPopupEl || !tbTimeframeEl) return;
-  const r = tbTimeframeEl.getBoundingClientRect();
-  tfPopupEl.style.left = `${Math.round(r.left)}px`;
-  tfPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+  positionToolbarPopup(tfPopupEl, toolbarAnchor(tbTimeframeEl));
 }
 
 function openTimeframePopup(): void {
@@ -3339,11 +3333,7 @@ function renderBreakpointList(): void {
 }
 
 function positionBreakpointsPopup(): void {
-  if (!breakpointsPopupEl || !tbBreakpointsEl) return;
-  const r = tbBreakpointsEl.getBoundingClientRect();
-  const maxLeft = Math.max(6, window.innerWidth - breakpointsPopupEl.offsetWidth - 6);
-  breakpointsPopupEl.style.left = `${Math.round(Math.min(Math.max(6, r.left), maxLeft))}px`;
-  breakpointsPopupEl.style.top = `${Math.round(r.bottom + 3)}px`;
+  positionToolbarPopup(breakpointsPopupEl, toolbarAnchor(tbBreakpointsEl));
 }
 
 function openBreakpointsPopup(): void {
@@ -3784,11 +3774,19 @@ document.addEventListener('keydown', (event) => {
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) {
     event.preventDefault();
     closeBreakpointsPopup();
+    toolbarAnchor(tbBreakpointsEl)?.focus();
     return;
   }
   if (candlePopupEl && !candlePopupEl.hidden) {
     event.preventDefault();
     closeCandlePopup();
+    toolbarAnchor(tbCandleEl)?.focus();
+    return;
+  }
+  if (tfPopupEl && !tfPopupEl.hidden) {
+    event.preventDefault();
+    closeTimeframePopup();
+    toolbarAnchor(tbTimeframeEl)?.focus();
     return;
   }
   if (!measureDrawing) return;
@@ -3825,18 +3823,29 @@ document.addEventListener('click', (event) => {
   closeTimeframePopup();
 });
 
-window.addEventListener('resize', () => {
+function positionToolbarPopup(popup: HTMLElement | null, anchor: HTMLElement | null): void {
+  if (!popup || !anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.max(6, Math.min(rect.left, window.innerWidth - popup.offsetWidth - 6));
+  popup.style.left = `${Math.round(left)}px`;
+  popup.style.top = `${Math.round(rect.bottom + 3)}px`;
+}
+
+function repositionToolbarPopups(): void {
   if (plotsPopupEl && !plotsPopupEl.hidden) positionPlotsPopup();
   if (candlePopupEl && !candlePopupEl.hidden) positionCandlePopup();
   if (tfPopupEl && !tfPopupEl.hidden) positionTimeframePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
-});
+}
+
+window.addEventListener('resize', repositionToolbarPopups);
 
 /** Anchor the date picker inside the chart, below the matching toolbar button. */
 function positionGotoPopup(): void {
-  if (!gotoPopupEl || !tbGotoEl) return;
-  const buttonRect = tbGotoEl.getBoundingClientRect();
+  const anchor = toolbarAnchor(tbGotoEl);
+  if (!gotoPopupEl || !anchor) return;
+  const buttonRect = anchor.getBoundingClientRect();
   const areaRect = container.parentElement?.getBoundingClientRect();
   if (!areaRect) return;
   const maxLeft = Math.max(6, areaRect.width - gotoPopupEl.offsetWidth - 6);
@@ -3903,13 +3912,18 @@ tbGotoDoEl?.addEventListener('click', doGoto);
 tbGotoInputEl?.addEventListener('keydown', (e) => {
   const key = (e as KeyboardEvent).key;
   if (key === 'Enter') doGoto();
-  else if (key === 'Escape') closeGotoPopup();
+  else if (key === 'Escape') {
+    closeGotoPopup();
+    toolbarAnchor(tbGotoEl)?.focus();
+  }
 });
 
 tbCsvPlotEl?.addEventListener('click', () => vscode.postMessage({ type: 'openCsv', which: 'plot' }));
 tbCsvTradesEl?.addEventListener('click', () =>
   vscode.postMessage({ type: 'openCsv', which: 'trades' })
 );
+
+initToolbarOverflow(repositionToolbarPopups);
 
 window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   const msg = event.data;

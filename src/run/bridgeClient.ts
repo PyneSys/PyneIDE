@@ -351,6 +351,8 @@ export type BridgeEvent =
   | { e: 'state'; state: 'paused' | 'running' }
   | { e: 'stats'; d: Record<string, number | null> }
   | { e: 'log'; level: string; message: string }
+  /** The script wrote its first output line (a Pine `log.*` line or a `print()`); the line itself arrives on stderr. */
+  | { e: 'scriptLog' }
   | ErrorEvent
   | { e: 'end'; bars: number; cancelled: boolean }
   | DownloadEvent

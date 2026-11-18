@@ -9,16 +9,84 @@ the IDE's log channel instead of corrupting the event stream.
 from __future__ import annotations
 
 import argparse
+import builtins
+import logging
 import os
 import signal
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from .protocol import Emitter
 
 
 def _hijack_stdout():
     proto = os.fdopen(os.dup(1), "wb")
     os.dup2(2, 1)  # everything else writing to fd 1 goes to stderr
     return proto
+
+
+class _ScriptLogSignal(logging.Filter):
+    """Announce the run's first script output line with one ``scriptLog`` event.
+
+    The script's output reaches the IDE through stderr, mixed with pynecore's own
+    ``[BROKER]``, ``[SIM]`` and ``[OHLCV]`` lines, which share the Pine log logger. Only
+    the records the Pine ``log.info`` / ``log.warning`` / ``log.error`` functions write
+    and the ``print()`` calls (the script's own and ``alert()``'s) are the script's
+    output, so the IDE reveals its log channel on this event instead of on any stderr
+    line. The log handler writes through its console's file, never through ``print()``,
+    so wrapping ``print`` sees no pynecore log line.
+    """
+
+    _PINE_LOG_FUNCTIONS = frozenset(("info", "warning", "error"))
+
+    def __init__(self, emitter: Emitter, log_module_path: str):
+        super().__init__()
+        self._emitter = emitter
+        self._log_module_path = log_module_path
+        self._sent = False
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (record.funcName in self._PINE_LOG_FUNCTIONS
+                and record.pathname == self._log_module_path):
+            self.signal()
+        return True
+
+    def signal(self) -> None:
+        """Emit the ``scriptLog`` event, once per run."""
+        if not self._sent:
+            self._sent = True
+            self._emitter.emit({"e": "scriptLog"})
+
+    def wrap_print(self, print_function: Callable[..., None]) -> Callable[..., None]:
+        """Wrap ``print`` so its first successful call that writes to the captured stdout
+        or stderr sends the ``scriptLog`` event.
+
+        The captured streams are the ``sys.stdout`` / ``sys.stderr`` objects at wrap time
+        and any stream on fd 1 or 2; all of them reach the IDE's log channel (fd 1 is
+        pointed at stderr). A print to any other file, including one that
+        ``contextlib.redirect_stdout`` makes the default, never shows up there, so it does
+        not use up the run's reveal.
+        """
+        captured = (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__)
+
+        def reaches_log_channel(target: Any) -> bool:
+            if any(target is stream for stream in captured):
+                return True
+            try:
+                return target.fileno() in (1, 2)
+            except (AttributeError, OSError, ValueError):
+                return False
+
+        def signalling_print(*args: Any, **kwargs: Any) -> None:
+            print_function(*args, **kwargs)
+            if self._sent:
+                return
+            target = kwargs.get("file")
+            if reaches_log_channel(sys.stdout if target is None else target):
+                self.signal()
+        return signalling_print
 
 
 def main() -> int:
@@ -136,6 +204,11 @@ def main() -> int:
         except Exception as exc:
             emitter.emit(error_event(exc))
             return 1
+
+    from pynecore.lib import log as pine_log
+    script_log_signal = _ScriptLogSignal(emitter, pine_log.__file__)
+    pine_log.logger.addFilter(script_log_signal)
+    builtins.print = script_log_signal.wrap_print(builtins.print)
 
     control = Control(on_state=lambda state: emitter.emit({"e": "state", "state": state}))
     # Publish for the debug proxy's run-to-bar evaluate (see control.request_runto).

@@ -1612,9 +1612,12 @@ export class RunService {
       : undefined;
 
     // Script log output is easy to lose among the other channels, so the first
-    // log line of a run brings this one up. Once per run only — a per-bar
-    // log.info() would otherwise re-open the panel on every single bar — and
-    // preserveFocus so the reveal never steals the caret from the editor.
+    // script output line (the bridge's scriptLog event: a Pine log.* line or a
+    // print()) or bridge warning of a run brings this one up. pynecore's own
+    // stderr lines ([BROKER], [SIM], [OHLCV]) do not: a live run writes them
+    // from the start. Once per run only — a per-bar log.info() would otherwise
+    // re-open the panel on every single bar — and preserveFocus so the reveal
+    // never steals the caret from the editor.
     let outputRevealed = false;
     const revealOutput = (): void => {
       if (outputRevealed) return;
@@ -1755,6 +1758,9 @@ export class RunService {
             this.output.appendLine(`[${event.level}] ${event.message}`);
             revealOutput();
             break;
+          case 'scriptLog':
+            revealOutput();
+            break;
           case 'end':
             endBars = event.bars;
             cancelled = event.cancelled;
@@ -1762,10 +1768,7 @@ export class RunService {
         }
         this.listener?.onEvent(event, chartKey);
       },
-      onLog: (line) => {
-        this.output.appendLine(line);
-        revealOutput();
-      },
+      onLog: (line) => this.output.appendLine(line),
     });
     this.activeRun = run;
     stop = () => {

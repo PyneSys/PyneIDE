@@ -10,6 +10,7 @@ A PyneCore without live chart support skips the tests.
 """
 import itertools
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -357,6 +358,62 @@ class LiveSmoke(unittest.TestCase):
             history_trades=True, live_output_limit=None, batch_size=500)
         with self.assertRaises(ValueError):
             run_live(args, Capture(), Control())
+
+
+class ScriptLogSignalSmoke(unittest.TestCase):
+    def test_only_the_scripts_own_log_lines_signal(self):
+        """pynecore's tagged lines on the shared logger stay silent; the first Pine
+        log.* line sends one scriptLog event, later ones none"""
+        from pynecore.lib import log
+        from pyneide_bridge.__main__ import _ScriptLogSignal
+
+        capture = Capture()
+        signal = _ScriptLogSignal(capture, log.__file__)
+        log.logger.addFilter(signal)
+        self.addCleanup(log.logger.removeFilter, signal)
+        with patch.object(log.logger, 'handlers', [logging.NullHandler()]), \
+                patch.object(log.logger, 'propagate', False):
+            log.broker_info('WS connected')
+            log.sim_info('ENTRY long')
+            log.ohlcv_info('O=%.2f', 1.0)
+            log.logger.warning('pynecore warning')
+            self.assertEqual(capture.events, [])
+            log.info('first {0}', 1)
+            log.warning('second')
+            log.error('third')
+        self.assertEqual(capture.events, [{'e': 'scriptLog'}])
+
+    def test_print_signals_but_pynecore_log_lines_do_not(self):
+        """pynecore's log handler writes through its console, never through print(), so
+        its tagged lines stay silent; a print() to an unrelated file or to a stdout
+        redirected after the wrap stays silent too, and the script's first print() to the
+        captured stdout sends the event"""
+        import builtins
+        import io
+        from contextlib import redirect_stdout
+        from pynecore.lib import log
+        from pyneide_bridge.__main__ import _ScriptLogSignal
+
+        capture = Capture()
+        signal = _ScriptLogSignal(capture, log.__file__)
+        log.logger.addFilter(signal)
+        self.addCleanup(log.logger.removeFilter, signal)
+        out = io.StringIO()
+        with patch.object(log.logger, 'propagate', False), redirect_stdout(out), \
+                patch.object(builtins, 'print', signal.wrap_print(builtins.print)):
+            log.broker_info('WS connected')
+            log.sim_info('ENTRY long')
+            report = io.StringIO()
+            print('report line', file=report)
+            with redirect_stdout(io.StringIO()):
+                print('redirected line')
+                print('redirected line', file=sys.stdout)
+            self.assertEqual(capture.events, [])
+            print('script output')
+            print('more output')
+        self.assertEqual(capture.events, [{'e': 'scriptLog'}])
+        self.assertIn('script output', out.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()
