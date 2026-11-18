@@ -30,6 +30,11 @@ Events on top of a backtest's stream:
   ``reconnecting`` with ``attempt``/``offlineSeconds``/``error``,
   ``market_closed``, ``stopped``).
 
+``--inputs`` / ``--settings`` override the script's ``.toml`` for this run only
+(a dashboard runs one script with different inputs side by side), and
+``--output-dir`` / ``--output-name`` place the output files elsewhere than
+``workdir/output/<script stem>``.
+
 A ``bars`` row whose timestamp equals the previous row's replaces it: the
 history's last bar may still have been forming when it was downloaded, and the
 live feed then delivers its close.
@@ -38,6 +43,7 @@ live feed then delivers its close.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import sys
 import threading
@@ -299,9 +305,20 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     if args.live_output_limit is not None and args.live_output_limit < 0:
         raise ValueError("--live-output-limit cannot be negative")
     data_only = bool(getattr(args, "data_only", False))
-    if data_only and (args.history_trades or args.live_output_limit is not None):
-        raise ValueError("--history-trades and --live-output-limit need a script, "
-                         "not --data-only")
+    inputs_arg = getattr(args, "inputs", None)
+    settings_arg = getattr(args, "settings", None)
+    output_dir_arg = getattr(args, "output_dir", None)
+    output_name = getattr(args, "output_name", None)
+    if data_only and (args.history_trades or args.live_output_limit is not None
+                      or inputs_arg is not None or settings_arg is not None
+                      or output_dir_arg is not None or output_name is not None):
+        raise ValueError("--history-trades, --live-output-limit, --inputs, --settings, "
+                         "--output-dir and --output-name need a script, not --data-only")
+    inputs = _json_object(inputs_arg, "--inputs")
+    settings = _json_object(settings_arg, "--settings")
+    if output_name is not None and (not output_name.strip()
+                                    or Path(output_name).name != output_name):
+        raise ValueError(f"--output-name must be a plain file name stem: {output_name!r}")
 
     from pynecore.core.live_runner import LiveStop
     from pynecore.core.provider_download import (DownloadStopped,
@@ -343,14 +360,15 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
     if data_only:
         plot_path = strat_path = trade_path = viz_path = None
     else:
-        output_dir = workdir / "output"
+        output_dir = workdir / (output_dir_arg or "output")
         output_dir.mkdir(parents=True, exist_ok=True)
-        plot_path = output_dir / f"{script.stem}.csv"
-        strat_path = output_dir / f"{script.stem}_strat.csv"
-        trade_path = output_dir / f"{script.stem}_trade.csv"
-        viz_path = output_dir / f"{script.stem}_viz.ndjson"
+        stem = output_name or script.stem
+        plot_path = output_dir / f"{stem}.csv"
+        strat_path = output_dir / f"{stem}_strat.csv"
+        trade_path = output_dir / f"{stem}_trade.csv"
+        viz_path = output_dir / f"{stem}_viz.ndjson"
         # Stale results of an earlier backtest of the script
-        (output_dir / f"{script.stem}_robustness.json").unlink(missing_ok=True)
+        (output_dir / f"{stem}_robustness.json").unlink(missing_ok=True)
 
         lib_dir = workdir / "scripts" / "lib"
         if lib_dir.is_dir():
@@ -378,6 +396,8 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
         # The security contexts download their history from the chart's start
         time_from=datetime.fromtimestamp(time_from_ts / 1000, UTC),
         config_dir=workdir / "config",
+        inputs=inputs,
+        settings=settings,
     )
     output_cap: OutputCap | None = None
     if viz_path is not None:
@@ -429,6 +449,16 @@ def run_live(args: Any, emitter: Emitter, control: Control) -> int:
                                 batch_size=args.batch_size,
                                 chart_breakpoints=False,
                                 live=LiveFeed(emitter, runs_on_ticks, output_cap))
+
+
+def _json_object(text: str | None, flag: str) -> dict[str, Any] | None:
+    """Parse a JSON object argument; ``None`` when the flag is absent."""
+    if text is None:
+        return None
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError(f"{flag} must be a JSON object")
+    return value
 
 
 def _chain(history: Iterator[Any], live: Iterator[Any]) -> Iterator[Any]:

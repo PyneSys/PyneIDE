@@ -138,6 +138,19 @@ def main() -> int:
                         help="With --live: stop saving the plot CSV and viz NDJSON once they "
                              "reach MB together, the chart goes on (default: 256, 0: no "
                              "limit)")
+    parser.add_argument("--inputs", default=None, metavar="JSON",
+                        help="With --live: input values as a JSON object keyed by the main() "
+                             "parameter name; they override the script's .toml for this run "
+                             "only")
+    parser.add_argument("--settings", default=None, metavar="JSON",
+                        help="With --live: script settings (decorator arguments such as "
+                             "initial_capital) as a JSON object; they override the script's "
+                             ".toml for this run only")
+    parser.add_argument("--output-dir", default=None, metavar="DIR",
+                        help="With --live: write the output files here (relative to the "
+                             "workdir) instead of workdir/output")
+    parser.add_argument("--output-name", default=None, metavar="NAME",
+                        help="With --live: the output file name stem instead of the script's")
     parser.add_argument("--time-from", type=int, default=None,
                         help="Start of the run window (epoch seconds, UTC)")
     parser.add_argument("--time-to", type=int, default=None,
@@ -234,9 +247,12 @@ def main() -> int:
         except Exception as exc:
             emitter.emit(error_event(exc))
             return 1
-    if args.history_trades or args.live_from is not None or args.live_output_limit is not None:
+    if (args.history_trades or args.live_from is not None or args.live_output_limit is not None
+            or args.inputs is not None or args.settings is not None
+            or args.output_dir is not None or args.output_name is not None):
         emitter.emit({"e": "error",
-                      "message": "--history-trades, --live-from and --live-output-limit need --live",
+                      "message": "--history-trades, --live-from, --live-output-limit, --inputs, "
+                                 "--settings, --output-dir and --output-name need --live",
                       "kind": "ValueError", "traceback": ""})
         return 1
 

@@ -48,6 +48,15 @@ def main():
         strategy.close("L")
 '''
 
+OFFSET_SCRIPT = '''"""@pyne"""
+from pynecore.lib import script, plot, close, input
+
+
+@script.indicator("Live offset", overlay=True)
+def main(offset=input.float(0.0, "Offset")):
+    plot(close + offset, "shifted")
+'''
+
 MINUTE = 60_000
 
 
@@ -61,6 +70,7 @@ def make_workdir(temp: Path, live_rows: list) -> tuple[Path, int]:
     (temp / 'scripts').mkdir()
     (temp / 'scripts' / 'smoke.py').write_text(SCRIPT, encoding='utf-8')
     (temp / 'scripts' / 'strategy.py').write_text(STRATEGY, encoding='utf-8')
+    (temp / 'scripts' / 'offset.py').write_text(OFFSET_SCRIPT, encoding='utf-8')
     (temp / 'config' / 'plugins').mkdir(parents=True)
     (temp / 'config' / 'plugins' / 'replay.toml').write_text(
         f'fixture_path = "{fixture.as_posix()}"\n', encoding='utf-8')
@@ -140,6 +150,60 @@ class LiveSmoke(unittest.TestCase):
         self.assertEqual(states[0], 'connecting')
         self.assertEqual(states[-1], 'stopped')
         self.assertEqual(events[-1], {'e': 'end', 'bars': 5, 'cancelled': True})
+
+    def test_inputs_and_output_place_override_one_run_only(self):
+        """--inputs reaches the script without being saved into its .toml, and
+        --output-dir / --output-name place the output files"""
+        with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:
+            workdir, _ = make_workdir(Path(temp), [])
+            proc = subprocess.Popen(
+                [sys.executable, '-m', 'pyneide_bridge', '--workdir', str(workdir),
+                 '--script', 'offset', '--live', 'replay:TEST@1', '--live-from', '-3',
+                 '--inputs', '{"offset": 1000}', '--output-dir', 'output/dashboards/d/c',
+                 '--output-name', 'offset-2'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                env={**os.environ, 'PYTHONPATH': str(bridge_root),
+                     'PYNE_SAVE_SCRIPT_TOML': '0'},
+                text=True)
+            events = []
+            try:
+                for line in proc.stdout:
+                    events.append(json.loads(line))
+                    if events[-1]['e'] in ('live', 'error'):
+                        break
+                proc.stdin.write('{"cmd": "cancel"}\n')
+                proc.stdin.flush()
+                events.extend(json.loads(line) for line in proc.stdout)
+                self.assertEqual(proc.wait(timeout=30), 0, events)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.stdin.close()
+                proc.stdout.close()
+            out_dir = workdir / 'output' / 'dashboards' / 'd' / 'c'
+            self.assertTrue((out_dir / 'offset-2.csv').is_file())
+            self.assertTrue((out_dir / 'offset-2_viz.ndjson').is_file())
+            self.assertFalse((workdir / 'output' / 'offset.csv').exists())
+            self.assertFalse((workdir / 'scripts' / 'offset.toml').exists())
+
+        self.assertNotIn('error', [ev['e'] for ev in events], events)
+        start = next(ev for ev in events if ev['e'] == 'start')
+        self.assertEqual(Path(start['outputs']['plot']).name, 'offset-2.csv')
+        plots = [row[6][0] for ev in events if ev['e'] == 'bars' for row in ev['d']]
+        closes = [row[4] for ev in events if ev['e'] == 'bars' for row in ev['d']]
+        self.assertEqual(plots, [c + 1000 for c in closes])
+
+    def test_inputs_must_be_a_json_object(self):
+        with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:
+            workdir, _ = make_workdir(Path(temp), [])
+            result = subprocess.run(
+                [sys.executable, '-m', 'pyneide_bridge', '--workdir', str(workdir),
+                 '--script', 'offset', '--live', 'replay:TEST@1', '--inputs', '[1]'],
+                input='', capture_output=True, text=True, timeout=60,
+                env={**os.environ, 'PYTHONPATH': str(bridge_root)})
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('--inputs must be a JSON object', events[-1]['message'])
 
     def test_live_with_backtest_options_is_refused(self):
         with tempfile.TemporaryDirectory(prefix='pyneide-live-') as temp:

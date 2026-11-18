@@ -47,6 +47,8 @@ import {
   type DataActionContext,
 } from './run/dataSelect';
 import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveChartService';
+import { DashboardEditorProvider, isDashboardMirrorKey } from './dashboard/dashboardEditor';
+import { newDashboard } from './dashboard/newDashboard';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
@@ -200,15 +202,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   liveCharts.register();
   SymbolBrowserPanel.setLiveChartOpener((provider, env) => void liveCharts.openProvider(provider, env));
-  chartManager.onSelectData = (chartKey, live) =>
-    void (isLiveChartKey(chartKey)
-      ? liveCharts.reselect(chartKey)
-      : runService.reselectChartData(chartKey, live));
-  chartManager.onSelectTimeframe = (chartKey, timeframe) =>
-    void (isLiveChartKey(chartKey)
-      ? liveCharts.setTimeframe(chartKey, timeframe)
-      : runService.changeLiveTimeframe(chartKey, timeframe));
-  chartManager.onLiveChartClosed = (chartKey) => liveCharts.onChartClosed(chartKey);
+
   new ChartBreakpointService(context, chartManager).register();
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.openChartSource', () => chartManager.openSource()),
@@ -285,6 +279,34 @@ export function activate(context: vscode.ExtensionContext): void {
     output,
     (chartKey) => runService.rerunOpenChart(chartKey)
   );
+  const dashboards = new DashboardEditorProvider({
+    chartManager,
+    context,
+    output: runService.runOutput,
+    resolveEnv: () => resolveLiveChartEnv(manager),
+    pickLive: pickLiveTarget,
+    compile: compileService,
+    editInputs: async (request) => {
+      const uri = await editInputsUri(request.scriptUri, compileService);
+      if (uri) await inputsView.openDashboardEntry({ ...request, scriptUri: uri });
+    },
+  });
+  dashboards.register();
+  chartManager.onSelectData = (chartKey, live) => {
+    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorSelectData(chartKey);
+    else if (isLiveChartKey(chartKey)) void liveCharts.reselect(chartKey);
+    else void runService.reselectChartData(chartKey, live);
+  };
+  chartManager.onSelectTimeframe = (chartKey, timeframe) => {
+    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorSelectTimeframe(chartKey, timeframe);
+    else if (isLiveChartKey(chartKey)) void liveCharts.setTimeframe(chartKey, timeframe);
+    else void runService.changeLiveTimeframe(chartKey, timeframe);
+  };
+  chartManager.onLiveChartClosed = (chartKey) => {
+    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorClosed(chartKey);
+    else liveCharts.onChartClosed(chartKey);
+  };
+  context.subscriptions.push(vscode.commands.registerCommand('pyneide.newDashboard', () => newDashboard()));
   context.subscriptions.push(
     registerReportCommand(context, { context, manager, pineLs }, auth, compileOutput),
     vscode.commands.registerCommand('pyneide.editInputs', async (

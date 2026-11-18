@@ -48,6 +48,7 @@
     "onLanguage:pine",
     "onDebugDynamicConfigurations:pyne",
     "onCustomEditor:pyneide.ohlcvTable",
+    "onCustomEditor:pyneide.dashboard",
     "onLanguage:pyne",
     "onUri"
   ],
@@ -425,6 +426,12 @@
         "icon": "$(add)"
       },
       {
+        "command": "pyneide.newDashboard",
+        "title": "New Dashboard…",
+        "category": "PyneIDE",
+        "icon": "$(add)"
+      },
+      {
         "command": "pyneide.dataDownloadWizard",
         "title": "Download Data…",
         "category": "PyneIDE",
@@ -541,6 +548,12 @@
       {
         "command": "pyneide.dataDelete",
         "title": "Delete Data…",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pyneide.dashboardDelete",
+        "title": "Delete Dashboard…",
         "category": "PyneIDE",
         "icon": "$(trash)"
       },
@@ -671,6 +684,10 @@
         },
         {
           "command": "pyneide.workspace.profilePineScript",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.dashboardDelete",
           "when": "false"
         }
       ],
@@ -923,6 +940,11 @@
           "group": "inline@1"
         },
         {
+          "command": "pyneide.newDashboard",
+          "when": "view == pyneide.workspace && viewItem == pyneSection.dashboards",
+          "group": "inline@1"
+        },
+        {
           "command": "pyneide.openSymbolMap",
           "when": "view == pyneide.workspace && viewItem == pyneSection.data",
           "group": "inline@1"
@@ -1060,6 +1082,16 @@
         {
           "command": "pyneide.dataDelete",
           "when": "view == pyneide.workspace && viewItem == pyneData",
+          "group": "9_reveal@2"
+        },
+        {
+          "command": "pyneide.workspace.revealInExplorer",
+          "when": "view == pyneide.workspace && viewItem == pyneDashboard",
+          "group": "9_reveal@1"
+        },
+        {
+          "command": "pyneide.dashboardDelete",
+          "when": "view == pyneide.workspace && viewItem == pyneDashboard",
           "group": "9_reveal@2"
         },
         {
@@ -1842,6 +1874,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "pyneide.dashboard",
+        "displayName": "Pyne Dashboard",
+        "selector": [
+          {
+            "filenamePattern": "**/dashboards/*.toml"
+          }
+        ],
+        "priority": "default"
       }
     ]
   },
@@ -1886,7 +1928,8 @@
     "package": "vsce package --out build/",
     "test:pyne-language": "node --test test/pyneLanguage.test.mjs",
     "test:profile-store": "node --test test/profileStore.test.mjs",
-    "test:project-env": "node --test test/projectEnvironment.test.mjs"
+    "test:project-env": "node --test test/projectEnvironment.test.mjs",
+    "test:dashboard": "node --test test/dashboard.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
@@ -1910,6 +1953,7 @@
   "dependencies": {
     "klinecharts": "^10.1.0",
     "pyright": "1.1.411",
+    "smol-toml": "1.9.1",
     "vscode-languageclient": "^9.0.1"
   }
 }

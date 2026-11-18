@@ -22,7 +22,12 @@ import { createNewScript } from './createScript';
 
 export const PYNE_WORKSPACE_VIEW_ID = 'pyneide.workspace';
 
-type SectionKind = 'scripts' | 'data' | 'output';
+/** The workdir folder of the dashboard files. */
+export const DASHBOARDS_DIR = 'dashboards';
+/** The dashboard custom editor (see dashboard/dashboardEditor.ts). */
+const DASHBOARD_VIEW_TYPE = 'pyneide.dashboard';
+
+type SectionKind = 'scripts' | 'dashboards' | 'data' | 'output';
 
 interface SectionNode {
   type: 'section';
@@ -34,6 +39,11 @@ interface ScriptNode {
   uri: vscode.Uri;
   rel: string;
   pyneKind?: PyneKind;
+}
+
+interface DashboardNode {
+  type: 'dashboard';
+  uri: vscode.Uri;
 }
 
 interface LibraryFolderNode {
@@ -72,12 +82,13 @@ interface CompanionNode {
  * offer no visible next step. */
 interface HintNode {
   type: 'hint';
-  kind: 'newScript' | 'downloadData';
+  kind: 'newScript' | 'newDashboard' | 'downloadData';
 }
 
 export type PyneNode =
   | SectionNode
   | ScriptNode
+  | DashboardNode
   | LibraryFolderNode
   | DataNode
   | SymbolMapRootNode
@@ -91,6 +102,12 @@ const HINTS: Record<HintNode['kind'], { label: string; icon: string; tooltip: st
     icon: 'add',
     tooltip: 'Create a Pine or Pyne indicator, strategy or library',
     command: 'pyneide.workspace.createScript',
+  },
+  newDashboard: {
+    label: 'New Dashboard…',
+    icon: 'add',
+    tooltip: 'Create a live dashboard: charts of live providers with your scripts on them',
+    command: 'pyneide.newDashboard',
   },
   downloadData: {
     label: 'Download market data…',
@@ -186,6 +203,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
         return this.sectionItem(node);
       case 'script':
         return this.scriptItem(node);
+      case 'dashboard':
+        return this.dashboardItem(node);
       case 'libraryFolder':
         return this.libraryFolderItem(node);
       case 'data':
@@ -206,6 +225,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     if (!node) {
       return [
         { type: 'section', kind: 'scripts' },
+        { type: 'section', kind: 'dashboards' },
         { type: 'section', kind: 'data' },
         { type: 'section', kind: 'output' },
       ];
@@ -217,6 +237,8 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     switch (node.kind) {
       case 'scripts':
         return this.scriptChildren();
+      case 'dashboards':
+        return this.dashboardChildren();
       case 'data':
         return this.dataChildren();
       case 'output':
@@ -227,11 +249,13 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
   private sectionItem(node: SectionNode): vscode.TreeItem {
     const labels: Record<SectionKind, string> = {
       scripts: 'Scripts',
+      dashboards: 'Dashboards',
       data: 'Data',
       output: 'Output',
     };
     const icons: Record<SectionKind, string> = {
       scripts: 'file-code',
+      dashboards: 'graph',
       data: 'database',
       output: 'output',
     };
@@ -274,6 +298,36 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
       return [{ type: 'hint', kind: 'newScript' }];
     }
     return [...libraries, ...nodes];
+  }
+
+  private dashboardChildren(): PyneNode[] {
+    const dir = path.join(this.workdir!, DASHBOARDS_DIR);
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.toml'));
+    } catch {
+      names = [];
+    }
+    if (names.length === 0) return [{ type: 'hint', kind: 'newDashboard' }];
+    return names
+      .sort((a, b) => a.localeCompare(b))
+      .map((n): DashboardNode => ({ type: 'dashboard', uri: vscode.Uri.file(path.join(dir, n)) }));
+  }
+
+  private dashboardItem(node: DashboardNode): vscode.TreeItem {
+    const item = new vscode.TreeItem(
+      path.basename(node.uri.fsPath).replace(/\.toml$/i, ''),
+      vscode.TreeItemCollapsibleState.None
+    );
+    item.iconPath = new vscode.ThemeIcon('graph');
+    item.tooltip = node.uri.fsPath;
+    item.contextValue = 'pyneDashboard';
+    item.command = {
+      command: 'vscode.openWith',
+      title: 'Open Dashboard',
+      arguments: [node.uri, DASHBOARD_VIEW_TYPE],
+    };
+    return item;
   }
 
   private libraryFolderChildren(node: LibraryFolderNode): PyneNode[] {
@@ -688,7 +742,7 @@ export function registerWorkspaceView(
     const resolved = resolveWorkspaceWorkdir();
     if (!resolved?.exists) return;
     watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(resolved.path, '{scripts,data,output}/**')
+      new vscode.RelativePattern(resolved.path, '{scripts,dashboards,data,output}/**')
     );
     const onChange = (): void => refresh();
     watcher.onDidCreate(onChange);
@@ -778,6 +832,10 @@ export function registerWorkspaceView(
       const target = node ?? view.selection[0];
       if (target?.type === 'output') void deleteOutputFile(target.uri);
     }),
+    vscode.commands.registerCommand('pyneide.dashboardDelete', (node?: PyneNode) => {
+      const target = node ?? view.selection[0];
+      if (target?.type === 'dashboard') void deleteDashboardFile(target.uri);
+    }),
     // The Delete/Backspace keybinding routes here: its `when` only checks the
     // focused view (viewItem is unreliable at keybinding-eval time), so the
     // target type is resolved from the current selection.
@@ -786,6 +844,7 @@ export function registerWorkspaceView(
       if (isDeletableScriptNode(target)) void deleteScriptNode(target);
       else if (target?.type === 'data') void deleteDataFile(target.uri);
       else if (target?.type === 'output') void deleteOutputFile(target.uri);
+      else if (target?.type === 'dashboard') void deleteDashboardFile(target.uri);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('pyneide.workdir')) refresh();
@@ -883,6 +942,19 @@ async function deleteDataFile(uri: vscode.Uri): Promise<void> {
   if (tomlPath !== uri.fsPath && fs.existsSync(tomlPath)) {
     await deleteToTrash(vscode.Uri.file(tomlPath));
   }
+}
+
+/** Delete a dashboard file (to the OS trash) after a modal confirm; the
+ * outputs its charts wrote stay. */
+async function deleteDashboardFile(uri: vscode.Uri): Promise<void> {
+  const name = path.basename(uri.fsPath).replace(/\.toml$/i, '');
+  const choice = await vscode.window.showWarningMessage(
+    `Delete the dashboard ${name}?`,
+    { modal: true, detail: 'The dashboard file is moved to the trash. Its outputs stay.' },
+    'Delete'
+  );
+  if (choice !== 'Delete') return;
+  await deleteToTrash(uri);
 }
 
 /** Delete an output file (to the OS trash) after a modal confirm. */

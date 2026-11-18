@@ -443,6 +443,18 @@ export interface BridgeRunOptions {
    * no trading.
    */
   live?: { provider: string; from?: string; historyTrades?: boolean; outputLimitMB?: number };
+  /** With `live`: input values keyed by the `main()` parameter name, over the
+   * script's `.toml` for this run only. */
+  inputs?: Record<string, unknown>;
+  /** With `live`: script settings (decorator arguments), over the script's
+   * `.toml` for this run only. */
+  settings?: Record<string, unknown>;
+  /** With `live`: the output directory, relative to the workdir (default `output`). */
+  outputDir?: string;
+  /** With `live`: the output file name stem (default: the script's). */
+  outputName?: string;
+  /** Extra environment variables of the bridge process. */
+  env?: Record<string, string>;
   onEvent: (event: BridgeEvent) => void;
   /** stderr lines: pynecore logs and user print() output. */
   onLog?: (line: string) => void;
@@ -478,6 +490,10 @@ export class BridgeRun {
         args.push('--live-output-limit', String(opts.live.outputLimitMB));
       }
     }
+    if (opts.inputs) args.push('--inputs', JSON.stringify(opts.inputs));
+    if (opts.settings) args.push('--settings', JSON.stringify(opts.settings));
+    if (opts.outputDir !== undefined) args.push('--output-dir', opts.outputDir);
+    if (opts.outputName !== undefined) args.push('--output-name', opts.outputName);
     if (opts.script) args.push('--script', opts.script);
     if (opts.dataOnly) args.push('--data-only');
     if (opts.timeFrom !== undefined) args.push('--time-from', String(opts.timeFrom));
@@ -505,6 +521,7 @@ export class BridgeRun {
         // the output channel. The plain formatter emits the identical layout
         // unpadded, and colouring comes from the channel's `log` grammar anyway.
         PYNE_NO_COLOR_LOG: '1',
+        ...opts.env,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

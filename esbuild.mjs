@@ -289,8 +289,25 @@ if (smoke) {
     plugins: watch ? [watchMarkerPlugin] : [],
   });
 
+  // Dashboard webview bundles: the dashboard page, and the shim each chart
+  // iframe in it loads before the chart bundle. Browser code, no vscode API.
+  const dashboardCtx = await esbuild.context({
+    ...common,
+    entryPoints: {
+      'dashboard-webview': 'src/dashboard/webview/main.ts',
+      'dashboard-frame': 'src/dashboard/webview/frame.ts',
+    },
+    outdir: 'dist',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2020',
+    minify: !watch,
+    plugins: watch ? [watchMarkerPlugin] : [],
+  });
+
   if (watch) {
     await ctx.watch();
+    await dashboardCtx.watch();
     await webviewCtx.watch();
     await tableCtx.watch();
     await inputsCtx.watch();
@@ -300,6 +317,8 @@ if (smoke) {
     console.log('esbuild: watching...');
   } else {
     await ctx.rebuild();
+    await dashboardCtx.rebuild();
+    await dashboardCtx.dispose();
     await webviewCtx.rebuild();
     await tableCtx.rebuild();
     await inputsCtx.rebuild();

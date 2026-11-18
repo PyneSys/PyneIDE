@@ -28,6 +28,10 @@ import type {
 
 const VIEW_TYPE = 'pyneide.inputsForm';
 
+function isInputValue(value: unknown): value is InputValue {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
 interface InspectResult {
   inputs: InputSpec[];
   /** Current values, read back through pynecore's own toml loader. */
@@ -44,6 +48,8 @@ export class InputsViewManager {
    * chart. One panel per script.
    */
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  /** The dashboard overrides each open dashboard entry form was built from. */
+  private readonly dashboardSources = new Map<string, string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -59,7 +65,7 @@ export class InputsViewManager {
   reconcile(): void {
     const live = openChartKeys();
     for (const [key, panel] of [...this.panels]) {
-      if (!live.has(key)) panel.dispose();
+      if (!key.startsWith('dashboard:') && !live.has(key)) panel.dispose();
     }
   }
 
@@ -156,6 +162,123 @@ export class InputsViewManager {
             });
           });
       }
+    });
+  }
+
+  /**
+   * Open the input form of one script entry of a dashboard: the fields come
+   * from the script, the values from the script's `.toml` with the dashboard's
+   * overrides over them, and a save hands back only the values that differ
+   * from the script's own (they go into the dashboard file, the `.toml` is
+   * left alone). One form per entry (`key`).
+   */
+  async openDashboardEntry(request: {
+    scriptUri: vscode.Uri;
+    key: string;
+    title: string;
+    inputs: Record<string, unknown>;
+    settings: Record<string, unknown>;
+    save: (inputs: Record<string, unknown>, settings: Record<string, unknown>) => Promise<void>;
+  }): Promise<void> {
+    const key = `dashboard:${request.key}`;
+    const source = JSON.stringify([request.inputs, request.settings]);
+    const existing = this.panels.get(key);
+    if (existing) {
+      // A form of overrides the file no longer has would save the old ones back
+      if (this.dashboardSources.get(key) === source) {
+        existing.reveal();
+        return;
+      }
+      existing.dispose();
+    }
+    const scriptPath = request.scriptUri.fsPath;
+    const workdir = resolveWorkspaceWorkdir(
+      vscode.workspace.getWorkspaceFolder(request.scriptUri), path.dirname(scriptPath)
+    );
+    if (!workdir?.exists) return;
+    const pythonBin = await this.manager.ensureReady(
+      'Reading a script\'s inputs uses the pyne bridge, so the Python environment must be set up first.',
+      request.scriptUri
+    );
+    if (!pythonBin) return;
+    const bridgeRoot = vscode.Uri.joinPath(this.context.extensionUri, 'python').fsPath;
+    let inspect: InspectResult;
+    try {
+      inspect = await this.inspect(pythonBin, bridgeRoot, workdir.path, scriptPath);
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `PyneIDE: could not read inputs — ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
+    // The script's own values: a dashboard value equal to one is no override
+    const own = { ...inspect.values };
+    const ownProperties: Record<string, InputValue | null> = {};
+    for (const [name, state] of Object.entries(inspect.properties ?? {})) ownProperties[name] = state.value;
+    const values = { ...inspect.values };
+    for (const [name, value] of Object.entries(request.inputs)) {
+      if (isInputValue(value)) values[name] = value;
+    }
+    const properties = inspect.properties
+      ? Object.fromEntries(Object.entries(inspect.properties).map(([name, state]) => {
+          const value = request.settings[name];
+          return [name, isInputValue(value) ? { ...state, value } : { ...state }];
+        }))
+      : null;
+
+    const distRoot = vscode.Uri.joinPath(this.context.extensionUri, 'dist');
+    const panel = vscode.window.createWebviewPanel(
+      VIEW_TYPE,
+      `${properties ? 'Settings' : 'Inputs'}: ${request.title}`,
+      vscode.ViewColumn.Beside,
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [distRoot] }
+    );
+    this.panels.set(key, panel);
+    this.dashboardSources.set(key, source);
+    panel.onDidDispose(() => {
+      if (this.panels.get(key) !== panel) return;
+      this.panels.delete(key);
+      this.dashboardSources.delete(key);
+    });
+    panel.webview.html = this.html(panel.webview, distRoot);
+    const payload: InputsPayload = {
+      script: request.title,
+      scriptType: inspect.scriptType,
+      inputs: inspect.inputs,
+      values,
+      properties,
+      warning: inspect.warning,
+    };
+    panel.webview.onDidReceiveMessage((msg: InputsOutMessage) => {
+      if (msg.type === 'ready') {
+        void panel.webview.postMessage({ type: 'data', payload });
+        return;
+      }
+      if (msg.type !== 'save') return;
+      const inputs: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(msg.values)) {
+        if (own[name] !== value) inputs[name] = value;
+      }
+      const settings: Record<string, unknown> = {};
+      for (const [name, value] of Object.entries(msg.properties ?? {})) {
+        if (ownProperties[name] !== value) settings[name] = value;
+      }
+      request.save(inputs, settings)
+        .then(() => {
+          if (this.panels.get(key) === panel) this.dashboardSources.set(key, JSON.stringify([inputs, settings]));
+          payload.values = msg.values;
+          for (const [name, value] of Object.entries(msg.properties ?? {})) {
+            const state = payload.properties?.[name];
+            if (state) state.value = value;
+          }
+          void panel.webview.postMessage({ type: 'saved' });
+        })
+        .catch((err: unknown) => {
+          void panel.webview.postMessage({
+            type: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        });
     });
   }
 
