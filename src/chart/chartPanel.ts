@@ -506,7 +506,8 @@ export class ChartPanel {
   html, body { height: 100%; margin: 0; padding: 0; }
   body { display: flex; flex-direction: column; font-family: var(--vscode-font-family); }
   #toolbar {
-    position: relative; flex: 0 0 36px; display: flex; align-items: center;
+    --toolbar-height: 36px;
+    flex: 0 0 var(--toolbar-height); display: flex; align-items: center;
     box-sizing: border-box; padding: 3px 6px; user-select: none;
     border-bottom: 1px solid var(--vscode-panel-border, #444);
     background: var(--vscode-editor-background);
@@ -610,9 +611,10 @@ export class ChartPanel {
     background: var(--vscode-toolbar-activeBackground, var(--vscode-list-hoverBackground, #333));
   }
   #toolbar-overflow {
-    position: absolute; z-index: 20; top: calc(100% + 3px); right: 6px;
+    position: fixed; z-index: 20; top: calc(var(--toolbar-height) + 3px); right: 6px;
     display: flex; flex-direction: column; gap: 1px; width: max-content;
-    max-width: calc(100% - 12px); max-height: calc(100vh - 44px); overflow: auto;
+    max-width: calc(100% - 12px); max-height: calc(100% - var(--toolbar-height) - 8px);
+    overflow: auto;
     box-sizing: border-box; padding: 4px;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;

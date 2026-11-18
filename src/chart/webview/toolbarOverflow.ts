@@ -31,7 +31,7 @@ export function initToolbarOverflow(onLayout: () => void): void {
         // that popup's outside-click listener.
         event.stopPropagation();
         setOpen(false);
-        more.focus();
+        more.focus({ preventScroll: true });
         button.click();
       });
     }
@@ -78,17 +78,24 @@ export function initToolbarOverflow(onLayout: () => void): void {
       focused === focusedItem.entry ? focusedItem.entry.hidden : !focusedItem.entry.hidden
     );
     if (needsMore && lostFocus) {
-      more.focus();
+      more.focus({ preventScroll: true });
     } else if (!needsMore && (focused === more || menu.contains(focused))) {
-      returning?.focus();
+      returning?.focus({ preventScroll: true });
     }
     onLayout();
   };
 
-  more.addEventListener('click', () => {
+  // Focusing a minimized VS Code editor group on mouse down expands the group
+  // and can remove the overflow button before the click reaches it.
+  more.addEventListener('mousedown', event => {
+    if (event.button === 0 && !document.hasFocus()) event.preventDefault();
+  });
+  more.addEventListener('click', event => {
     const open = menu.hidden;
     setOpen(open);
-    if (open) menu.querySelector<HTMLButtonElement>('button:not([hidden], :disabled)')?.focus();
+    if (open && event.detail === 0) {
+      menu.querySelector<HTMLButtonElement>('button:not([hidden], :disabled)')?.focus({ preventScroll: true });
+    }
   });
   document.addEventListener('pointerdown', event => {
     const target = event.target as Node;
@@ -103,7 +110,7 @@ export function initToolbarOverflow(onLayout: () => void): void {
     event.preventDefault();
     event.stopPropagation();
     setOpen(false);
-    more.focus();
+    more.focus({ preventScroll: true });
   });
 
   new ResizeObserver(layout).observe(toolbar);
