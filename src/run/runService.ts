@@ -3,8 +3,7 @@
  *
  * Owns the `pyneide.runScript` / `pyneide.runLive` / `pyneide.debugScript` /
  * `pyneide.profileScript` commands, the Run, Live, Debug and Profile CodeLenses /
- * editor-title buttons (via the `pyneide.isPyneScript`
- * context key), the minimal data picker, the run lifecycle (status bar,
+ * editor-title run controls, the minimal data picker, the run lifecycle (status bar,
  * cancellation, logs), the bar-level controls (pause / next bar / run to
  * bar N — commands surfaced in the debug toolbar and a status bar menu),
  * and the debug flow (bridge with a debugpy listener + `pyne` attach
@@ -48,7 +47,7 @@ import {
   type TradeRecord,
 } from './bridgeClient';
 import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
-import { askTimeframe } from './liveChartService';
+import { askTimeframe, LIVE_UNSUPPORTED, offerLiveCoreUpdate, type LiveChartEnv } from './liveChartService';
 import { LiveDownloadProgress } from './liveDownloadProgress';
 import {
   DEFAULT_LIVE_FROM,
@@ -79,7 +78,7 @@ export type RunControlAction = 'pause' | 'resume' | 'step' | 'cancel';
  * a run<->data dependency cycle); undefined when the pick is given up. */
 export type PickLiveTarget = (
   request: LivePickRequest,
-  env: { workdir: string; pythonBin: string }
+  env: LiveChartEnv
 ) => Promise<LiveTarget | undefined>;
 
 /** The state of the live chart run in flight (status bar, control menu). */
@@ -119,6 +118,16 @@ export interface RunOptions {
   /** Run the robustness tests after the last bar and show them on the chart. */
   robustness?: boolean;
 }
+
+const RUN_MODES = {
+  Run: 'run',
+  Debug: 'debug',
+  Live: 'live',
+  Profile: 'profile',
+} as const;
+type RunMode = (typeof RUN_MODES)[keyof typeof RUN_MODES];
+
+const ALTERNATE_RUN_MENU_COMMANDS = 'pyneide.alternateRunMenuCommands';
 
 /** The `pyneide.robustness.*` settings as the bridge's `--robustness` object. */
 function robustnessSettings(scope: vscode.Uri): Record<string, unknown> {
@@ -206,6 +215,7 @@ export class RunService {
   private readonly previewRuns = new Map<string, BridgeRun>();
   /** Chart key of the currently active real run (undefined when idle). */
   private activeChartKey: string | undefined;
+  private readonly runModes = new Map<string, RunMode>();
   /** True between a Run click and the moment the bridge is spawned. A second
    * click in that window would start a parallel bridge (the activeRun guard is
    * not armed yet), so it is ignored. */
@@ -268,6 +278,14 @@ export class RunService {
       this.output,
       this.statusItem,
       this.runtimeDiagnostics,
+      ...Object.entries(RUN_MODES).flatMap(([name, mode]) =>
+        [false, true].map((alternate) =>
+          vscode.commands.registerCommand(
+            `pyneide.toolbar${name}${alternate ? 'Alternate' : ''}`,
+            (uri?: vscode.Uri) => this.runFromToolbar(uri, mode, alternate)
+          )
+        )
+      ),
       vscode.commands.registerCommand('pyneide.runScript', (uri?: vscode.Uri) =>
         this.runFromCommand(uri)
       ),
@@ -330,12 +348,21 @@ export class RunService {
         if (this.activeRun) void this.stopRun(this.activeRun);
       }),
       vscode.languages.registerCodeLensProvider(selector, this.codeLensProvider),
-      vscode.window.onDidChangeActiveTextEditor(() => this.updateContextKey()),
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this.updateContextKey();
+        this.updateRunModeContext();
+      }),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document === vscode.window.activeTextEditor?.document) this.updateContextKey();
       })
     );
     this.updateContextKey();
+    this.updateRunModeContext();
+    void vscode.commands.executeCommand(
+      'setContext',
+      ALTERNATE_RUN_MENU_COMMANDS,
+      this.context.workspaceState.get(ALTERNATE_RUN_MENU_COMMANDS, false)
+    );
   }
 
   private updateContextKey(): void {
@@ -346,14 +373,45 @@ export class RunService {
         detectPyne(doc.getText().slice(0, DETECT_HEAD_BYTES)) !== undefined);
     void vscode.commands.executeCommand('setContext', 'pyneide.isPyneScript', isPyne === true);
     // True only on the tab whose own (non-debug) run is streaming. This has to
-    // be per-file, not the global runActive: the editor-title Run/Debug entries
-    // hide behind it so the Run button becomes Stop — with a
-    // global key that would also strip the play button off every other script.
+    // be per-file so the run controls become Stop only for this script.
     const runningHere =
       doc !== undefined &&
       !this.activeRunIsDebug &&
       this.activeChartKey === canonicalChartKey(doc.uri.fsPath);
     void vscode.commands.executeCommand('setContext', 'pyneide.runActiveHere', runningHere);
+  }
+
+  private updateRunModeContext(): void {
+    const resource = vscode.window.activeTextEditor?.document.uri;
+    const mode = resource && this.runModes.get(resource.toString());
+    void vscode.commands.executeCommand('setContext', 'pyneide.runMode', mode ?? 'run');
+  }
+
+  private async runFromToolbar(
+    uri: vscode.Uri | undefined, mode: RunMode, alternate: boolean
+  ): Promise<void> {
+    // VS Code remembers the last dropdown command workspace-wide. The next
+    // menu uses fresh IDs so its first action reflects the active file's mode.
+    const resource = uri ?? vscode.window.activeTextEditor?.document.uri;
+    if (!resource) return;
+    void vscode.commands.executeCommand('setContext', ALTERNATE_RUN_MENU_COMMANDS, !alternate);
+    if (mode === 'run') {
+      this.runModes.delete(resource.toString());
+    } else {
+      this.runModes.set(resource.toString(), mode);
+    }
+    this.updateRunModeContext();
+
+    const launch = {
+      run: () => this.runFromCommand(resource),
+      debug: () => this.debugFromCommand(resource),
+      live: () => this.runLive(resource),
+      profile: () => this.runFromCommand(resource, { profile: true }),
+    };
+    await Promise.all([
+      this.context.workspaceState.update(ALTERNATE_RUN_MENU_COMMANDS, !alternate),
+      launch[mode](),
+    ]);
   }
 
   private async runFromCommand(uri?: vscode.Uri, options?: RunOptions): Promise<void> {
@@ -508,16 +566,19 @@ export class RunService {
     this.startPreview(chartKey, workdir, pythonBin, data);
   }
 
-  /**
-   * Called when the chart's Data button is clicked (webview -> host): re-pick
-   * and reload the preview for the script bound to `chartKey`.
-   */
-  async reselectChartData(chartKey: string): Promise<void> {
-    const doc = await vscode.workspace.openTextDocument(chartKey).then(
+  /** Re-pick the chart's source in the mode it was opened in. */
+  async reselectChartData(chartKey: string, live: boolean): Promise<void> {
+    const uri = vscode.Uri.file(chartKey);
+    const doc = await vscode.workspace.openTextDocument(uri).then(
       (d) => d,
       () => undefined
     );
-    await this.changeRunData(doc?.uri);
+    if (!doc) return;
+    if (live) {
+      await this.runLive(doc.uri, true);
+    } else {
+      await this.changeRunData(doc.uri);
+    }
   }
 
   /** Spawn (or replace) a data-only preview streaming raw candles to a chart. */
@@ -622,21 +683,18 @@ export class RunService {
    * Browser.
    */
   async runLive(uri?: vscode.Uri, reselect = false): Promise<void> {
+    if (this.startPending) return;
     const ctx = await this.resolveChartContext(uri);
     if (!ctx) return;
     const chartKey = canonicalChartKey(ctx.doc.uri.fsPath);
-    let target = reselect ? undefined : getLiveTarget(this.context, chartKey);
-    if (!target) {
-      target = await this.pickLive(ctx.doc, ctx.workdir, ctx.pythonBin);
-      if (!target) return;
-      await setLiveTarget(this.context, chartKey, target);
-    }
-    // Same guard as runDocument: a second click while this one prepares
-    if (this.startPending) return;
+    const remembered = reselect ? undefined : getLiveTarget(this.context, chartKey);
+    const target = remembered ?? (await this.pickLive(ctx.doc, ctx.workdir, ctx.pythonBin));
+    if (!target || this.startPending) return;
     this.startPending = true;
     let script: PreparedScript | undefined;
     try {
-      script = await this.prepareScript(ctx.doc);
+      script = await this.prepareScript(ctx.doc, { clearOutput: true });
+      if (!remembered) await setLiveTarget(this.context, chartKey, target);
     } finally {
       this.startPending = false;
     }
@@ -672,10 +730,11 @@ export class RunService {
       {
         scriptName: path.basename(doc.uri.fsPath),
         strategy: STRATEGY_DECLARATION_RE.test(doc.getText().slice(0, STRATEGY_HEAD_CHARS)),
+        timeframe: previous && providerTimeframe(previous.provider),
         from: previous?.from ?? DEFAULT_LIVE_FROM,
         historyTrades: previous?.historyTrades ?? true,
       },
-      { workdir, pythonBin }
+      { workdir, pythonBin, resource: doc.uri }
     );
   }
 
@@ -925,7 +984,10 @@ export class RunService {
    * The run pipeline up to the data: stop the run in flight, save, check the
    * library calls, compile (Pine), and resolve the environment and the workdir.
    */
-  private async prepareScript(doc: vscode.TextDocument): Promise<PreparedScript | undefined> {
+  private async prepareScript(
+    doc: vscode.TextDocument,
+    { clearOutput = false }: { clearOutput?: boolean } = {}
+  ): Promise<PreparedScript | undefined> {
     // There is exactly one run slot, so starting a run means the one in flight
     // has to go. Asking to run is unambiguous — restart instead of refusing.
     if (this.activeRun) {
@@ -951,6 +1013,7 @@ export class RunService {
         vscode.window.setStatusBarMessage(`$(debug-stop) PyneIDE: stopped ${previous}`, 4000);
       }
     }
+    if (clearOutput) this.output.clear();
     if (doc.isDirty) await doc.save();
     const libraryErrors = this.libraryDiagnostics?.checkNow(doc) ?? [];
     if (libraryErrors.length > 0) {
@@ -1734,6 +1797,11 @@ export class RunService {
 
     if (errorMessage) {
       this.chartManager?.closeChart(chartKey);
+      if (opts.live && errorKind === LIVE_UNSUPPORTED) {
+        this.output.appendLine(errorMessage);
+        await offerLiveCoreUpdate(vscode.Uri.file(chartKey));
+        return;
+      }
       if (!opts.live) {
         await forgetRememberedData(this.context, chartKey);
       } else if (!started) {

@@ -67,6 +67,7 @@ export class ProviderService {
   private readonly pending = new Map<number, Pending>();
   private stdoutBuf = '';
   private disposed = false;
+  private paused = false;
 
   constructor(private readonly opts: ProviderServiceOptions) {}
 
@@ -94,6 +95,9 @@ export class ProviderService {
   ): { id: number; result: Promise<T> } {
     if (this.disposed) {
       return { id: -1, result: Promise.reject(new Error('Provider service disposed')) };
+    }
+    if (this.paused) {
+      return { id: -1, result: Promise.reject(new Error('PyneCore is being updated')) };
     }
     const child = this.ensureChild();
     const id = this.nextId++;
@@ -147,6 +151,19 @@ export class ProviderService {
   restart(): void {
     this.rejectAll(new Error('Provider service restarted'));
     this.killChild();
+  }
+
+  async pauseForCoreUpdate(): Promise<void> {
+    this.paused = true;
+    const child = this.child;
+    if (!child) return;
+    const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    this.restart();
+    await exited;
+  }
+
+  resumeAfterCoreUpdate(): void {
+    this.paused = false;
   }
 
   private killChild(): void {

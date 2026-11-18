@@ -61,6 +61,8 @@ export interface BootstrapOptions {
   cancel?: CancelToken;
   /** Overall progress for the UI; the log stream is not a progress source. */
   progress?: ProgressReporter;
+  /** Update packages in an existing environment without rebuilding it. */
+  updateOnly?: boolean;
 }
 
 const VERIFY_SCRIPT = [
@@ -278,6 +280,13 @@ async function runBootstrap(
   const { storageDir, log, proxyUrl, recreate, cancel } = options;
   const environmentDir = options.environmentDir ?? storageDir;
   const selection = validateCoreVersion(options.pynecoreVersion ?? PYNECORE_VERSION);
+  const venvDir = managedVenvDir(environmentDir);
+  const pythonBin = venvPythonPath(venvDir);
+  const marker = readMarker(environmentDir);
+  const staleLayout = marker !== undefined && marker.schema !== ENV_SCHEMA_VERSION;
+  if (options.updateOnly && (marker?.python !== PYTHON_VERSION || staleLayout || !fs.existsSync(pythonBin))) {
+    throw new Error('Set up the project environment before updating PyneCore.');
+  }
   fs.mkdirSync(storageDir, { recursive: true });
   fs.mkdirSync(environmentDir, { recursive: true });
   const env = uvEnv(storageDir, proxyUrl);
@@ -288,14 +297,9 @@ async function runBootstrap(
   });
   throwIfCancelled(cancel);
 
-  const venvDir = managedVenvDir(environmentDir);
-  const pythonBin = venvPythonPath(venvDir);
-
   // A schema bump means the env layout changed (not just package pins), so the
   // venv itself must be rebuilt, not merely reinstalled into.
-  const marker = readMarker(environmentDir);
-  const staleLayout = marker !== undefined && marker.schema !== ENV_SCHEMA_VERSION;
-  if (recreate || staleLayout) {
+  if (!options.updateOnly && (recreate || staleLayout)) {
     log(
       recreate
         ? `Removing existing venv at ${venvDir}`
@@ -305,7 +309,7 @@ async function runBootstrap(
     fs.rmSync(markerPath(environmentDir), { force: true });
   }
 
-  if (!fs.existsSync(pythonBin)) {
+  if (!options.updateOnly && !fs.existsSync(pythonBin)) {
     log(`Creating venv with Python ${PYTHON_VERSION}`);
     tracker.begin('python', `Creating the Python ${PYTHON_VERSION} environment…`);
     const venvProgress = new UvVenvProgress();
@@ -349,7 +353,7 @@ async function runBootstrap(
   // A cancel surfaces here as a failed verification (verifyPython never
   // throws), and must not be mistaken for a broken install worth rebuilding.
   throwIfCancelled(cancel);
-  if (!verify.ok && !recreate && verify.failure !== 'pynecore-too-old') {
+  if (!verify.ok && !options.updateOnly && !recreate && verify.failure !== 'pynecore-too-old') {
     log(`Verification failed (${verify.error}); recreating the environment once`);
     tracker.note('Verification failed — rebuilding the environment…');
     return runBootstrap({ ...options, recreate: true }, tracker);

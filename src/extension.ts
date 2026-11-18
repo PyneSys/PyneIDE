@@ -107,6 +107,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('pyneide.setupEnvironment', () => manager.forResource().setup()),
+    vscode.commands.registerCommand('pyneide.updatePyneCore', async (resource?: vscode.Uri) => {
+      const project = manager.forResource(resource);
+      const state = project.state;
+      const update = () => project.setup({ updateCore: true });
+      if (state.kind === 'ready' && state.source === 'managed') {
+        await SymbolBrowserPanel.withProvidersPaused(state.pythonBin, update);
+      } else {
+        await update();
+      }
+    }),
     vscode.commands.registerCommand('pyneide.showEnvironmentLog', () => output.show()),
     vscode.commands.registerCommand('pyneide.openSettings', () =>
       vscode.commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
@@ -174,9 +184,8 @@ export function activate(context: vscode.ExtensionContext): void {
     SymbolBrowserPanel.pickLive(
       context,
       {
-        pythonBin: env.pythonBin,
+        ...env,
         bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
-        workdir: env.workdir,
         output,
       },
       request
@@ -191,10 +200,10 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   liveCharts.register();
   SymbolBrowserPanel.setLiveChartOpener((provider, env) => void liveCharts.openProvider(provider, env));
-  chartManager.onSelectData = (chartKey) =>
+  chartManager.onSelectData = (chartKey, live) =>
     void (isLiveChartKey(chartKey)
       ? liveCharts.reselect(chartKey)
-      : runService.reselectChartData(chartKey));
+      : runService.reselectChartData(chartKey, live));
   chartManager.onSelectTimeframe = (chartKey, timeframe) =>
     void (isLiveChartKey(chartKey)
       ? liveCharts.setTimeframe(chartKey, timeframe)
@@ -336,7 +345,7 @@ async function resolveLiveChartEnv(manager: EnvManager): Promise<LiveChartEnv | 
   manager = manager.forResource(undefined);
   const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
   const workdir = resolveWorkspaceWorkdir(folder);
-  if (!workdir?.exists) {
+  if (!folder || !workdir?.exists) {
     void vscode.window.showWarningMessage(
       'PyneIDE: no Pyne workspace found — initialize one first.'
     );
@@ -345,7 +354,7 @@ async function resolveLiveChartEnv(manager: EnvManager): Promise<LiveChartEnv | 
   const pythonBin = await manager.ensureReady(
     'A live chart uses the pyne provider service, so the Python environment must be set up first.'
   );
-  return pythonBin ? { workdir: workdir.path, pythonBin } : undefined;
+  return pythonBin ? { workdir: workdir.path, pythonBin, resource: folder.uri } : undefined;
 }
 
 /**
@@ -362,7 +371,7 @@ async function openSymbolBrowser(
   manager = manager.forResource(prefill ? vscode.Uri.file(prefill.chartKey ?? prefill.workdir) : undefined);
   const folder = manager.projectUri && vscode.workspace.getWorkspaceFolder(manager.projectUri);
   const workdir = prefill ? { path: prefill.workdir, exists: fs.existsSync(prefill.workdir) } : resolveWorkspaceWorkdir(folder);
-  if (!workdir?.exists) {
+  if (!manager.projectUri || !workdir?.exists) {
     void vscode.window.showWarningMessage(
       'PyneIDE: no Pyne workspace found — initialize one first.'
     );
@@ -376,6 +385,7 @@ async function openSymbolBrowser(
     context,
     {
       pythonBin,
+      resource: manager.projectUri,
       bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
       workdir: workdir.path,
       output,

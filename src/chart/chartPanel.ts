@@ -146,7 +146,7 @@ export class ChartPanel {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly chartKey: string,
-    private readonly onSelectData: () => void,
+    private readonly onSelectData: (live: boolean) => void,
     private readonly onWebviewClosed?: () => void,
     private readonly onViewStateChanged?: (active: boolean) => void,
     private readonly onSelectBreakpointBar?: (timestamp: number) => void,
@@ -384,7 +384,7 @@ export class ChartPanel {
         break;
       }
       case 'selectData':
-        this.onSelectData();
+        this.onSelectData(this.snap?.start.live !== undefined);
         break;
       case 'selectTimeframe':
         if (msg.timeframe === undefined || typeof msg.timeframe === 'string') {
@@ -1216,9 +1216,8 @@ export class ChartManager implements RunListener {
   /** Live charts without a script, keyed by their own id: like a data preview,
    * kept alive by their webview and retired when it closes. */
   private readonly liveCharts = new Set<string>();
-  /** Set by the host: invoked when a panel's Data button is clicked, with the
-   * script's chart key, to re-pick and reload that chart's data. */
-  onSelectData: ((chartKey: string) => void) | undefined;
+  /** Set by the host: re-pick the symbol or data for the chart on screen. */
+  onSelectData: ((chartKey: string, live: boolean) => void) | undefined;
   /** Set by the host: a live chart's toolbar timeframe pick (undefined: ask
    * for a custom one). */
   onSelectTimeframe: ((chartKey: string, timeframe: string | undefined) => void) | undefined;
@@ -1459,7 +1458,7 @@ export class ChartManager implements RunListener {
     return new ChartPanel(
       this.context,
       chartKey,
-      () => this.onSelectData?.(chartKey),
+      (live) => this.onSelectData?.(chartKey, live),
       onWebviewClosed,
       (active) => this.updateActiveChart(chartKey, active),
       (timestamp) => this.onSelectBreakpointBar?.(chartKey, timestamp),

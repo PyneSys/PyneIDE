@@ -181,6 +181,7 @@ async function showRunDataPicker(
 
   SymbolBrowserPanel.show(context, {
     pythonBin,
+    resource: vscode.Uri.file(scriptKey),
     bridgeRoot: vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
     workdir,
     output,

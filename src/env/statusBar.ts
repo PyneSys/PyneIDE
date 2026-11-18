@@ -217,7 +217,8 @@ export class EnvStatusBar {
 
     const render = (): void => {
       if (closed) return;
-      const state = this.manager.state;
+      const project = this.manager.forResource();
+      const state = project.state;
       picker.title = `PyneIDE — ${this.summary.state}`;
       const items: MenuItem[] = [];
       // Inert row: the versions and the failure reason are the only place in the
@@ -235,6 +236,13 @@ export class EnvStatusBar {
           label: '$(cloud-download) Setup Environment',
           description: 'Download uv + Python and install PyneCore',
           action: () => void vscode.commands.executeCommand('pyneide.setupEnvironment'),
+        });
+      }
+      if (state.kind === 'ready') {
+        environmentItems.push({
+          label: '$(cloud-download) Update PyneCore',
+          description: 'Update PyneCore in this project’s environment',
+          action: () => void vscode.commands.executeCommand('pyneide.updatePyneCore', project.projectUri),
         });
       }
       environmentItems.push(

@@ -89,6 +89,11 @@
         "category": "PyneIDE"
       },
       {
+        "command": "pyneide.updatePyneCore",
+        "title": "Update PyneCore",
+        "category": "PyneIDE"
+      },
+      {
         "command": "pyneide.createWorkspace",
         "title": "Initialize Pyne Project",
         "category": "PyneIDE"
@@ -255,6 +260,46 @@
         "category": "PyneIDE",
         "icon": "$(flame)",
         "enablement": "resourceLangId == pine"
+      },
+      {
+        "command": "pyneide.toolbarRun",
+        "title": "Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "pyneide.toolbarRunAlternate",
+        "title": "Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "pyneide.toolbarDebug",
+        "title": "Debug",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "pyneide.toolbarDebugAlternate",
+        "title": "Debug",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "pyneide.toolbarLive",
+        "title": "Run Live",
+        "icon": "$(broadcast)"
+      },
+      {
+        "command": "pyneide.toolbarLiveAlternate",
+        "title": "Run Live",
+        "icon": "$(broadcast)"
+      },
+      {
+        "command": "pyneide.toolbarProfile",
+        "title": "Profiler",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "pyneide.toolbarProfileAlternate",
+        "title": "Profiler",
+        "icon": "$(flame)"
       },
       {
         "command": "pyneide.robustnessScript",
@@ -533,6 +578,38 @@
     "menus": {
       "commandPalette": [
         {
+          "command": "pyneide.toolbarRun",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarRunAlternate",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarDebug",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarDebugAlternate",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarLive",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarLiveAlternate",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarProfile",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.toolbarProfileAlternate",
+          "when": "false"
+        },
+        {
           "command": "pyneide.convertToV6",
           "when": "resourceLangId == pine && pyneide.canConvertToV6"
         },
@@ -688,36 +765,6 @@
           "group": "navigation@-2"
         },
         {
-          "command": "pyneide.runPineScript",
-          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@-2"
-        },
-        {
-          "command": "pyneide.runScript",
-          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@-2"
-        },
-        {
-          "command": "pyneide.debugPineScript",
-          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@-1"
-        },
-        {
-          "command": "pyneide.debugScript",
-          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@-1"
-        },
-        {
-          "command": "pyneide.profilePineScript",
-          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@0"
-        },
-        {
-          "command": "pyneide.profileScript",
-          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor",
-          "group": "navigation@0"
-        },
-        {
           "command": "pyneide.openChart",
           "when": "resourceLangId == pine || pyneide.isPyneScript",
           "group": "navigation@1"
@@ -746,6 +793,83 @@
           "command": "pyneide.dataPreviewChart",
           "when": "activeCustomEditorId == pyneide.ohlcvTable",
           "group": "navigation@1"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "pyneide.runPineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == run",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.runScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == run",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.debugPineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == debug",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.debugScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == debug",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.runLive",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == live",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.profilePineScript",
+          "when": "resourceLangId == pine && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == profile",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.profileScript",
+          "when": "resourceLangId != pine && pyneide.isPyneScript && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode == profile",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "pyneide.toolbarRun",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != run && !pyneide.alternateRunMenuCommands",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.toolbarRunAlternate",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != run && pyneide.alternateRunMenuCommands",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.toolbarDebug",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != debug && !pyneide.alternateRunMenuCommands",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pyneide.toolbarDebugAlternate",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != debug && pyneide.alternateRunMenuCommands",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pyneide.toolbarLive",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != live && !pyneide.alternateRunMenuCommands",
+          "group": "navigation@3"
+        },
+        {
+          "command": "pyneide.toolbarLiveAlternate",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != live && pyneide.alternateRunMenuCommands",
+          "group": "navigation@3"
+        },
+        {
+          "command": "pyneide.toolbarProfile",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != profile && !pyneide.alternateRunMenuCommands",
+          "group": "navigation@4"
+        },
+        {
+          "command": "pyneide.toolbarProfileAlternate",
+          "when": "(resourceLangId == pine || pyneide.isPyneScript) && !pyneide.runActiveHere && !isInDiffEditor && pyneide.runMode != profile && pyneide.alternateRunMenuCommands",
+          "group": "navigation@4"
         }
       ],
       "debug/toolBar": [

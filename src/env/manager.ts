@@ -305,18 +305,14 @@ export class EnvManager {
   }
 
   /**
-   * Set up (or repair) the managed environment with progress UI.
+   * Set up, repair, or update the managed environment with progress UI.
    * With venvPath/pythonPath overrides this only re-runs the check.
    */
-  async setup(options: { recreate?: boolean; silent?: boolean } = {}): Promise<void> {
+  async setup(options: { recreate?: boolean; silent?: boolean; updateCore?: boolean } = {}): Promise<void> {
     const project = this.forResource();
     if (project !== this) return project.setup(options);
     if (!this.projectUri) {
-      if (!options.silent) void vscode.window.showInformationMessage('PyneIDE: open a project folder before setting up its environment.');
-      return;
-    }
-    if (interpreterInUse(this.resolveTarget().pythonBin)) {
-      if (!options.silent) void vscode.window.showInformationMessage('PyneIDE: this project environment is in use. Stop its running tasks before changing it.');
+      if (!options.silent) void vscode.window.showInformationMessage('PyneIDE: open a project folder to manage its Python environment.');
       return;
     }
     let selection: string;
@@ -325,11 +321,30 @@ export class EnvManager {
       if (!options.silent) void vscode.window.showErrorMessage(String(err));
       return;
     }
-    if (this.setupRunning) {
-      void vscode.window.showInformationMessage('PyneIDE: environment setup is already running.');
+    const target = this.resolveTarget();
+    if (options.updateCore && target.source !== 'managed') {
+      await this.check();
+      void vscode.window.showInformationMessage(
+        `PyneIDE: update pynesys-pynecore in the configured Python environment (${target.pythonBin}).`
+      );
       return;
     }
-    const target = this.resolveTarget();
+    if (options.updateCore && selection) {
+      const choice = await vscode.window.showInformationMessage(
+        `PyneIDE: this project pins PyneCore to ${selection}. Choose a newer version or clear the pin in the project settings.`,
+        'Open Settings'
+      );
+      if (choice === 'Open Settings') {
+        await vscode.commands.executeCommand('workbench.action.openSettings', '@id:pyneide.pynecore.version');
+      }
+      return;
+    }
+    if (this.busy) {
+      if (!options.silent) void vscode.window.showInformationMessage(
+        'PyneIDE: this project environment is in use. Stop its running tasks or close its Symbol Browser before changing it.'
+      );
+      return;
+    }
     if (target.source !== 'managed') {
       const setting = target.source === 'venvPath' ? 'pyneide.venvPath' : 'pyneide.pythonPath';
       this.log(`${setting} is set — PyneIDE does not install into user-provided environments.`);
@@ -343,74 +358,78 @@ export class EnvManager {
     this.setupRunning = true;
     this.checkRevision++;
     this.setState({ kind: 'working', step: 'Preparing project environment' });
-    let offerRepair = true;
-    // Chosen in the catch, run after the finally: `setupRunning` is only
-    // cleared there, so a retry started from inside the catch would hit the
-    // "already running" guard and silently do nothing.
+    let offerRepair = !options.updateCore;
     let followUp: 'retry' | 'repair' | undefined;
+    const operation = options.updateCore ? 'PyneCore update' : 'environment setup';
     try {
-      fs.mkdirSync(this.environmentDir!, { recursive: true });
-      const ignore = path.join(this.environmentDir!, '.gitignore');
-      if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n');
-      await vscode.window.withProgress(
-        {
-          location: options.silent ? vscode.ProgressLocation.Window : vscode.ProgressLocation.Notification,
-          title: 'PyneIDE: setting up project Python environment',
-          cancellable: true,
-        },
-        async (progress, token) => {
-          // withProgress takes increments, the bootstrap reports an absolute
-          // position: keep the running total to convert, and never emit a
-          // negative step (the recreate pass may report from further back).
-          let reported = 0;
-          const { verify } = await bootstrapManagedEnv({
-            storageDir: this.storageDir,
-            environmentDir: this.environmentDir,
-            pynecoreVersion: selection,
-            log: this.log,
-            proxyUrl: this.proxyUrl(),
-            recreate: options.recreate,
-            cancel: token,
-            progress: ({ message, percent }) => {
-              const increment = Math.max(0, percent * 100 - reported);
-              reported += increment;
-              progress.report({ message, increment });
-              this.setState({ kind: 'working', step: message });
-            },
-          });
-          if (!verify.ok) {
-            if (verify.failure === 'pynecore-too-old') offerRepair = false;
-            throw new Error(verify.error ?? 'unknown verification error');
-          }
+      try {
+        if (!options.updateCore) {
+          fs.mkdirSync(this.environmentDir!, { recursive: true });
+          const ignore = path.join(this.environmentDir!, '.gitignore');
+          if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n');
         }
-      );
-      this.setupRunning = false;
+        await vscode.window.withProgress(
+          {
+            location: options.silent ? vscode.ProgressLocation.Window : vscode.ProgressLocation.Notification,
+            title: options.updateCore ? 'PyneIDE: updating PyneCore' : 'PyneIDE: setting up project Python environment',
+            cancellable: true,
+          },
+          async (progress, token) => {
+            // withProgress takes increments, the bootstrap reports an absolute
+            // position: keep the running total to convert, and never emit a
+            // negative step (the recreate pass may report from further back).
+            let reported = 0;
+            const { verify } = await bootstrapManagedEnv({
+              storageDir: this.storageDir,
+              environmentDir: this.environmentDir,
+              pynecoreVersion: selection,
+              log: this.log,
+              proxyUrl: this.proxyUrl(),
+              recreate: options.recreate,
+              updateOnly: options.updateCore,
+              cancel: token,
+              progress: ({ message, percent }) => {
+                const increment = Math.max(0, percent * 100 - reported);
+                reported += increment;
+                progress.report({ message, increment });
+                this.setState({ kind: 'working', step: message });
+              },
+            });
+            if (!verify.ok) {
+              if (verify.failure === 'pynecore-too-old') offerRepair = false;
+              throw new Error(verify.error ?? 'unknown verification error');
+            }
+          }
+        );
+      } finally {
+        this.setupRunning = false;
+      }
       await this.check();
       const state = this.stateValue;
       if (state.kind === 'ready' && !options.silent) {
         void vscode.window.showInformationMessage(
-          `PyneIDE: environment ready (Python ${state.verify.pythonVersion}, ` +
-            `pynecore ${state.verify.pynecoreVersion}).`
+          options.updateCore
+            ? `PyneIDE: PyneCore ${state.verify.pynecoreVersion} is ready in this project.`
+            : `PyneIDE: environment ready (Python ${state.verify.pythonVersion}, pynecore ${state.verify.pynecoreVersion}).`
         );
       }
     } catch (err) {
       if (options.silent) throw err;
-      this.setupRunning = false;
       if (isCancelledError(err)) {
-        this.log('Setup cancelled.');
+        this.log(`${operation} cancelled.`);
         await this.check();
         void vscode.window.showInformationMessage(
-          'PyneIDE: environment setup cancelled. What was downloaded is kept, ' +
-            'so running setup again continues from there.'
+          `PyneIDE: ${operation} cancelled. Downloads are kept for the next attempt.`
         );
         return;
       }
       const message = flattenErrorMessage(err);
-      this.log(`Setup failed: ${message}`);
+      this.log(`${operation} failed: ${message}`);
       const friendly = describeNetworkError(err, SETUP_TARGET);
-      this.setState({ kind: 'error', message: friendly?.summary ?? message });
+      if (options.updateCore) await this.check();
+      else this.setState({ kind: 'error', message: friendly?.summary ?? message });
       await showNetworkError({
-        headline: 'environment setup failed',
+        headline: `${operation} failed`,
         error: err,
         target: SETUP_TARGET,
         retry: () => {
@@ -428,10 +447,8 @@ export class EnvManager {
           : [],
         showLog: () => this.output.show(),
       });
-    } finally {
-      this.setupRunning = false;
     }
-    if (followUp) await this.setup({ recreate: followUp === 'repair' });
+    if (followUp) await this.setup({ ...options, recreate: followUp === 'repair' });
   }
 
   /** True when PyneIDE owns the environment, i.e. may install into it. */

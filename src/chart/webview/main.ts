@@ -3488,8 +3488,9 @@ function syncToolbar(): void {
   if (timeframe === undefined) closeTimeframePopup();
   if (tbDataEl) {
     const detail = data.period ? `${data.symbol} · ${data.period}` : data.symbol;
-    tbDataEl.title = `Select OHLCV data\n${detail}`;
-    tbDataEl.setAttribute('aria-label', `Select OHLCV data. Current: ${detail}`);
+    const action = st?.start.live ? 'Change live symbol' : 'Select OHLCV data';
+    tbDataEl.title = `${action}\n${detail}`;
+    tbDataEl.setAttribute('aria-label', `${action}. Current: ${detail}`);
   }
   if (tbMeasureEl) tbMeasureEl.disabled = !st;
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);

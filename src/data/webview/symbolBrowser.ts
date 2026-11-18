@@ -188,7 +188,7 @@ function onInit(list: ProviderInfo[], defaults: BrowserDefaults): void {
   fillProviders();
 
   fillOptions(timeframeSel, [...TIMEFRAMES.map((tf): [string, string] => [tf, tf]), [CUSTOM, 'Custom…']]);
-  setTimeframe(defaults.timeframe || '1D');
+  setTimeframe(liveMode?.timeframe || defaults.timeframe || '1D');
   fillRangeOptions();
 
   const shown = shownProviders();
@@ -245,6 +245,11 @@ function setLiveMode(live: LiveModeInfo | null): void {
   historyTradesWrap.hidden = !live?.strategy;
   historyTradesChk.checked = Boolean(live?.historyTrades);
   downloadBtn.textContent = live ? 'Start Live' : 'Download';
+  if (live) {
+    if (live.timeframe) setTimeframe(live.timeframe);
+    filterInput.focus();
+    filterInput.select();
+  }
   if (providers.length > 0) {
     const current = providerSel.value;
     fillProviders();

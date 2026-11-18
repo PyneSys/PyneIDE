@@ -22,6 +22,7 @@ function deferred() {
 
 function fixture({ open = true } = {}) {
   const requests = [], messages = [], notifications = [], cancellations = [];
+  const providerPauses = [];
   const state = new Map();
   let receive;
   let disposed = 0;
@@ -35,6 +36,8 @@ function fixture({ open = true } = {}) {
       return { id, result: pending.promise };
     }
     cancel(id) { cancellations.push(id); }
+    async pauseForCoreUpdate() { providerPauses.push('pause'); }
+    resumeAfterCoreUpdate() { providerPauses.push('resume'); }
     dispose() {}
   }
   const vscode = {
@@ -73,14 +76,16 @@ function fixture({ open = true } = {}) {
     globalState: { get: (key) => state.get(key), update: async (key, value) => { state.set(key, value); } },
   };
   const deps = {
-    pythonBin: 'python', bridgeRoot: '/bridge', workdir: '/work', output: { appendLine() {} },
+    pythonBin: 'python', bridgeRoot: '/bridge', workdir: '/work', resource: '/project',
+    output: { appendLine() {} },
   };
   const panel = module.exports.SymbolBrowserPanel;
   if (open) panel.show(context, deps);
   return {
-    requests, messages, notifications, cancellations, state, send: (msg) => receive(msg),
+    requests, messages, notifications, cancellations, providerPauses, state, send: (msg) => receive(msg),
     show: () => panel.show(context, deps),
     pickLive: (request) => panel.pickLive(context, deps, request),
+    updateCore: (update) => panel.withProvidersPaused(deps.pythonBin, update),
     disposed: () => disposed,
   };
 }
@@ -97,6 +102,22 @@ const download = {
 };
 const completed = { ohlcv_path: '/data/eurusd.ohlcv', bars_written: 42 };
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('updating PyneCore waits for downloads and resumes the idle provider afterward', async () => {
+  const f = fixture();
+  f.send(download);
+  await f.updateCore(() => assert.fail('must not update during a download'));
+  assert.deepEqual(f.providerPauses, []);
+  f.notifications[0].resolve(undefined);
+  f.requests[0].resolve(completed);
+  await flush();
+  await assert.rejects(f.updateCore(async () => {
+    assert.deepEqual(f.providerPauses, ['pause']);
+    throw new Error('update failed');
+  }), /update failed/);
+  assert.deepEqual(f.providerPauses, ['pause', 'resume']);
+  f.notifications[1].resolve(undefined);
+});
 
 test('repeat download accepts changed dates and truncate while success notification is open', async () => {
   const f = fixture();
@@ -169,9 +190,9 @@ test('Start Live resolves the pick with the provider string and closes a panel o
 
 test('an open panel enters the live pick, and opening it for a download gives the pick up', async () => {
   const f = fixture();
-  const pick = f.pickLive({ ...liveRequest, strategy: false });
+  const pick = f.pickLive({ ...liveRequest, strategy: false, timeframe: '15' });
   assert.deepEqual({ ...f.messages.at(-1).live }, {
-    script: 'trend.py', strategy: false, from: '-500', historyTrades: true,
+    script: 'trend.py', strategy: false, timeframe: '15', from: '-500', historyTrades: true,
   });
   f.show();
   assert.equal(await pick, undefined);

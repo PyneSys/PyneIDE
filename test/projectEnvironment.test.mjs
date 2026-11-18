@@ -204,6 +204,33 @@ test('an offline update keeps the existing working environment and stays quiet',
   assert.equal(f.installs.length, 2);
 });
 
+test('a manual Core update acts immediately in the selected project and preserves the venv', async (t) => {
+  const f = fixture(t);
+  await f.production.setup();
+  await f.development.setup();
+  const venv = actual.managedVenvDir(f.production.environmentDir);
+  const sentinel = path.join(venv, 'installed-plugin');
+  fs.writeFileSync(sentinel, 'keep');
+  const pythonBin = f.production.state.pythonBin;
+  f.runtime.latest = '6.14.0';
+  f.select(1);
+
+  await f.production.setup({ updateCore: true });
+
+  assert.equal(f.installs.length, 3);
+  assert.equal(f.installs.at(-1).updateOnly, true);
+  assert.equal(f.production.state.pythonBin, pythonBin);
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.14.0');
+  assert.equal(f.development.state.verify.pynecoreVersion, '6.13.3');
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'keep');
+
+  f.runtime.fail = true;
+  await f.production.setup({ updateCore: true });
+  assert.equal(f.production.state.kind, 'ready');
+  assert.equal(f.production.state.verify.pynecoreVersion, '6.14.0');
+  assert.match(f.notices.at(-1), /PyneCore update failed/);
+});
+
 test('a running interpreter defers automatic and manual package changes', async (t) => {
   const f = fixture(t);
   await f.development.setup();
@@ -212,6 +239,7 @@ test('a running interpreter defers automatic and manual package changes', async 
   f.trackInterpreter(child, f.development.state.pythonBin);
   await f.development.autoUpdateCheck();
   await f.development.setup({ recreate: true });
+  await f.development.setup({ updateCore: true });
   await assert.rejects(f.development.installPackages(['a-plugin'], 'Install'), /in use/);
   assert.equal(f.installs.length, 1);
   child.emit('close', 0);
@@ -265,12 +293,18 @@ test('external interpreters are checked against the project selection without in
   assert.equal(f.installs.length, 0);
   config['pynecore.version'] = '';
   assert.equal((await f.production.check()).kind, 'ready');
+  await f.production.setup({ updateCore: true });
+  assert.equal(f.installs.length, 0);
+  assert.match(f.notices.at(-1), /configured Python environment/);
 });
 
 test('manual changes cannot silently violate a fixed selection', async (t) => {
   const f = fixture(t);
   f.configs.get(f.folders[0].uri.toString())['pynecore.version'] = '6.12.1';
   await f.production.setup();
+  await f.production.setup({ updateCore: true });
+  assert.equal(f.installs.length, 1);
+  assert.match(f.notices.at(-1), /pins PyneCore to 6\.12\.1/);
   f.versions.set(f.production.state.pythonBin, '6.13.0');
   const state = await f.production.check();
   assert.equal(state.kind, 'needs-setup');

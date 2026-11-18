@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 
 const require = createRequire(import.meta.url);
 const bundled = await build({
-  stdin: { contents: "export * from './src/run/runService'; export * from './src/run/dataSelect';", resolveDir: process.cwd() },
+  stdin: { contents: "export * from './src/run/runService'; export * from './src/run/dataSelect'; export * from './src/run/liveChartService'; export { ChartManager } from './src/chart/chartPanel';", resolveDir: process.cwd() },
   bundle: true, platform: 'node', format: 'cjs', external: ['vscode'], write: false,
   plugins: [{ name: 'bridge-fixture', setup(build) {
     build.onLoad({ filter: /\/run\/bridgeClient\.ts$/ }, () => ({ contents:
@@ -34,20 +34,30 @@ function fixture(t) {
   const state = new Map();
   const picks = [];
   const browsers = [];
+  let receiveChartMessage;
+  let bridgeStart;
   let pickDownload = false;
   const context = {
     extensionUri: { fsPath: process.cwd() },
+    subscriptions: [],
     workspaceState: {
       get: (key, fallback) => state.get(key) ?? fallback,
       async update(key, value) { state.set(key, value); },
     },
+    globalState: { async update() {} },
   };
   let event;
   let choice;
   let exitCode = 1;
   let missingSource = false;
   let logShows = 0;
-  const channel = { name: 'PyneIDE Run', appendLine: (line) => logs.push(line), show: () => logShows++, dispose() {} };
+  const channel = {
+    name: 'PyneIDE Run',
+    appendLine: (line) => logs.push(line),
+    clear: () => { logs.length = 0; },
+    show: () => logShows++,
+    dispose() {},
+  };
   class Range {
     constructor(startLine, startCharacter, endLine, endCharacter) {
       this.start = { line: startLine, character: startCharacter };
@@ -62,19 +72,35 @@ function fixture(t) {
     },
     DiagnosticSeverity: { Error: 0 }, StatusBarAlignment: { Left: 1 },
     TextEditorRevealType: { InCenterIfOutsideViewport: 2 },
+    ViewColumn: { Beside: 2 },
     languages: { createDiagnosticCollection: () => ({ clear: () => markers.clear(), set: (uri, values) => markers.set(uri.fsPath, values) }) },
     workspace: {
       getConfiguration: () => ({ get: (_key, fallback) => fallback }),
+      onDidChangeConfiguration() {},
       async openTextDocument(uri) {
         if (missingSource) throw new Error('source deleted');
-        const lines = fs.readFileSync(uri.fsPath, 'utf8').split('\n');
-        return { uri, lineCount: lines.length, lineAt: (line) => ({ range: new Range(line, 0, line, lines[line].length) }) };
+        const source = fs.readFileSync(uri.fsPath, 'utf8');
+        const lines = source.split('\n');
+        return {
+          uri, languageId: 'python', getText: () => source, lineCount: lines.length,
+          lineAt: (line) => ({ range: new Range(line, 0, line, lines[line].length) }),
+        };
       },
     },
     commands: { executeCommand: async (...args) => commands.push(args) },
     window: {
       createOutputChannel: () => channel,
       createStatusBarItem: () => ({ show() {}, hide() {} }),
+      tabGroups: { all: [] },
+      createWebviewPanel: () => ({
+        webview: {
+          asWebviewUri: (uri) => uri.fsPath,
+          onDidReceiveMessage: (callback) => { receiveChartMessage = callback; },
+        },
+        reveal() {},
+        onDidChangeViewState() {},
+        onDidDispose() {},
+      }),
       async showTextDocument(doc, options) {
         assert.ok(closedCharts.length > 0, 'close the failed chart before focusing the source');
         const entry = { file: doc.uri.fsPath, options };
@@ -97,6 +123,7 @@ function fixture(t) {
     fixture: {
       showSymbolBrowser(context, deps) { browsers.push({ context, deps }); },
       start(options) {
+        if (bridgeStart) return bridgeStart(options);
         return { exited: Promise.resolve().then(() => {
           if (event) options.onEvent(event);
           return exitCode;
@@ -105,13 +132,33 @@ function fixture(t) {
     },
     process, Buffer, console, setTimeout, clearTimeout,
   });
-  const service = new module.exports.RunService(context, {}, {});
+  const service = new module.exports.RunService(context, { ensureReady: async () => 'python' }, {});
   service.attachChart({
     onEvent() {}, onFinished() {}, setDebugPosition() {}, reconcile() {},
     closeChart: (key) => closedCharts.push(key),
   });
+  const liveCharts = new module.exports.LiveChartService(context, {
+    openLiveChart() {}, onEvent() {}, closeChart: (key) => closedCharts.push(key),
+  }, channel);
   return {
     root, script, markers, notices, opened, logs, commands, closedCharts, state, picks, browsers,
+    attachChartPicker(pickLiveTarget, start) {
+      const chart = new module.exports.ChartManager(context);
+      service.attachChart(chart);
+      service.resolveOrInitWorkdir = async () => root;
+      service.setPickLiveTarget(pickLiveTarget);
+      bridgeStart = start;
+      let selection;
+      chart.onSelectData = (chartKey, live) => { selection = service.reselectChartData(chartKey, live); };
+      return {
+        show: (event) => chart.onEvent(event, script),
+        run: () => service.runLive(vscode.Uri.file(script)),
+        selectSymbol: () => {
+          receiveChartMessage({ type: 'selectData' });
+          return selection;
+        },
+      };
+    },
     remembered: (key = script) => module.exports.getRememberedData(context, root, key),
     selectData: (key = script) => module.exports.pickRunData(context, root, key, 'python', channel),
     selectDownloadData: () => {
@@ -129,9 +176,23 @@ function fixture(t) {
       choice = options.choice;
       exitCode = options.exitCode ?? 1;
       missingSource = options.missingSource ?? false;
+      const live = { provider: 'test:SYMBOL@1', from: '-5', historyTrades: false };
+      if (options.standalone) {
+        await liveCharts.openTarget(live, { pythonBin: 'python', workdir: root, resource: vscode.Uri.file(root) });
+        return;
+      }
+      if (options.prepareLive) {
+        const doc = { uri: vscode.Uri.file(script), languageId: 'python', getText: () => fs.readFileSync(script, 'utf8') };
+        service.resolveDocument = async () => doc;
+        service.resolveOrInitWorkdir = async () => root;
+        service.setPickLiveTarget(async () => live);
+        await service.runLive(doc.uri);
+        return;
+      }
       await service.executeRun({
         pythonBin: 'python', scriptPath: script, chartKey: options.chartKey ?? script,
         workdir: root, data: 'demo', ...(options.profile ? { profile: true } : {}),
+        ...(options.live ? { live } : {}),
       });
     },
   };
@@ -345,4 +406,94 @@ test('unexpected process exits retain the internal failure report action', async
   await f.run(null, { exitCode: 2 });
   assert.match(f.notices[0].message, /runner exited with code 2/);
   assert.ok(f.notices[0].actions.includes('Report a Problem'));
+});
+
+test('both Live entry points offer a PyneCore update scoped to the failed chart', async (t) => {
+  for (const standalone of [false, true]) {
+    const f = fixture(t);
+    await f.run([], {
+      live: true, standalone, kind: 'LiveUnsupported', choice: 'Update PyneCore',
+      coded: { traceback: '' },
+    });
+    assert.equal(f.closedCharts.length, 1);
+    assert.deepEqual(f.notices[0].actions, ['Update PyneCore']);
+    assert.equal(f.opened.length, 0);
+    const update = f.commands.find(([command]) => command === 'pyneide.updatePyneCore');
+    assert.equal(update?.[1].fsPath, standalone ? f.root : f.script);
+  }
+});
+
+test('Run Live clears prior output before logging the new script preparation', async (t) => {
+  const f = fixture(t);
+  f.logs.push('log from a previous run');
+  await f.run([], {
+    prepareLive: true, kind: 'LiveUnsupported', message: 'PyneCore cannot run live charts',
+    coded: { traceback: '' },
+  });
+  assert.match(f.logs[0], /^Run requested:/);
+  assert.ok(f.logs.some((line) => line.startsWith('--- Live:')));
+  assert.ok(f.logs.includes('PyneCore cannot run live charts'));
+  assert.ok(!f.logs.includes('log from a previous run'));
+});
+
+test('the chart symbol button keeps a script live when changing symbols', async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.script, '"""@pyne"""\nscript.strategy("Demo")\n');
+  const previous = { provider: 'ccxt:BYBIT:BTC/USDT:USDT@15', from: '-1000', historyTrades: true };
+  const next = { ...previous, provider: 'ccxt:BYBIT:ETH/USDT:USDT@15' };
+  const savedData = { [f.script]: 'downloaded' };
+  f.state.set('pyneide.lastRunData', savedData);
+  f.state.set('pyneide.liveTarget', { [f.script]: previous });
+  const requests = [];
+  const launches = [];
+  let resolveFirstRun;
+  let stops = 0;
+  let target;
+  const chart = f.attachChartPicker(async (request) => {
+    requests.push(request);
+    return target;
+  }, (options) => {
+    launches.push(options);
+    if (launches.length > 1) return { exited: Promise.resolve(0) };
+    return {
+      exited: new Promise((resolve) => { resolveFirstRun = resolve; }),
+      cancel: () => { stops++; resolveFirstRun(0); },
+    };
+  });
+  const running = chart.run();
+  await new Promise(setImmediate);
+  assert.equal(launches[0].live.provider, previous.provider);
+  chart.show({ e: 'start', live: previous });
+
+  await chart.selectSymbol();
+  assert.equal(requests[0].strategy, true);
+  assert.equal(requests[0].timeframe, '15');
+  assert.equal(requests[0].from, '-1000');
+  assert.equal(requests[0].historyTrades, true);
+  assert.equal(stops, 0, 'cancelling the picker leaves the current feed running');
+  assert.equal(f.state.get('pyneide.liveTarget')[f.script], previous);
+
+  target = next;
+  await chart.selectSymbol();
+  await running;
+  assert.equal(stops, 1);
+  assert.equal(launches.length, 2);
+  assert.equal(launches[1].live.provider, next.provider);
+  assert.equal(launches[1].script, f.script);
+  assert.equal(launches[1].data, undefined);
+  assert.equal(f.state.get('pyneide.liveTarget')[f.script], next);
+  assert.equal(f.state.get('pyneide.lastRunData'), savedData);
+  assert.equal(f.picks.length, 0);
+});
+
+test('the same symbol button selects downloaded data after a historical run', async (t) => {
+  const f = fixture(t);
+  f.state.set('pyneide.liveTarget', { [f.script]: { provider: 'test:SYMBOL@1', from: '-5', historyTrades: false } });
+  const chart = f.attachChartPicker(() => assert.fail('the live picker must not open'));
+  fs.mkdirSync(path.join(f.root, 'data'));
+  fs.writeFileSync(path.join(f.root, 'data', 'demo.ohlcv'), 'fixture');
+  f.state.set('pyneide.lastRunData', { [f.script]: 'demo' });
+  chart.show({ e: 'start' });
+  await chart.selectSymbol();
+  assert.equal(f.picks.length, 1);
 });

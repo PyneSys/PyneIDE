@@ -19,6 +19,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 import { explainError, providerTarget } from '../net/errors';
+import type { LiveChartEnv } from '../run/liveChartService';
 import { liveProviderString, type LiveTarget } from '../run/liveTarget';
 import { writeSymbolMapEntry } from '../run/symbolMapFile';
 import { OhlcvEditorProvider } from './ohlcvEditor';
@@ -78,15 +79,14 @@ export interface LivePickRequest {
   scriptName: string;
   strategy: boolean;
   /** The settings the pick starts from: the script's last live target. */
+  timeframe?: string;
   from: string;
   historyTrades: boolean;
 }
 
-export interface SymbolBrowserDeps {
-  pythonBin: string;
+export interface SymbolBrowserDeps extends LiveChartEnv {
   /** Directory that CONTAINS the pyneide_bridge package (`<ext>/python`). */
   bridgeRoot: string;
-  workdir: string;
   output: vscode.OutputChannel;
   /** Invoked when the very first `providers` request fails (the service could
    * not start) so the caller can fall back to the QuickPick download wizard. */
@@ -97,11 +97,11 @@ export class SymbolBrowserPanel {
   private static readonly panels = new Map<string, SymbolBrowserPanel>();
   /** Opens a live chart without a script on a provider string (the Live chart button). */
   private static liveChartOpener:
-    | ((provider: string, env: { workdir: string; pythonBin: string }) => void)
+    | ((provider: string, env: LiveChartEnv) => void)
     | undefined;
 
   static setLiveChartOpener(
-    opener: (provider: string, env: { workdir: string; pythonBin: string }) => void
+    opener: (provider: string, env: LiveChartEnv) => void
   ): void {
     SymbolBrowserPanel.liveChartOpener = opener;
   }
@@ -112,6 +112,7 @@ export class SymbolBrowserPanel {
   private readonly ohlcvPathCache = new Map<string, string>();
   private readonly disposables: vscode.Disposable[] = [];
   private activeDownloadId: number | undefined;
+  private updatingCore = false;
   /** Armed security-download prefill (map write + Run offer after download). */
   private prefill: SecurityPrefill | undefined;
   /** Armed live-chart pick: Start Live resolves it, anything else cancels it. */
@@ -176,6 +177,25 @@ export class SymbolBrowserPanel {
     }
   }
 
+  /** Stop provider processes for this interpreter while its packages change. */
+  static async withProvidersPaused(pythonBin: string, update: () => Promise<void>): Promise<void> {
+    const panels = [...this.panels.values()].filter((panel) => panel.deps.pythonBin === pythonBin);
+    if (panels.some((panel) => panel.updatingCore || panel.activeDownloadId !== undefined)) {
+      void vscode.window.showInformationMessage('PyneIDE: wait for the current PyneCore update or Symbol Browser download to finish.');
+      return;
+    }
+    for (const panel of panels) panel.updatingCore = true;
+    try {
+      await Promise.all(panels.map((panel) => panel.service.pauseForCoreUpdate()));
+      await update();
+    } finally {
+      for (const panel of panels) {
+        panel.updatingCore = false;
+        panel.service.resumeAfterCoreUpdate();
+      }
+    }
+  }
+
   private constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly deps: SymbolBrowserDeps,
@@ -215,6 +235,7 @@ export class SymbolBrowserPanel {
       ? {
           script: request.scriptName,
           strategy: request.strategy,
+          timeframe: request.timeframe,
           from: request.from,
           historyTrades: request.historyTrades,
         }
@@ -295,14 +316,16 @@ export class SymbolBrowserPanel {
         await this.persist(msg.provider, msg.broker, msg.timeframe);
         break;
       case 'startLive':
-        await this.startLive(msg);
+        if (!this.updatingCore) await this.startLive(msg);
         break;
       case 'openLiveChart':
         await this.persist(msg.provider, msg.broker, msg.timeframe);
-        SymbolBrowserPanel.liveChartOpener?.(
-          liveProviderString(msg.provider, msg.broker, msg.symbol, msg.timeframe),
-          { workdir: this.deps.workdir, pythonBin: this.deps.pythonBin }
-        );
+        if (!this.updatingCore) {
+          SymbolBrowserPanel.liveChartOpener?.(
+            liveProviderString(msg.provider, msg.broker, msg.symbol, msg.timeframe),
+            this.deps
+          );
+        }
         break;
     }
   }

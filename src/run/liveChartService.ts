@@ -31,6 +31,19 @@ const STOP_GRACE_MS = 4000;
 export interface LiveChartEnv {
   workdir: string;
   pythonBin: string;
+  resource: vscode.Uri;
+}
+
+export const LIVE_UNSUPPORTED = 'LiveUnsupported';
+
+export async function offerLiveCoreUpdate(resource: vscode.Uri): Promise<void> {
+  const choice = await vscode.window.showWarningMessage(
+    'PyneIDE: the installed PyneCore does not support live charts. Update PyneCore and try again.',
+    'Update PyneCore'
+  );
+  if (choice === 'Update PyneCore') {
+    await vscode.commands.executeCommand('pyneide.updatePyneCore', resource);
+  }
 }
 
 /** Picks a live chart's symbol, timeframe and history in the Symbol Browser. */
@@ -160,6 +173,7 @@ export class LiveChartService implements vscode.Disposable {
     this.output.appendLine(`--- Live chart: ${target.provider} (workdir: ${chart.env.workdir})`);
     let started = false;
     let error: string | undefined;
+    let errorKind: string | undefined;
     let run: BridgeRun | undefined;
     // A restart or a closed tab already stops a superseded run
     const download = new LiveDownloadProgress(`PyneIDE: live chart of ${target.provider}`, () => {
@@ -188,6 +202,7 @@ export class LiveChartService implements vscode.Disposable {
             break;
           case 'error':
             error = event.code ? `${event.code}: ${event.message}` : event.message;
+            errorKind = event.kind;
             if (event.traceback) this.output.appendLine(event.traceback);
             break;
         }
@@ -211,7 +226,11 @@ export class LiveChartService implements vscode.Disposable {
     }
     if (error) {
       this.output.appendLine(`Live chart of ${target.provider} stopped: ${error}`);
-      void vscode.window.showErrorMessage(`PyneIDE: live chart of ${target.provider}: ${error}`);
+      if (errorKind === LIVE_UNSUPPORTED) {
+        await offerLiveCoreUpdate(chart.env.resource);
+      } else {
+        void vscode.window.showErrorMessage(`PyneIDE: live chart of ${target.provider}: ${error}`);
+      }
     }
   }
 }

@@ -19,6 +19,8 @@ export interface LiveModeInfo {
   script: string;
   /** A strategy: the "Trade on history" switch is shown. */
   strategy: boolean;
+  /** Current timeframe when switching a live chart's symbol. */
+  timeframe?: string;
   /** History start as the bridge's `--live-from` (`-N` bars). */
   from: string;
   historyTrades: boolean;
