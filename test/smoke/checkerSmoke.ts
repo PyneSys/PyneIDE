@@ -377,6 +377,39 @@ async function main(): Promise<void> {
     }
     log('edge-syntax OK');
 
+    // --- string escapes: `\N{NAME}` is read from the source, at the escape ---
+    const edgeEscape = await worker.request(
+      '"""@pyne edge \\N{BULLET}"""\n' +
+        'from pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\n' +
+        'def main():\n' +
+        '    """deg \\N{DEGREE SIGN}"""\n' +
+        '    a = "\\N{DEGREE SIGN}"\n' +
+        '    b = ("x"  # "\\N{BULLET}"\n' +
+        '         r"\\N{x}" "\\\\N{x}" \'\\\\\\N{BULLET}\')\n' +
+        '    c = "°" + "\\u00b0"\n' +
+        '    d = f"\\N{BULLET}"\n' +
+        '    print(a, b, c, d)\n'
+    );
+    expectCodes(edgeEscape, Array(5).fill('E0001'), 'edge-named-escape');
+    {
+      const spans = (edgeEscape.problems ?? []).map((p) => [p[0], p[1], p[2]]);
+      const expected = [[0, 14, 24], [6, 11, 26], [7, 9, 24], [9, 30, 40], [11, 8, 21]];
+      assert(JSON.stringify(spans) === JSON.stringify(expected),
+        `edge-named-escape: expected spans ${JSON.stringify(expected)}, got ${JSON.stringify(spans)}`);
+      const msgs = messagesOf(edgeEscape);
+      assert(msgs[1] === 'The named Unicode escape `\\N{DEGREE SIGN}` is not allowed in the Pyne Edge profile.',
+        `edge-named-escape: unexpected message ${JSON.stringify(msgs[1])}`);
+      assert(msgs[4].includes('f-string'),
+        `edge-named-escape: an f-string stays one finding, got ${JSON.stringify(msgs[4])}`);
+    }
+    const plainEscape = await worker.request(
+      '"""@pyne"""\nfrom pynecore.lib import script\n\n\n' +
+        '@script.indicator(title="T")\ndef main():\n    a = "\\N{DEGREE SIGN}"\n'
+    );
+    expectCodes(plainEscape, [], 'edge-named-escape (plain @pyne is not gated)');
+    log('edge-named-escape OK');
+
     // --- assert: allowed, but its message must be a string literal ----------
     const edgeAssert = await worker.request(
       EDGE_HEAD +
@@ -413,6 +446,37 @@ async function main(): Promise<void> {
     );
     expectCodes(edgeClass, ['E0008'], 'edge-class');
     log('edge-class OK');
+
+    // --- enums: a string enum base over `member = 'title'` assignments -------
+    const enumHead = EDGE_HEAD + SCAFFOLD + '\nfrom enum import StrEnum as Enum\n\n\n';
+    for (const [label, body, codes] of [
+      ['members', "class Speed(Enum):\n    fast = 'Fast'\n    slow = 'Slow'\n", []],
+      ['docstring', 'class Speed(Enum):\n    """How fast"""\n    fast = \'Fast\'\n', []],
+      ['empty', 'class Speed(Enum):\n    pass\n', []],
+      ['int-member', 'class Speed(Enum):\n    fast = 1\n', ['E0008']],
+      ['annotated-member', "class Speed(Enum):\n    fast: str = 'Fast'\n", ['E0008']],
+      ['method', 'class Speed(Enum):\n    def m(self):\n        return 1\n', ['E0008']],
+      ['decorated', "@udt\nclass Speed(Enum):\n    fast = 'Fast'\n", ['E0008']],
+    ] as [string, string, string[]][]) {
+      expectCodes(await worker.request(enumHead + body), codes, `edge-enum-${label}`);
+    }
+    expectCodes(await worker.request(
+      EDGE_HEAD + SCAFFOLD + '\nfrom enum import IntEnum\n\n\nclass Speed(IntEnum):\n    fast = 1\n'
+    ), ['E0006', 'E0008', 'E0008', 'E0008'], 'edge-enum-other-base');
+    log('edge-enum OK');
+
+    // --- slices: only the prefix unpack `a, b = f(...)[:2]` ------------------
+    const sliceHead = EDGE_HEAD + SCAFFOLD + '\n\ndef three():\n    return (1, 2, 3)\n\n\n';
+    for (const [label, body, codes] of [
+      ['prefix-unpack', 'a, b = three()[:2]\n', []],
+      ['wrong-bound', 'a, b = three()[:3]\n', ['E0001']],
+      ['lower-bound', 'a, b = three()[1:3]\n', ['E0001']],
+      ['not-a-call', 't = three()\na, b = t[:2]\n', ['E0001']],
+      ['single-target', 't = three()[:2]\n', ['E0001']],
+    ] as [string, string, string[]][]) {
+      expectCodes(await worker.request(sliceHead + body), codes, `edge-slice-${label}`);
+    }
+    log('edge-slice OK');
 
     // --- class methods: undecorated with a receiver, Pine's `method` ---------
     const edgeMethod = await worker.request(
@@ -596,7 +660,18 @@ async function main(): Promise<void> {
     // --- lambda outside a UDT field default ----------------------------------
     const edgeLambda = await worker.request(EDGE_HEAD + SCAFFOLD + '\n\nf2 = lambda: 1\n');
     expectCodes(edgeLambda, ['E0003'], 'edge-lambda');
-    log('edge-lambda OK');
+    const factoryHead = EDGE_HEAD + 'from dataclasses import field\n' +
+      'from pynecore.core.pine_udt import udt\n' + SCAFFOLD;
+    for (const [label, body, codes] of [
+      ['module', '\n\nx = field(default_factory=lambda: 1)\n', ['E0003']],
+      ['function', '\n\ndef f():\n    return field(default_factory=lambda: 1)\n', ['E0003']],
+      ['udt-extra-arg', '\n\n@udt\nclass Bag:\n    a: int = field(1, default_factory=lambda: 1)\n',
+        ['E0003']],
+      ['udt-field', '\n\n@udt\nclass Bag:\n    a: int = field(default_factory=lambda: 1)\n', []],
+    ] as [string, string, string[]][]) {
+      expectCodes(await worker.request(factoryHead + body), codes, `edge-lambda-factory-${label}`);
+    }
+    log('edge-lambda OK (a default_factory lambda only in a UDT field default)');
 
     // --- subscript stores (history reads stay allowed) -----------------------
     const edgeSubscript = await worker.request(

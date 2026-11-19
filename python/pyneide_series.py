@@ -753,18 +753,24 @@ class _EdgeChecker:
     imports (PyneCore API + `lib.*` user libraries + `dataclasses` only,
     no star imports),
     decorators (`@script.*(...)`, `@method`, `@udt`/`@dataclass` only),
-    classes (bases-less field lists with undecorated methods), bare-name
+    classes (bases-less field lists with undecorated methods, and Pine enums:
+    a string enum base over `member = 'title'` assignments), bare-name
     calls (defined functions, imported names and a small builtin whitelist),
     function signatures
     (plain positional parameters), subscript stores, attribute stores on
-    functions/modules, `lambda` anywhere outside a
-    `field(default_factory=lambda: ...)` UDT field default, and reads of a lib
-    name that resolve to the Python builtin of the same name.
+    functions/modules, a slice anywhere but the prefix unpack
+    `a, b = f(...)[:2]`, `lambda` anywhere outside a
+    `field(default_factory=lambda: ...)` UDT field default, reads of a lib
+    name that resolve to the Python builtin of the same name, and escape
+    sequences a string literal is written with (read from the source text).
     """
 
-    def __init__(self, tree: ast.Module, lib: _LibImports, columns: _Utf16Columns,
-                 symbols: symtable.SymbolTable | None):
+    def __init__(self, tree: ast.Module, source: str, lib: _LibImports,
+                 columns: _Utf16Columns, symbols: symtable.SymbolTable | None):
         self.tree = tree
+        # The source lines as bytes, split where ast counts lines: ast's
+        # columns are UTF-8 byte offsets.
+        self.source_lines = source.encode('utf-8').splitlines()
         self.lib = lib
         self.columns = columns
         # None when only the symbol table rejects the source: the builtin-read
@@ -797,6 +803,7 @@ class _EdgeChecker:
         self.def_names: set[str] = set()
         self.allowed_lambdas: set[int] = set()
         self.allowed_lists: set[int] = set()
+        self.allowed_slices: set[int] = set()
 
     def check(self) -> None:
         if _edge_rules is None:  # pragma: no cover - partial deployment
@@ -818,18 +825,17 @@ class _EdgeChecker:
             elif isinstance(node, ast.Import):
                 for alias in node.names:
                     self.import_bound.add(alias.asname or alias.name.split('.')[0])
-        # `field(default_factory=lambda: ...)` is the one legitimate lambda
-        # position (UDT field defaults — the emitter produces it too).
+        # `field(default_factory=lambda: ...)` is the one legitimate lambda:
+        # a UDT field's default, which the emitter produces too — and only
+        # there, as the value of a field in a decorated class body.
+        factory = _FactoryFields(self.tree)
         for node in ast.walk(self.tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            if (not isinstance(node, ast.ClassDef) or len(node.decorator_list) != 1
+                    or not self._decorator_ok(node.decorator_list[0],
+                                              _edge_rules.ALLOWED_CLASS_DECORATORS)):
                 continue
-            if self.from_imports.get(node.func.id) != ('dataclasses', 'field'):
-                continue
-            for kw in node.keywords:
-                value = kw.value
-                if (kw.arg == 'default_factory' and isinstance(value, ast.Lambda)
-                        and not _has_parameters(value.args)):
-                    self.allowed_lambdas.add(id(value))
+            for call in factory.of(node):
+                self.allowed_lambdas.add(id(call.keywords[0].value))
         # `__all__ = ['name', ...]` at module level is the one legitimate
         # list literal (the library emitter produces it).
         for stmt in self.tree.body:
@@ -841,6 +847,13 @@ class _EdgeChecker:
                             and isinstance(e.value, str)
                             for e in stmt.value.elts)):
                 self.allowed_lists.add(id(stmt.value))
+        # `a, b = f(...)[:2]` is the one legitimate slice: the prefix unpack
+        # of a call's tuple (the emitter produces it).
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                prefix = _prefix_unpack_slice(node)
+                if prefix is not None:
+                    self.allowed_slices.add(id(prefix))
 
     # --- recursive walk ---------------------------------------------------
 
@@ -856,7 +869,13 @@ class _EdgeChecker:
                              ast.unaryop, ast.cmpop)):
             return
         if kind == 'List' and id(node) in self.allowed_lists:
-            return  # `__all__ = [...]` — children are validated constants
+            # `__all__ = [...]`: the children are validated string constants,
+            # only their escapes are left to check.
+            for element in node.elts:
+                self._check_string(element)
+            return
+        if kind == 'Slice' and id(node) in self.allowed_slices:
+            return  # its one child is the validated integer bound
         if kind not in _edge_rules.ALLOWED_NODES and hasattr(node, 'lineno'):
             label = _EDGE_NODE_LABELS.get(kind, f'`{kind}`')
             self._problem(node, _codes.EDGE_SYNTAX, label)
@@ -898,6 +917,8 @@ class _EdgeChecker:
         elif isinstance(node, ast.Compare):
             for op in node.ops:
                 self._check_op(node, op, _edge_rules.ALLOWED_CMP_OPS)
+        elif isinstance(node, ast.Constant):
+            self._check_string(node)
         body_scope = scope
         if scope is not None and isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Lambda)):
             label = 'lambda' if isinstance(node, ast.Lambda) else node.name
@@ -1004,6 +1025,9 @@ class _EdgeChecker:
     def _check_class(self, node: ast.ClassDef) -> None:
         if self._is_protocol_shim(node):
             return
+        if self._is_enum(node):
+            self._check_enum(node)
+            return
         if node.bases or node.keywords:
             self._problem(node, _codes.EDGE_CLASS,
                           'A class cannot have base classes or keywords.')
@@ -1031,6 +1055,31 @@ class _EdgeChecker:
         elif not (node.args.posonlyargs or node.args.args):
             self._problem(node, _codes.EDGE_CLASS,
                           'A method takes its receiver as its first parameter.')
+
+    def _is_enum(self, node: ast.ClassDef) -> bool:
+        """A Pine `enum`: a class whose single base is a string enum base of
+        the profile, under whatever name it was imported."""
+        return (len(node.bases) == 1 and isinstance(node.bases[0], ast.Name)
+                and self.from_imports.get(node.bases[0].id) in _edge_rules.ENUM_BASES)
+
+    def _check_enum(self, node: ast.ClassDef) -> None:
+        """An enum declares its members and nothing else: each one is its
+        title, a string literal assigned to the member's name."""
+        if node.keywords or node.decorator_list:
+            self._problem(node, _codes.EDGE_CLASS,
+                          'An enum takes no decorator and no class keywords.')
+        body = node.body
+        if body and _is_docstring(body[0]):
+            body = body[1:]
+        for stmt in body:
+            if isinstance(stmt, ast.Pass):
+                continue
+            if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                    and isinstance(stmt.targets[0], ast.Name)
+                    and isinstance(stmt.value, ast.Constant)
+                    and isinstance(stmt.value.value, str)):
+                self._problem(stmt, _codes.EDGE_CLASS,
+                              'An enum body can hold only `member = \'title\'` assignments.')
 
     def _is_protocol_shim(self, node: ast.ClassDef) -> bool:
         """A library-export signature shim: `class _ProtocolX(Protocol)` with
@@ -1092,8 +1141,85 @@ class _EdgeChecker:
             symbol = _EDGE_OP_SYMBOLS.get(kind, kind)
             self._problem(node, _codes.EDGE_SYNTAX, f'The `{symbol}` operator')
 
+    def _check_string(self, node: ast.AST) -> None:
+        """Report every disallowed escape a string literal is written with, at
+        the escape itself."""
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            return
+        for line, start, end, text in _string_escapes(
+                self.source_lines, node, _edge_rules.DISALLOWED_STRING_ESCAPES):
+            code = _codes.EDGE_SYNTAX
+            self.problems.append((line, self.columns.convert(line, start),
+                                  self.columns.convert(line, end), code.code,
+                                  code.render(_escape_label(text))))
+
     def _problem(self, node: ast.AST, code: '_codes.Code', *args: str) -> None:
         self.problems.append((*_node_span(self.columns, node), code.code, code.render(*args)))
+
+
+def _string_escapes(lines: 'list[bytes]', node: ast.Constant,
+                    letters: 'frozenset[str]') -> 'list[tuple[int, int, int, str]]':
+    """The escapes a string constant's source writes with one of ``letters``.
+
+    The parsed value no longer shows how a character was written, so the
+    source text the node spans is lexed again: one or more literals (implicit
+    concatenation), with whitespace, line continuations and comments between
+    them. A raw literal has no escapes, and an escaped backslash is skipped
+    whole, so ``\\\\N`` is no escape.
+
+    :param lines: The source lines as bytes, split where ast counts lines
+    :param node: A constant parsed from string literals
+    :param letters: The letters after the backslash to report
+    :return: ``(line, start, end, text)`` per escape: the 0-based line, the
+             UTF-8 byte columns and the escape as written
+    """
+    first = node.lineno - 1
+    last = (node.end_lineno or node.lineno) - 1
+    text = b'\n'.join(lines[first:last + 1])
+    stop = len(text) - len(lines[last]) + (node.end_col_offset or 0) if last < len(lines) \
+        else len(text)
+    wanted = {letter.encode('ascii') for letter in letters}
+    found: list[tuple[int, int, int, str]] = []
+    i = node.col_offset
+    while i < stop:
+        char = text[i:i + 1]
+        if char == b'#':
+            newline = text.find(b'\n', i)
+            i = stop if newline < 0 else newline
+            continue
+        if not char.isalpha() and char not in (b'"', b"'"):
+            i += 1  # whitespace, a newline or a line continuation
+            continue
+        quote = i
+        while text[quote:quote + 1].isalpha():
+            quote += 1
+        raw = b'r' in text[i:quote].lower()
+        delimiter = text[quote:quote + 1] * (3 if text[quote:quote + 3] in (b'"""', b"'''") else 1)
+        if not delimiter:
+            break
+        i = quote + len(delimiter)
+        while i < stop and not text.startswith(delimiter, i):
+            if text[i:i + 1] != b'\\':
+                i += 1
+                continue
+            letter = text[i + 1:i + 2]
+            if not raw and letter in wanted:
+                end = i + 2
+                if letter == b'N' and text[end:end + 1] == b'{':
+                    end = text.find(b'}', end) + 1 or end
+                line_start = text.rfind(b'\n', 0, i) + 1
+                found.append((first + text.count(b'\n', 0, i), i - line_start,
+                              end - line_start, text[i:end].decode('utf-8', 'replace')))
+            i += 2
+        i += len(delimiter)
+    return found
+
+
+def _escape_label(text: str) -> str:
+    """How an escape is named as the subject of the profile's message."""
+    if text.startswith('\\N'):
+        return f'The named Unicode escape `{text}`'
+    return f'The escape `{text}`'
 
 
 def _has_allowed_prefix(module: str) -> bool:
@@ -1106,8 +1232,114 @@ def _has_parameters(args: ast.arguments) -> bool:
                 or args.vararg or args.kwarg)
 
 
+def _dotted_name(node: ast.expr) -> str | None:
+    """Render a dotted name expression, or None when it is not one."""
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.Attribute):
+        parts.append(current.attr)
+        current = current.value
+    if not isinstance(current, ast.Name):
+        return None
+    parts.append(current.id)
+    return '.'.join(reversed(parts))
+
+
+class _FactoryFields:
+    """The `field(default_factory=...)` defaults of a module's UDT classes.
+
+    Mirrors PyneCore's `transformers.factory_fields.FactoryFields`: only a
+    direct annotated field of a `@udt` / `@dataclass` class whose default
+    calls the name bound to `dataclasses.field` AT THAT STATEMENT (a later
+    import, definition or assignment of the name counterfeits it), with a
+    zero-argument lambda as its only keyword and no positional arguments,
+    is dataclass plumbing. Any other call carrying a `default_factory`
+    keyword is an ordinary call.
+    """
+
+    __slots__ = ('body', 'top_index')
+
+    def __init__(self, tree: ast.Module):
+        self.body = tree.body
+        # Every class's top-level statement index
+        self.top_index: dict[int, int] = {}
+        for index, stmt in enumerate(tree.body):
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.ClassDef):
+                    self.top_index[id(node)] = index
+
+    def _binding(self, name: str, before: int) -> str | None:
+        """What `name` denotes at statement `before`: 'field', 'dataclasses' or other."""
+        binding: str | None = None
+        for stmt in self.body[:before]:
+            if isinstance(stmt, ast.ImportFrom):
+                for alias in stmt.names:
+                    if (alias.asname or alias.name) == name:
+                        binding = 'field' if (stmt.module == 'dataclasses' and not stmt.level
+                                              and alias.name == 'field') else 'other'
+            elif isinstance(stmt, ast.Import):
+                for alias in stmt.names:
+                    if (alias.asname or alias.name.split('.')[0]) == name:
+                        binding = 'dataclasses' if alias.name == 'dataclasses' else 'other'
+            elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if stmt.name == name:
+                    binding = 'other'
+            else:
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Name) and node.id == name \
+                            and isinstance(node.ctx, ast.Store):
+                        binding = 'other'
+        return binding
+
+    def of(self, cls: ast.ClassDef) -> list[ast.Call]:
+        """The factory-default calls of a class, empty for a class that is no UDT."""
+        if not any((_dotted_name(decorator) or '').rsplit('.', 1)[-1] in ('udt', 'dataclass')
+                   for decorator in cls.decorator_list):
+            return []
+        before = self.top_index.get(id(cls), len(self.body))
+        out: list[ast.Call] = []
+        for stmt in cls.body:
+            value = stmt.value if isinstance(stmt, ast.AnnAssign) else None
+            if not isinstance(value, ast.Call) or len(value.keywords) != 1 or value.args:
+                continue
+            keyword = value.keywords[0]
+            factory = keyword.value
+            if (keyword.arg != 'default_factory' or not isinstance(factory, ast.Lambda)
+                    or _has_parameters(factory.args)):
+                continue
+            func = value.func
+            if (isinstance(func, ast.Name) and self._binding(func.id, before) == 'field') or (
+                    isinstance(func, ast.Attribute) and func.attr == 'field'
+                    and isinstance(func.value, ast.Name)
+                    and self._binding(func.value.id, before) == 'dataclasses'):
+                out.append(value)
+        return out
+
+
 def _has_special_parameters(args: ast.arguments) -> bool:
     return bool(args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg)
+
+
+def _prefix_unpack_slice(stmt: ast.Assign) -> ast.Slice | None:
+    """The slice of a prefix unpack `a, b = f(...)[:2]`, or None.
+
+    The value is a call sliced by a constant, non-negative upper bound with no
+    lower bound and no step, and the single tuple target has exactly as many
+    elements as that bound, none of them starred."""
+    if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Tuple):
+        return None
+    targets, value = stmt.targets[0].elts, stmt.value
+    if not (isinstance(value, ast.Subscript) and isinstance(value.value, ast.Call)
+            and isinstance(value.slice, ast.Slice)):
+        return None
+    bounds = value.slice
+    upper = bounds.upper
+    if (bounds.lower is not None or bounds.step is not None
+            or not isinstance(upper, ast.Constant) or type(upper.value) is not int
+            or upper.value != len(targets)
+            or any(isinstance(target, ast.Starred) for target in targets)):
+        return None
+    return bounds
 
 
 def _is_docstring(stmt: ast.stmt) -> bool:
@@ -1389,7 +1621,7 @@ def analyze(source: str) -> dict[str, Any]:
         checker.check()
         problems = checker.problems + analyzer.problems
         if _edge_rules is not None and _is_edge(source):
-            edge = _EdgeChecker(tree, analyzer.lib, columns, symbols)
+            edge = _EdgeChecker(tree, source, analyzer.lib, columns, symbols)
             edge.check()
             problems += edge.problems
         problems = sorted(problems)

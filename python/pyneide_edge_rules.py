@@ -16,9 +16,11 @@ global/nonlocal or starred expressions (``assert`` is admitted on top, see
 ``ALLOWED_NODES``); decorators only
 ``@script.indicator/strategy/library(...)``, ``@method`` and ``@udt``;
 classes only as bases-less ``@udt`` field lists (methods in the class body
-are admitted on top, see ``ALLOWED_CLASS_DECORATORS``); ``lambda`` only as a
+are admitted on top, see ``ALLOWED_CLASS_DECORATORS``) and as Pine enums
+(``ENUM_BASES``); ``lambda`` only as a
 ``field(default_factory=lambda: ...)`` UDT field default; plain positional
-parameters (with defaults) only; subscripts in Load context only. A few
+parameters (with defaults) only; subscripts in Load context only; a slice
+only as the prefix unpack ``a, b = f(...)[:2]``. A few
 trivially portable extras are allowed on top and marked below.
 
 Library emission (pynecomp v6.0.46+, ``@script.library``) additionally
@@ -36,7 +38,7 @@ Additional source material (provenance only, no dependency):
 Data only, stdlib only — imported by ``pyneide_series.py`` next to it.
 """
 
-EDGE_RULES_VERSION = '2026.11.1'
+EDGE_RULES_VERSION = '2026.11.3'
 
 # --- syntax ----------------------------------------------------------------
 
@@ -59,6 +61,15 @@ ALLOWED_NODES = frozenset({
     'Assert',
 })
 
+# 2026.11.3: one slice is admitted although `Slice` is not in the set above,
+# the prefix unpack `a, b = f(...)[:2]`: a tuple-target assignment whose value
+# is a call sliced by a constant, non-negative upper bound with no lower bound
+# and no step, and exactly as many targets as that bound, none of them starred.
+# It is how the emitter spells Pine's `[a, b] = f()` where `f` ends in
+# branches that return tuples of different lengths, which takes the leading
+# elements. The call is evaluated whole and its tail dropped, so a compiled
+# runtime needs no slicing machinery. Checked in the worker.
+
 # The emitter uses Add/Sub/Mult/Div/Mod only; FloorDiv (Pine integer
 # division), Pow and UAdd are trivially portable arithmetic and allowed on
 # top. Bitwise/shift/matmul operators and is/is-not comparisons are out.
@@ -70,6 +81,18 @@ ALLOWED_BIN_OPS = frozenset({'Add', 'Sub', 'Mult', 'Div', 'FloorDiv', 'Mod', 'Po
 ALLOWED_UNARY_OPS = frozenset({'USub', 'UAdd', 'Not'})
 ALLOWED_BOOL_OPS = frozenset({'And', 'Or'})
 ALLOWED_CMP_OPS = frozenset({'Eq', 'NotEq', 'Lt', 'LtE', 'Gt', 'GtE', 'In', 'NotIn'})
+
+# --- string literals -------------------------------------------------------
+
+# Escape sequences a string literal may not be written with, by the letter
+# after the backslash. 2026.11.2: `\N{NAME}`, a character named by its Unicode
+# name. Pine has no such form, and a runtime that decodes it has to carry the
+# whole Unicode name table; write the character itself instead. The rule reads
+# the SOURCE form, since the parsed value no longer shows how a character was
+# written: a raw string has no escapes, `\\N` is an escaped backslash followed
+# by a plain `N`, and every string literal counts, a docstring included: a
+# parser decodes it like any other literal.
+DISALLOWED_STRING_ESCAPES = frozenset({'N'})
 
 # --- imports ---------------------------------------------------------------
 
@@ -87,6 +110,8 @@ ALLOWED_FROM_MODULES = {
     # export shims (`class _Protocol...(Protocol)` + `-> Any`); erased at
     # runtime, trivially portable.
     'typing': frozenset({'Protocol', 'Any'}),
+    # A Pine `enum` is a string enum class (see `ENUM_BASES`).
+    'enum': frozenset({'StrEnum'}),
 }
 
 # --- decorators ------------------------------------------------------------
@@ -111,6 +136,19 @@ ALLOWED_CLASS_DECORATORS = frozenset({
 # class, and the method keeps its state per call site like any function.
 # A decorated one (`@staticmethod`, `@classmethod`, `@method`, ...) is out:
 # the decorator decides what the class attribute holds (checked in the worker).
+
+# --- enums -----------------------------------------------------------------
+
+# 2026.11.3: Pine's `enum` is part of the profile. It is spelled as a class
+# whose single base is one of these `(module, name)` imports, under any alias
+# (the emitter writes `from enum import StrEnum as Enum`): no decorator, no
+# keywords, and a body of `member = 'title'` assignments only (a docstring
+# may lead it, an enum without members holds `pass`). A member IS its title
+# string, so comparing, `str()` and `input.enum()` need no enum machinery
+# on a constrained runtime. Checked in the worker.
+ENUM_BASES = frozenset({
+    ('enum', 'StrEnum'),
+})
 
 # --- calls -----------------------------------------------------------------
 
