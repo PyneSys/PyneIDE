@@ -620,6 +620,35 @@ function withAlpha(color: string, alpha: number): string {
   return color;
 }
 
+/** Opacity factor of the overlays that sit on top of the candles (the compact
+ * OHLC legend card, script tables), so the chart stays readable behind them. */
+const OVERLAY_ALPHA = 0.75;
+
+/**
+ * Scale a color's existing opacity by `factor` — unlike {@link withAlpha},
+ * which replaces it — so a script color that is already transparent gets
+ * lighter still instead of being forced back to one fixed level. Accepts the
+ * same forms as {@link withAlpha}; anything else is handed back unchanged.
+ */
+function scaleAlpha(color: string, factor: number): string {
+  const c = color.trim();
+  const hex = /^#([0-9a-f]{3,8})$/i.exec(c);
+  if (hex) {
+    let d = hex[1];
+    if (d.length === 3 || d.length === 4) d = d.split('').map((ch) => ch + ch).join('');
+    if (d.length !== 6 && d.length !== 8) return color;
+    const alpha = d.length === 8 ? parseInt(d.slice(6), 16) / 255 : 1;
+    return withAlpha(`#${d.slice(0, 6)}`, Math.round(alpha * factor * 1000) / 1000);
+  }
+  const rgb = /^rgba?\(\s*[\d.]+[\s,]+[\d.]+[\s,]+[\d.]+(?:[\s,/]+([\d.]+%?))?\s*\)$/i.exec(c);
+  if (rgb) {
+    const raw = rgb[1];
+    const alpha = raw === undefined ? 1 : raw.endsWith('%') ? parseFloat(raw) / 100 : parseFloat(raw);
+    return withAlpha(c, Math.round(alpha * factor * 1000) / 1000);
+  }
+  return color;
+}
+
 /**
  * Legend styles, split out because the toolbar toggle re-applies them on the
  * live chart. `showRule` is a chart-store style: the tooltip views read it from
@@ -633,8 +662,14 @@ function legendStyles(): DeepPartial<Styles> {
     candle: { tooltip: {
       showRule, showType: compactLegend ? 'rect' : 'standard', legend: { color: text },
       rect: {
-        color: cssVar('--vscode-editorWidget-background', isDark() ? '#252526' : '#f3f3f3'),
-        borderColor: cssVar('--vscode-editorWidget-border', isDark() ? '#454545' : '#c8c8c8'),
+        color: scaleAlpha(
+          cssVar('--vscode-editorWidget-background', isDark() ? '#252526' : '#f3f3f3'),
+          OVERLAY_ALPHA,
+        ),
+        borderColor: scaleAlpha(
+          cssVar('--vscode-editorWidget-border', isDark() ? '#454545' : '#c8c8c8'),
+          OVERLAY_ALPHA,
+        ),
       },
     } },
     indicator: { tooltip: { showRule, showType: compactLegend ? 'rect' : 'standard', legend: { color: text } } },
@@ -1972,7 +2007,7 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
     // pointer-events limited to the table itself (the layer stays transparent
     // to the mouse) so cell tooltips hover without stealing chart interaction.
     'pointer-events:auto;' +
-    `background:${table.bgcolor ?? 'transparent'};`;
+    `background:${table.bgcolor ? scaleAlpha(table.bgcolor, OVERLAY_ALPHA) : 'transparent'};`;
   if (table.frame_color && (table.frame_width ?? 0) > 0) {
     el.style.border = `${table.frame_width}px solid ${table.frame_color}`;
   }
@@ -2009,7 +2044,7 @@ function buildTableEl(table: TableState, paneW: number, paneH: number): HTMLElem
         `color:${cell?.text_color ?? 'inherit'};` +
         `font-style:${hasTextStyle(cell?.text_formatting, 'italic') ? 'italic' : 'normal'};` +
         `font-weight:${hasTextStyle(cell?.text_formatting, 'bold') ? 'bold' : 'normal'};` +
-        `background:${cell?.bgcolor ?? 'transparent'};`;
+        `background:${cell?.bgcolor ? scaleAlpha(cell.bgcolor, OVERLAY_ALPHA) : 'transparent'};`;
       if (table.border_color && (table.border_width ?? 0) > 0) {
         td.style.border = `${table.border_width}px solid ${table.border_color}`;
       }
