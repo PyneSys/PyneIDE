@@ -31,8 +31,45 @@ export interface ChartDebugPosition {
   timestamp: number;
 }
 
+/** A script of a dashboard chart, as its Layers group shows it. */
+export interface ChartCellScript {
+  /** The script entry's id: the prefix of its plot ids (`ema_fast: `). */
+  id: string;
+  /** The script's title and the inputs the dashboard sets (`EMA · length 20`). */
+  label: string;
+  state: 'loading' | 'running' | 'error';
+  /** Why it stopped. */
+  message?: string;
+}
+
+/** What a chart in a dashboard cell shows beyond a chart tab: its scripts and
+ * the cell's actions. */
+export interface ChartCell {
+  /** The chart's runners: `starting` and `loading` show `message` (the
+   * download's progress) in the live indicator. */
+  state: 'starting' | 'loading' | 'live' | 'reconnecting' | 'error' | 'stopped';
+  message?: string;
+  scripts: ChartCellScript[];
+  /** Why no script can join the chart, when none can. */
+  addScriptBlocked?: string;
+  /** Why no chart can join the dashboard, when none can. */
+  addChartBlocked?: string;
+}
+
+/** A dashboard cell's action, asked from its chart's toolbar or Layers menu. */
+export type ChartCellAction =
+  | { kind: 'addScript' }
+  | { kind: 'editScript'; id: string }
+  | { kind: 'removeScript'; id: string }
+  | { kind: 'addChart'; direction: 'horizontal' | 'vertical' }
+  | { kind: 'openFullChart' }
+  | { kind: 'removeChart' }
+  | { kind: 'restart' };
+
 export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }
+  /** A dashboard cell's scripts and actions; each one replaces the last. */
+  | { type: 'cell'; cell: ChartCell }
   /** Rows in time order; a row with the last row's timestamp replaces it. */
   | { type: 'bars'; rows: BarRow[] }
   /** A live chart's history is complete: from here on the chart takes single
@@ -85,4 +122,6 @@ export type ChartOutMessage =
   | { type: 'cancelBreakpointSelection' }
   | { type: 'openLabelLink'; target: string }
   /** Data Window row click: the host owns the clipboard. */
-  | { type: 'copyText'; text: string };
+  | { type: 'copyText'; text: string }
+  /** A dashboard cell's action (embedded charts only). */
+  | { type: 'cell'; action: ChartCellAction };

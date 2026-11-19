@@ -552,6 +552,18 @@
         "icon": "$(trash)"
       },
       {
+        "command": "pyneide.dashboardAddChart",
+        "title": "Add Chart to Dashboard",
+        "category": "PyneIDE",
+        "icon": "$(add)"
+      },
+      {
+        "command": "pyneide.dashboardOpenText",
+        "title": "Open Dashboard as Text",
+        "category": "PyneIDE",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "pyneide.dashboardDelete",
         "title": "Delete Dashboard…",
         "category": "PyneIDE",
@@ -689,6 +701,14 @@
         {
           "command": "pyneide.dashboardDelete",
           "when": "false"
+        },
+        {
+          "command": "pyneide.dashboardAddChart",
+          "when": "activeCustomEditorId == pyneide.dashboard"
+        },
+        {
+          "command": "pyneide.dashboardOpenText",
+          "when": "activeCustomEditorId == pyneide.dashboard"
         }
       ],
       "editor/lineNumber/context": [
@@ -810,6 +830,16 @@
           "command": "pyneide.dataPreviewChart",
           "when": "activeCustomEditorId == pyneide.ohlcvTable",
           "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.dashboardAddChart",
+          "when": "activeCustomEditorId == pyneide.dashboard",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pyneide.dashboardOpenText",
+          "when": "activeCustomEditorId == pyneide.dashboard",
+          "group": "navigation@2"
         }
       ],
       "editor/title/run": [

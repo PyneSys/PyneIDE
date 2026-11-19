@@ -57,7 +57,13 @@ import {
   type ChartPalette,
   type ColorSchemeId,
 } from '../colorScheme';
-import type { ChartDebugPosition, ChartBreakpointTarget, ChartInMessage, ChartOutMessage } from '../messages';
+import type {
+  ChartBreakpointTarget,
+  ChartCellScript,
+  ChartDebugPosition,
+  ChartInMessage,
+  ChartOutMessage,
+} from '../messages';
 import { DEFAULT_PRICE_SCALE, PRICE_SCALE_OPTIONS, type PriceScaleId } from '../priceScale';
 import { ColorTrack } from './colorTrack';
 import {
@@ -92,6 +98,16 @@ import {
 import { LabelTooltip } from './labelTooltip';
 import { TailCalc, datumReach, formatCountdown, msToPeriodEnd, periodMs } from './liveSeries';
 import { initToolbarOverflow, toolbarAnchor } from './toolbarOverflow';
+import {
+  cellAction,
+  closeSplitPopup,
+  currentCell,
+  initDashboardCell,
+  plotLabelInScript,
+  positionSplitPopup,
+  scriptOfPlot,
+  setCell,
+} from './dashboardCell';
 import {
   buildFigure,
   buildHlineFigure,
@@ -2105,6 +2121,85 @@ function makeLayerRow(
   return row;
 }
 
+/** A small icon button of a Layers script group. */
+function scriptGroupButton(label: string, path: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'script-action';
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="${path}"></path></svg>`;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    onClick();
+  });
+  return button;
+}
+
+/** A dashboard script's head in the Layers menu: its name (a click shows or
+ * hides all its plots), its inputs, its removal, and why it is not drawing. */
+function scriptGroupHead(st: RunState, script: ChartCellScript, own: LegendEntry[]): HTMLDivElement {
+  const group = document.createElement('div');
+  group.className = `script-group state-${script.state}`;
+  const head = document.createElement('div');
+  head.className = 'script-head';
+  const allHidden = own.length > 0 && own.every((entry) => st.hidden.has(entry.id));
+  const name = document.createElement('button');
+  name.type = 'button';
+  name.className = 'script-name';
+  name.textContent = script.label;
+  name.disabled = own.length === 0;
+  name.title = own.length ? `${script.label} — click to ${allHidden ? 'show' : 'hide'} its plots` : script.label;
+  name.setAttribute('aria-pressed', String(!allHidden));
+  if (allHidden) name.classList.add('off');
+  name.addEventListener('click', (event) => {
+    event.stopPropagation();
+    for (const entry of own) {
+      if (allHidden) st.hidden.delete(entry.id);
+      else st.hidden.add(entry.id);
+    }
+    applyVisibility(st);
+    renderPlotList(st);
+  });
+  head.append(
+    name,
+    scriptGroupButton(`Edit the inputs of ${script.label}`,
+      'M4 6h5M13 6h3M4 14h3M11 14h5M11 4v4M9 12v4', () => {
+        closePlotsPopup();
+        cellAction({ kind: 'editScript', id: script.id });
+      }),
+    scriptGroupButton(`Remove ${script.label} from this chart`,
+      'M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.5h6.6L14 6', () => {
+        closePlotsPopup();
+        cellAction({ kind: 'removeScript', id: script.id });
+      }),
+  );
+  group.appendChild(head);
+  if (script.state !== 'running') {
+    const status = document.createElement('div');
+    status.className = 'script-status';
+    if (script.state === 'error') {
+      const text = document.createElement('span');
+      text.textContent = `Stopped: ${script.message ?? 'the script ended'}`;
+      text.title = script.message ?? '';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Retry';
+      retry.title = 'Restart this chart and its scripts';
+      retry.addEventListener('click', (event) => {
+        event.stopPropagation();
+        closePlotsPopup();
+        cellAction({ kind: 'restart' });
+      });
+      status.append(text, retry);
+    } else {
+      status.textContent = 'Loading history…';
+    }
+    group.appendChild(status);
+  }
+  return group;
+}
+
 /** Fill the popup: one row per script plot, then a "Built-in" section with the
  * chart-level Volume toggle. The button is always enabled — Volume is available
  * even when the script has no plots. */
@@ -2112,14 +2207,30 @@ function renderPlotList(st: RunState): void {
   if (!plotsPopupEl) return;
   plotsPopupEl.innerHTML = '';
   const entries = legendEntries(st);
-  for (const entry of entries) {
-    const off = st.hidden.has(entry.id);
-    plotsPopupEl.appendChild(makeLayerRow(entry.label, entry.kind, off, entry.color, () => {
+  const plotRow = (entry: LegendEntry, label = entry.label): HTMLButtonElement =>
+    makeLayerRow(label, entry.kind, st.hidden.has(entry.id), entry.color, () => {
       if (st.hidden.has(entry.id)) st.hidden.delete(entry.id);
       else st.hidden.add(entry.id);
       applyVisibility(st);
       renderPlotList(st);
-    }));
+    });
+  const cell = currentCell();
+  if (cell) {
+    // A dashboard chart: one group per script, its plots under it
+    for (const entry of entries) {
+      if (!scriptOfPlot(entry.id)) plotsPopupEl.appendChild(plotRow(entry));
+    }
+    for (const script of cell.scripts) {
+      const own = entries.filter((entry) => scriptOfPlot(entry.id) === script);
+      plotsPopupEl.appendChild(scriptGroupHead(st, script, own));
+      for (const entry of own) {
+        const row = plotRow(entry, plotLabelInScript(entry.label, script));
+        row.classList.add('in-script');
+        plotsPopupEl.appendChild(row);
+      }
+    }
+  } else {
+    for (const entry of entries) plotsPopupEl.appendChild(plotRow(entry));
   }
   const drawings: Array<[DrawingFamily, string, number]> = [
     ['label', 'Labels', st.drawings.labels.size],
@@ -2148,7 +2259,7 @@ function renderPlotList(st: RunState): void {
       }));
     }
   }
-  if (entries.length > 0) {
+  if (entries.length > 0 || cell?.scripts.length) {
     const sep = document.createElement('div');
     sep.className = 'plot-sep';
     plotsPopupEl.appendChild(sep);
@@ -2829,6 +2940,16 @@ const liveStatusEl = document.getElementById('live-status');
 function syncLiveStatus(): void {
   if (!liveStatusEl) return;
   const st = state;
+  const cell = currentCell();
+  if (cell && (cell.state === 'starting' || cell.state === 'loading')) {
+    // A dashboard chart (re)starting: its runners download before the chart
+    // has anything new to say
+    liveStatusEl.hidden = false;
+    liveStatusEl.dataset.state = 'loading';
+    liveStatusEl.textContent = cell.message ?? 'Starting';
+    liveStatusEl.title = cell.message ?? '';
+    return;
+  }
   if (!st?.start.live) {
     liveStatusEl.hidden = true;
     return;
@@ -3497,6 +3618,7 @@ tbDataEl?.addEventListener('click', () => vscode.postMessage({ type: 'selectData
 tbTimeframeEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeSplitPopup();
   if (tfPopupEl?.hidden === false) closeTimeframePopup();
   else openTimeframePopup();
 });
@@ -3504,6 +3626,7 @@ tbTimeframeEl?.addEventListener('click', (e) => {
 tbLayersEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeSplitPopup();
   closeCandlePopup();
   closeTimeframePopup();
   togglePlotsPopup(e.detail === 0);
@@ -3512,6 +3635,7 @@ tbLayersEl?.addEventListener('click', (e) => {
 tbCandleEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeGotoPopup();
+  closeSplitPopup();
   closeTimeframePopup();
   if (candlePopupEl?.hidden === false) closeCandlePopup();
   else openCandlePopup();
@@ -3837,6 +3961,7 @@ function repositionToolbarPopups(): void {
   if (tfPopupEl && !tfPopupEl.hidden) positionTimeframePopup();
   if (breakpointsPopupEl && !breakpointsPopupEl.hidden) positionBreakpointsPopup();
   if (gotoPopupEl && !gotoPopupEl.hidden) positionGotoPopup();
+  positionSplitPopup();
 }
 
 window.addEventListener('resize', repositionToolbarPopups);
@@ -3881,6 +4006,7 @@ function closeGotoPopup(): void {
 tbGotoEl?.addEventListener('click', (e) => {
   e.stopPropagation();
   closeTimeframePopup();
+  closeSplitPopup();
   if (gotoPopupEl?.hidden) openGotoPopup();
   else closeGotoPopup();
 });
@@ -3924,10 +4050,30 @@ tbCsvTradesEl?.addEventListener('click', () =>
 );
 
 initToolbarOverflow(repositionToolbarPopups);
+initDashboardCell({
+  post: (message) => vscode.postMessage(message),
+  closeOtherPopups: () => {
+    closeGotoPopup();
+    closePlotsPopup();
+    closeCandlePopup();
+    closeTimeframePopup();
+    closeBreakpointsPopup();
+  },
+  onChange: () => {
+    if (state && plotsPopupEl && !plotsPopupEl.hidden) {
+      renderPlotList(state);
+      positionPlotsPopup();
+    }
+    syncLiveStatus();
+  },
+});
 
 window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   const msg = event.data;
   switch (msg.type) {
+    case 'cell':
+      setCell(msg.cell);
+      break;
     case 'reset':
       dataWindowHover = undefined;
       dataWindowHeld = undefined;

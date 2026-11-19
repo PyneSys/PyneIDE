@@ -25,7 +25,7 @@ import {
 import type { ChartManager } from '../chart/chartPanel';
 import { chartHtml } from '../chart/chartHtml';
 import { ChartStream } from '../chart/chartStream';
-import type { ChartInMessage, ChartOutMessage } from '../chart/messages';
+import type { ChartCell, ChartCellAction, ChartCellScript, ChartInMessage, ChartOutMessage } from '../chart/messages';
 import type { CompileService } from '../compile/service';
 import { BridgeRun, type BridgeEvent, type DownloadEvent } from '../run/bridgeClient';
 import { askTimeframe, offerLiveCoreUpdate, LIVE_UNSUPPORTED, type LiveChartEnv, type PickLiveTarget } from '../run/liveChartService';
@@ -37,7 +37,6 @@ import type {
   DashboardOutMessage,
   DashboardView,
   DashboardViewChart,
-  DashboardViewScript,
 } from './messages';
 import {
   chartKeyFor,
@@ -150,8 +149,17 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
         if (!e.affectsConfiguration('pyneide.chart')) return;
         for (const session of this.sessions) session.pushChartSettings();
       }),
+      vscode.commands.registerCommand('pyneide.dashboardAddChart', () =>
+        this.activeSession()?.addChart(undefined, undefined).catch(reportEditError)),
+      vscode.commands.registerCommand('pyneide.dashboardOpenText', () =>
+        this.activeSession()?.openText()),
       { dispose: () => { for (const session of this.sessions) session.dispose(); } }
     );
+  }
+
+  /** The dashboard of the active editor tab. */
+  private activeSession(): DashboardSession | undefined {
+    return [...this.sessions].find((session) => session.active);
   }
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
@@ -164,12 +172,12 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
   }
 }
 
-/** A dashboard's name from its file name: `btc-scalping.toml` -> `btc-scalping`. */
 /** Show why a dashboard edit was not made. */
 function reportEditError(err: unknown): void {
   void vscode.window.showWarningMessage(`PyneIDE: ${err instanceof Error ? err.message : String(err)}`);
 }
 
+/** A dashboard's name from its file name: `btc-scalping.toml` -> `btc-scalping`. */
 function fileStem(uri: vscode.Uri): string {
   return path.basename(uri.fsPath).replace(/\.toml$/i, '');
 }
@@ -179,18 +187,18 @@ function chartSignature(chart: DashboardChart): string {
   return JSON.stringify({
     provider: chart.provider,
     history: chart.history,
-    scripts: chart.scripts.filter((s) => s.enabled !== false).map((s) => ({
+    scripts: chart.scripts.map((s) => ({
       id: s.id, path: s.path, inputs: s.inputs ?? {}, settings: s.settings ?? {},
       tradeOnHistory: s.tradeOnHistory ?? true,
     })),
   });
 }
 
-function overrideLines(script: DashboardScript): string[] {
-  const lines: string[] = [];
-  for (const [name, value] of Object.entries(script.inputs ?? {})) lines.push(`${name} = ${JSON.stringify(value)}`);
-  for (const [name, value] of Object.entries(script.settings ?? {})) lines.push(`${name} = ${JSON.stringify(value)}`);
-  return lines;
+/** The inputs a dashboard script entry sets, short: `length 20, source close`. */
+function inputSummary(script: DashboardScript): string {
+  return Object.entries(script.inputs ?? {})
+    .map(([name, value]) => `${name} ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join(', ');
 }
 
 class DashboardSession {
@@ -225,6 +233,15 @@ class DashboardSession {
       })
     );
     this.sync();
+  }
+
+  /** The dashboard's tab is the active editor. */
+  get active(): boolean {
+    return !this.disposed && this.panel.active;
+  }
+
+  openText(): Thenable<unknown> {
+    return vscode.commands.executeCommand('vscode.openWith', this.document.uri, 'default');
   }
 
   dispose(): void {
@@ -294,14 +311,57 @@ class DashboardSession {
   postView(): void {
     if (!this.ready || this.disposed) return;
     const view: DashboardView = this.error !== undefined || !this.dashboard
-      ? { name: fileStem(this.document.uri), layout: undefined, charts: {}, canAddChart: false, error: this.error }
+      ? { name: fileStem(this.document.uri), layout: undefined, charts: {}, error: this.error }
       : {
           name: this.name,
           layout: this.dashboard.layout,
           charts: Object.fromEntries([...this.charts].map(([key, run]) => [key, run.view()])),
-          canAddChart: Object.keys(this.dashboard.charts).length < MAX_CHARTS,
         };
     void this.panel.webview.postMessage({ type: 'view', view } satisfies DashboardInMessage);
+    for (const run of this.charts.values()) run.postCell();
+  }
+
+  /** Why no chart can join the dashboard, when none can. */
+  addChartBlocked(): string | undefined {
+    return this.dashboard && Object.keys(this.dashboard.charts).length >= MAX_CHARTS
+      ? `A dashboard holds at most ${MAX_CHARTS} charts.`
+      : undefined;
+  }
+
+  /** A chart's toolbar or Layers menu asked for a cell action. */
+  async onCellAction(key: string, action: ChartCellAction): Promise<void> {
+    switch (action.kind) {
+      case 'addScript':
+        await this.addScript(key);
+        break;
+      case 'editScript':
+        await this.editScript(key, action.id);
+        break;
+      case 'removeScript':
+        await this.edit((d) => {
+          const chart = d.charts[key];
+          if (!chart) return undefined;
+          chart.scripts = chart.scripts.filter((s) => s.id !== action.id);
+          return d;
+        });
+        break;
+      case 'addChart':
+        await this.addChart(key, action.direction);
+        break;
+      case 'openFullChart':
+        this.charts.get(key)?.openMirror();
+        break;
+      case 'removeChart':
+        await this.edit((d) => {
+          delete d.charts[key];
+          d.layout = removeFromLayout(d.layout, key);
+          return d;
+        });
+        break;
+      case 'restart':
+        void this.charts.get(key)?.start();
+        break;
+    }
   }
 
   postChart(key: string, message: ChartInMessage): void {
@@ -345,50 +405,21 @@ class DashboardSession {
         this.charts.get(msg.key)?.onFrameMessage(msg.message);
         break;
       case 'openText':
-        await vscode.commands.executeCommand('vscode.openWith', this.document.uri, 'default');
+        await this.openText();
         break;
       case 'addChart':
-        await this.addChart(msg.beside, msg.direction);
-        break;
-      case 'removeChart':
-        await this.edit((d) => {
-          delete d.charts[msg.key];
-          d.layout = removeFromLayout(d.layout, msg.key);
-          return d;
-        });
+        await this.addChart(undefined, undefined);
         break;
       case 'resize':
         await this.edit((d) => ({ ...d, layout: resizeSplit(d.layout, msg.path, msg.sizes) }));
         break;
-      case 'addScript':
-        await this.addScript(msg.key);
-        break;
-      case 'removeScript':
-        await this.edit((d) => {
-          const chart = d.charts[msg.key];
-          if (!chart) return undefined;
-          chart.scripts = chart.scripts.filter((s) => s.id !== msg.id);
-          return d;
-        });
-        break;
-      case 'toggleScript':
-        await this.toggleScript(msg.key, msg.id);
-        break;
-      case 'editScript':
-        await this.editScript(msg.key, msg.id);
-        break;
-      case 'restartChart': {
-        const run = this.charts.get(msg.key);
-        if (run) void run.start();
-        break;
-      }
-      case 'openFullChart':
-        this.charts.get(msg.key)?.openMirror();
+      case 'restartChart':
+        void this.charts.get(msg.key)?.start();
         break;
     }
   }
 
-  private async addChart(beside: string | undefined, direction: SplitDirection | undefined): Promise<void> {
+  async addChart(beside: string | undefined, direction: SplitDirection | undefined): Promise<void> {
     if (!this.dashboard) return;
     if (Object.keys(this.dashboard.charts).length >= MAX_CHARTS) {
       void vscode.window.showWarningMessage(`PyneIDE: a dashboard holds at most ${MAX_CHARTS} charts.`);
@@ -454,30 +485,6 @@ class DashboardSession {
     });
   }
 
-  private async toggleScript(key: string, id: string): Promise<void> {
-    const chart = this.dashboard?.charts[key];
-    const script = chart?.scripts.find((s) => s.id === id);
-    if (!chart || !script) return;
-    if (script.enabled === false) {
-      const env = await this.environment();
-      if (!env) return;
-      const others = chart.scripts.filter((s) => s.id !== id && s.enabled !== false);
-      const kind = scriptKindOf(path.resolve(env.workdir, script.path));
-      const blocked = kind && scriptLimitReason(await this.kinds(env.workdir, { ...chart, scripts: others }), kind);
-      if (blocked) {
-        void vscode.window.showWarningMessage(`PyneIDE: ${blocked}`);
-        return;
-      }
-    }
-    await this.edit((d) => {
-      const s = d.charts[key]?.scripts.find((x) => x.id === id);
-      if (!s) return undefined;
-      if (s.enabled === false) delete s.enabled;
-      else s.enabled = false;
-      return d;
-    });
-  }
-
   private async editScript(key: string, id: string): Promise<void> {
     const script = this.dashboard?.charts[key]?.scripts.find((s) => s.id === id);
     const env = await this.environment();
@@ -526,8 +533,10 @@ class ChartRun {
   private runs: BridgeRun[] = [];
   private state: DashboardChartState = 'starting';
   private message: string | undefined;
-  private readonly scriptStates = new Map<string, { state: DashboardViewScript['state']; message?: string }>();
+  private readonly scriptStates = new Map<string, { state: ChartCellScript['state']; message?: string }>();
   private readonly scriptKinds = new Map<string, ScriptKind>();
+  /** Each script's title, from its run's start. */
+  private readonly scriptTitles = new Map<string, string>();
   /** The chart tab mirroring this chart, while one is open. */
   private mirror: string | undefined;
 
@@ -539,29 +548,42 @@ class ChartRun {
   ) {}
 
   view(): DashboardViewChart {
-    const at = this.config.provider.lastIndexOf('@');
-    const symbolPart = at >= 0 ? this.config.provider.slice(0, at) : this.config.provider;
-    const parts = symbolPart.split(':');
+    return { state: this.state, message: this.message };
+  }
+
+  /** The script's name in the Layers menu: its title and the inputs the
+   * dashboard sets, or its id when another entry of the chart has the same
+   * title and no inputs tell them apart. */
+  private scriptLabel(script: DashboardScript): string {
+    const title = (s: DashboardScript): string =>
+      this.scriptTitles.get(s.id) ?? path.basename(s.path).replace(/\.[^.]+$/, '');
+    const inputs = inputSummary(script);
+    if (inputs) return `${title(script)} · ${inputs}`;
+    const twin = this.config.scripts.some((s) => s.id !== script.id && title(s) === title(script));
+    return twin ? `${title(script)} · ${script.id}` : title(script);
+  }
+
+  /** What the chart's toolbar and Layers menu show of the cell. */
+  cell(): ChartCell {
     const kinds = this.config.scripts
-      .filter((s) => s.enabled !== false)
       .map((s) => this.scriptKinds.get(s.id))
       .filter((k): k is ScriptKind => k !== undefined);
+    const indicatorBlocked = scriptLimitReason(kinds, 'indicator');
+    const strategyBlocked = scriptLimitReason(kinds, 'strategy');
     return {
-      symbol: parts.length > 1 ? parts.slice(1).join(':') : symbolPart,
-      timeframe: providerTimeframe(this.config.provider) ?? '',
-      provider: this.config.provider,
       state: this.state,
       message: this.message,
       scripts: this.config.scripts.map((s) => {
-        const st = s.enabled === false ? { state: 'off' as const } : this.scriptStates.get(s.id) ?? { state: 'loading' as const };
-        return {
-          id: s.id, path: s.path, kind: this.scriptKinds.get(s.id), state: st.state,
-          message: st.message, overrides: overrideLines(s),
-        };
+        const st = this.scriptStates.get(s.id) ?? { state: 'loading' as const };
+        return { id: s.id, label: this.scriptLabel(s), state: st.state, message: st.message };
       }),
-      canAddScript: scriptLimitReason(kinds, 'indicator') === undefined ||
-        scriptLimitReason(kinds, 'strategy') === undefined,
+      addScriptBlocked: indicatorBlocked && strategyBlocked ? 'This chart runs as many scripts as it can.' : undefined,
+      addChartBlocked: this.session.addChartBlocked(),
     };
+  }
+
+  postCell(): void {
+    if (this.frameReady) this.session.postChart(this.key, { type: 'cell', cell: this.cell() });
   }
 
   /** Open (or reveal) a chart tab that mirrors this chart: the whole chart page,
@@ -603,7 +625,11 @@ class ChartRun {
       case 'ready':
         this.frameReady = true;
         this.pushChartSettings();
+        this.postCell();
         for (const message of this.stream.replay()) this.session.postChart(this.key, message);
+        break;
+      case 'cell':
+        this.session.onCellAction(this.key, msg.action).catch(reportEditError);
         break;
       case 'selectTimeframe':
         this.changeTimeframe(msg.timeframe).catch(reportEditError);
@@ -666,7 +692,7 @@ class ChartRun {
     this.session.postView();
   }
 
-  private setScript(id: string, state: DashboardViewScript['state'], message?: string): void {
+  private setScript(id: string, state: ChartCellScript['state'], message?: string): void {
     this.scriptStates.set(id, { state, message });
     this.session.postView();
   }
@@ -706,7 +732,7 @@ class ChartRun {
       return;
     }
 
-    const scripts = config.scripts.filter((s) => s.enabled !== false);
+    const scripts = config.scripts;
     for (const s of scripts) {
       const kind = scriptKindOf(path.resolve(env.workdir, s.path));
       if (kind) this.scriptKinds.set(s.id, kind);
@@ -840,6 +866,8 @@ class ChartRun {
           this.setScript(script.id, 'error', error);
         } else if (event.e === 'start') {
           this.scriptKinds.set(script.id, event.scriptType === 'strategy' ? 'strategy' : 'indicator');
+          const title = event.scriptShortTitle?.trim() || event.scriptTitle?.trim();
+          if (title) this.scriptTitles.set(script.id, title);
         } else if (event.e === 'live') {
           this.setScript(script.id, 'running');
         }
@@ -898,19 +926,6 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
     font-size: 12px; color: var(--vscode-foreground); background: var(--vscode-editor-background);
   }
   button { font: inherit; color: inherit; }
-  #dash-bar {
-    flex: 0 0 34px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
-    border-bottom: 1px solid var(--vscode-panel-border, #444); user-select: none;
-  }
-  #dash-title { font-weight: 600; font-size: 13px; }
-  #dash-status { color: var(--vscode-descriptionForeground); }
-  #dash-bar .spacer { flex: 1; }
-  .bar-button {
-    height: 24px; padding: 0 10px; border: 0; border-radius: 4px; cursor: pointer;
-    background: var(--vscode-button-secondaryBackground, #3a3d41);
-    color: var(--vscode-button-secondaryForeground, #fff);
-  }
-  .bar-button:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground, #45494e); }
   button:disabled { opacity: 0.4; cursor: default; }
   .primary {
     height: 28px; padding: 0 14px; border: 0; border-radius: 4px; cursor: pointer;
@@ -922,50 +937,10 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
     position: absolute; display: flex; flex-direction: column; overflow: hidden;
     border: 1px solid var(--vscode-panel-border, #444); box-sizing: border-box;
   }
-  .cell-header {
-    flex: 0 0 26px; display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px;
-    min-width: 0; overflow: hidden; white-space: nowrap; user-select: none;
-    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
-    border-bottom: 1px solid var(--vscode-panel-border, #444);
-  }
-  .cell-state {
-    padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600;
-    background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #fff);
-  }
-  .cell-state.state-live { background: #1b7f3b; color: #fff; }
-  .cell-state.state-error { background: var(--vscode-errorForeground, #f14c4c); color: #fff; }
-  .cell-state.state-reconnecting { background: #b07d10; color: #fff; }
-  .cell-chips {
-    display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0;
-    overflow-x: auto; scrollbar-width: none;
-  }
-  .cell-chips::-webkit-scrollbar { display: none; }
-  .chip, .add-script, .cell-state { flex: none; }
-  .cell-spacer { flex: 1; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 2px; height: 20px; padding: 0 2px 0 6px;
-    border-radius: 10px; border: 1px solid var(--vscode-panel-border, #555);
-  }
-  .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-  .chip.state-running .chip-dot { background: #2ea043; }
-  .chip.state-error .chip-dot { background: var(--vscode-errorForeground, #f14c4c); }
-  .chip.state-off { opacity: 0.55; }
-  .chip-name { border: 0; background: transparent; cursor: pointer; padding: 0 2px; }
-  .chip-name:hover { text-decoration: underline; }
-  .icon {
-    min-width: 20px; height: 20px; padding: 0 3px; border: 0; border-radius: 4px; cursor: pointer;
-    background: transparent; line-height: 1;
-  }
-  .icon:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,0.31)); }
-  .add-script {
-    height: 20px; padding: 0 8px; border: 1px dashed var(--vscode-panel-border, #555);
-    border-radius: 10px; background: transparent; cursor: pointer;
-  }
-  .add-script:hover:not(:disabled) { border-style: solid; }
-  .cell-actions { display: flex; gap: 1px; flex: none; }
   .cell-frame { flex: 1; min-height: 0; width: 100%; border: 0; display: block; }
+  /* Below the chart's 36px toolbar */
   .cell-overlay {
-    position: absolute; inset: 26px 0 0 0; display: flex; flex-direction: column; gap: 12px;
+    position: absolute; inset: 36px 0 0 0; display: flex; flex-direction: column; gap: 12px;
     align-items: center; justify-content: center; padding: 20px; text-align: center;
     background: var(--vscode-editor-background);
   }
@@ -992,23 +967,15 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
 </style>
 </head>
 <body>
-<div id="dash-bar">
-  <span id="dash-title"></span>
-  <span id="dash-status"></span>
-  <span class="spacer"></span>
-  <button id="dash-add-chart" class="bar-button">+ Chart</button>
-  <button id="dash-open-text" class="bar-button" title="Open the dashboard file as text">Edit as Text</button>
-</div>
 <div id="dash-area">
   <div id="dash-empty" class="placeholder" hidden>
-    <h2>This dashboard has no charts yet</h2>
-    <p>Add a live chart, then put your indicators and strategies on it. Split the dashboard to watch several symbols and timeframes at once.</p>
     <button id="dash-empty-add" class="primary">Add chart</button>
+    <p>Pick a live symbol to start.</p>
   </div>
   <div id="dash-error" class="placeholder" hidden>
     <h2>This file is not a valid dashboard</h2>
     <div class="error-message"></div>
-    <button id="dash-error-open" class="primary">Edit as Text</button>
+    <button id="dash-error-open" class="primary">Open as text</button>
   </div>
 </div>
 <script id="chart-frame-html" type="application/json">${frameJson}</script>

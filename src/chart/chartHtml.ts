@@ -24,6 +24,58 @@ function scriptTag(script: ChartScript, nonce: string | undefined): string {
   return `<script nonce="${nonce ?? ''}">${code}</script>`;
 }
 
+/** The dashboard cell's "Add script", after the symbol and the timeframe. */
+const ADD_SCRIPT_GROUP = `  <div class="toolbar-group">
+    <button id="tb-add-script" title="Add an indicator or a strategy to this chart">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M8.5 15.5c1.2 0 1.8-.8 2-2l1.3-7.5c.2-1.2.8-2 2-2M7.5 8.5h6"></path>
+      </svg>
+      <span>Add script</span>
+    </button>
+  </div>`;
+
+/** The dashboard cell's own actions, at the right end of the toolbar. */
+const CELL_GROUP = `  <div class="toolbar-group">
+    <button id="tb-split" class="icon-button" title="Add a chart beside this one"
+            aria-label="Add a chart beside this one" aria-pressed="false" aria-haspopup="menu">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="2.5" y="3.5" width="15" height="13" rx="1.5"></rect>
+        <path d="M10 3.5v13"></path>
+      </svg>
+    </button>
+    <button id="tb-full-chart" class="icon-button"
+            title="Open in a chart tab: trades, performance and stats"
+            aria-label="Open in a chart tab">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M11.5 3.5h5v5M16.5 3.5l-6 6M8.5 16.5h-5v-5M3.5 16.5l6-6"></path>
+      </svg>
+    </button>
+    <button id="tb-remove-chart" class="icon-button" title="Remove this chart from the dashboard"
+            aria-label="Remove this chart">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M5 5l10 10M15 5 5 15"></path>
+      </svg>
+    </button>
+  </div>`;
+
+/** A chart tab's output files. */
+const CSV_GROUP = `  <div class="toolbar-group">
+    <button id="tb-csv-plot" class="icon-button" title="Open plot output CSV"
+            aria-label="Open plot output CSV" disabled>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M3 15.5h14M4.5 13l3.4-3.5 2.7 2 4.9-5"></path>
+        <path d="M13 6.5h2.5V9"></path>
+      </svg>
+    </button>
+    <button id="tb-csv-trades" class="icon-button" title="Open trades output CSV"
+            aria-label="Open trades output CSV" disabled hidden>
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="3" y="3.5" width="14" height="13" rx="1.5"></rect>
+        <path d="M3 8h14M8 3.5v13M12.5 8v8.5"></path>
+      </svg>
+    </button>
+  </div>`;
+
 export function chartHtml(opts: ChartHtmlOptions): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -207,6 +259,42 @@ export function chartHtml(opts: ChartHtmlOptions): string {
   #plots-popup .plot-section {
     padding: 3px 6px 1px; font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--vscode-descriptionForeground);
+  }
+  #plots-popup .plot-row.in-script { padding-left: 14px; }
+  #plots-popup .script-group:not(:first-child) {
+    margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--vscode-panel-border, #444);
+  }
+  #plots-popup .script-head { display: flex; align-items: center; gap: 2px; }
+  #plots-popup .script-name {
+    flex: 1 1 auto; min-width: 0; padding: 3px 6px; border: 0; border-radius: 3px;
+    background: transparent; color: var(--vscode-foreground); font: inherit; font-weight: 600;
+    text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  }
+  #plots-popup .script-name:disabled { cursor: default; }
+  #plots-popup .script-name.off { opacity: 0.5; text-decoration: line-through; }
+  #plots-popup .script-name:hover:not(:disabled),
+  #plots-popup .script-action:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #plots-popup .script-action {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border: 0; border-radius: 3px; cursor: pointer;
+    background: transparent; color: var(--vscode-descriptionForeground);
+  }
+  #plots-popup .script-action:hover { color: var(--vscode-foreground); }
+  #plots-popup .script-action svg {
+    width: 15px; height: 15px; fill: none; stroke: currentColor;
+    stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #plots-popup .script-status {
+    display: flex; align-items: center; gap: 8px; padding: 1px 6px 3px 14px;
+    color: var(--vscode-descriptionForeground);
+  }
+  #plots-popup .state-error .script-status { color: var(--vscode-errorForeground, #f14c4c); }
+  #plots-popup .script-status span { min-width: 0; overflow-wrap: anywhere; }
+  #plots-popup .script-status button {
+    flex: none; padding: 1px 8px; border-radius: 3px; cursor: pointer; font: inherit;
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    background: var(--vscode-button-secondaryBackground, transparent);
+    border: 1px solid var(--vscode-panel-border, #444);
   }
   #candle-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
@@ -619,10 +707,55 @@ export function chartHtml(opts: ChartHtmlOptions): string {
   .neg { color: var(--pyne-down, var(--vscode-charts-red, #ef5350)); }
   .muted { color: var(--vscode-descriptionForeground); padding: 8px; display: block; }
   /* A chart inside a dashboard cell: the dashboard owns the run, so the
-     bottom panel, the CSV buttons and the chart breakpoints have no use here */
-  body.embedded #bottom, body.embedded #panel-splitter,
-  body.embedded #tb-csv-plot, body.embedded #tb-csv-trades,
+     bottom panel, the chart breakpoints and the script's name have no use here
+     (the Layers menu names the scripts) */
+  /* A cell is narrower than a chart tab: the symbol may take more of it, its
+     tools go to the overflow menu first */
+  body.embedded #toolbar .symbol-button { max-width: min(280px, 55vw); }
+  body.embedded #bottom, body.embedded #panel-splitter, body.embedded #script-legend,
   body.embedded #tb-breakpoints, body.embedded #breakpoint-pick { display: none !important; }
+  #toolbar #tb-add-script {
+    display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px 0 6px;
+    border-radius: 7px; font-size: 12px; white-space: nowrap;
+  }
+  #toolbar #tb-add-script svg {
+    width: 16px; height: 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #toolbar #tb-layers.has-error .count-badge {
+    color: var(--vscode-editor-background, #1e1e1e);
+    background: var(--vscode-errorForeground, #f14c4c);
+  }
+  /* Several charts side by side would repeat a full toolbar each: a cell
+     shows its symbol, timeframe, feed state and "Add script", and the other
+     tools while the pointer is over it or the keyboard is in it. The buttons
+     only fade, so the toolbar keeps its layout. */
+  body.embedded #toolbar .icon-button { transition: opacity 120ms ease-out; }
+  body.embedded:not(:hover):not(:focus-within) #toolbar .icon-button:not(.active):not(.has-error) {
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.embedded #toolbar .icon-button { transition: none; }
+  }
+  #split-popup {
+    position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    box-sizing: border-box; padding: 4px; font-size: 11px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #split-popup[hidden] { display: none; }
+  #split-popup button {
+    display: flex; align-items: center; gap: 7px; padding: 3px 8px 3px 6px; border: 0;
+    border-radius: 3px; background: transparent; color: var(--vscode-foreground);
+    font: inherit; text-align: left; cursor: pointer; white-space: nowrap;
+  }
+  #split-popup button:hover:not(:disabled) { background: var(--vscode-list-hoverBackground, #333); }
+  #split-popup button:disabled { opacity: 0.4; cursor: default; }
+  #split-popup svg {
+    width: 16px; height: 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round;
+  }
 </style>
 </head>
 <body${opts.embedded ? ' class="embedded"' : ''}>
@@ -644,6 +777,7 @@ export function chartHtml(opts: ChartHtmlOptions): string {
     <button id="tb-timeframe" title="Timeframe of the live chart" aria-label="Timeframe"
             aria-pressed="false" hidden></button>
   </div>
+${opts.embedded ? ADD_SCRIPT_GROUP : ''}
   <div class="toolbar-group">
     <button id="tb-layers" class="icon-button" title="Layers and indicators"
             aria-label="Layers and indicators" aria-pressed="false">
@@ -707,22 +841,7 @@ export function chartHtml(opts: ChartHtmlOptions): string {
     <span id="live-status" role="status" hidden></span>
   </div>
   <span class="spacer"></span>
-  <div class="toolbar-group">
-    <button id="tb-csv-plot" class="icon-button" title="Open plot output CSV"
-            aria-label="Open plot output CSV" disabled>
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M3 15.5h14M4.5 13l3.4-3.5 2.7 2 4.9-5"></path>
-        <path d="M13 6.5h2.5V9"></path>
-      </svg>
-    </button>
-    <button id="tb-csv-trades" class="icon-button" title="Open trades output CSV"
-            aria-label="Open trades output CSV" disabled hidden>
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <rect x="3" y="3.5" width="14" height="13" rx="1.5"></rect>
-        <path d="M3 8h14M8 3.5v13M12.5 8v8.5"></path>
-      </svg>
-    </button>
-  </div>
+${opts.embedded ? CELL_GROUP : CSV_GROUP}
 </div>
   <button id="tb-more" class="icon-button" title="More chart actions" aria-label="More chart actions"
           aria-controls="toolbar-overflow" aria-expanded="false" hidden>

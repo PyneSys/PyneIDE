@@ -38,11 +38,13 @@ export function initToolbarOverflow(onLayout: () => void): void {
     menu.appendChild(entry);
     return { control, button, entry };
   });
-  // Keep the instrument, timeframe and status visible for as long as possible.
+  // Keep the instrument, timeframe, a dashboard cell's "Add script" and the
+  // status visible for as long as possible.
+  const kept = ['tb-data', 'tb-timeframe', 'tb-add-script'];
   const hideOrder = [
-    ...items.filter(({ button }) => button && !['tb-data', 'tb-timeframe'].includes(button.id)).reverse(),
+    ...items.filter(({ button }) => button && !kept.includes(button.id)).reverse(),
     ...items.filter(({ button }) => !button).reverse(),
-    ...items.filter(({ control }) => ['tb-data', 'tb-timeframe'].includes(control.id)).reverse(),
+    ...items.filter(({ control }) => kept.includes(control.id)).reverse(),
   ];
 
   const layout = (): void => {

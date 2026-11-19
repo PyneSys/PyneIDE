@@ -8,6 +8,7 @@ const bundled = await build({
     contents: [
       "export * from './src/dashboard/model';",
       "export { ChartComposer, SLOT_WAIT_MS, TICK_COALESCE_MS } from './src/dashboard/composer';",
+      "export { chartHtml } from './src/chart/chartHtml';",
     ].join('\n'),
     resolveDir: process.cwd(),
     loader: 'ts',
@@ -38,7 +39,6 @@ inputs = { length = 9 }
 [[charts.btc_1.scripts]]
 id = "ema_slow"
 path = "scripts/ema.py"
-enabled = false
 inputs = { length = 21 }
 
 [charts.eth_5]
@@ -62,7 +62,7 @@ test('a dashboard file parses into charts, scripts and a layout', () => {
   assert.equal(d.charts.btc_60.history, '2026-11-01');
   assert.deepEqual(plain(d.charts.btc_1.scripts), [
     { id: 'ema_fast', path: 'scripts/ema.py', inputs: { length: 9 } },
-    { id: 'ema_slow', path: 'scripts/ema.py', inputs: { length: 21 }, enabled: false },
+    { id: 'ema_slow', path: 'scripts/ema.py', inputs: { length: 21 } },
   ]);
 });
 
@@ -384,4 +384,18 @@ test('a slot that fails while loading is left out, the chart still goes live', (
   assert.equal(out[0].scriptTitle, 'b');
   assert.deepEqual(out.find((ev) => ev.e === 'bars').d, [row(0, 1, [3])]);
   assert.equal(c.isLive(), true);
+});
+
+test('a dashboard chart carries the cell controls on its toolbar, a chart tab its output files', () => {
+  const ids = (html) => new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
+  const cell = ids(m.chartHtml({ cspSource: 'x', scripts: [], embedded: true }));
+  const tab = ids(m.chartHtml({ cspSource: 'x', scripts: [] }));
+  for (const id of ['tb-add-script', 'tb-split', 'tb-full-chart', 'tb-remove-chart']) {
+    assert.ok(cell.has(id), `${id} in a dashboard cell`);
+    assert.ok(!tab.has(id), `${id} not in a chart tab`);
+  }
+  for (const id of ['tb-csv-plot', 'tb-csv-trades']) {
+    assert.ok(tab.has(id), `${id} in a chart tab`);
+    assert.ok(!cell.has(id), `${id} not in a dashboard cell`);
+  }
 });

@@ -11,7 +11,6 @@ import type {
   DashboardOutMessage,
   DashboardView,
   DashboardViewChart,
-  DashboardViewScript,
 } from '../messages';
 import type { LayoutNode, SplitDirection } from '../model';
 
@@ -20,10 +19,6 @@ declare function acquireVsCodeApi(): { postMessage(message: DashboardOutMessage)
 const vscode = acquireVsCodeApi();
 const chartHtml = JSON.parse(document.getElementById('chart-frame-html')?.textContent ?? '""') as string;
 
-const titleEl = document.getElementById('dash-title') as HTMLElement;
-const addChartEl = document.getElementById('dash-add-chart') as HTMLButtonElement;
-const openTextEl = document.getElementById('dash-open-text') as HTMLButtonElement;
-const statusEl = document.getElementById('dash-status') as HTMLElement;
 const areaEl = document.getElementById('dash-area') as HTMLDivElement;
 const emptyEl = document.getElementById('dash-empty') as HTMLDivElement;
 const errorEl = document.getElementById('dash-error') as HTMLDivElement;
@@ -33,7 +28,6 @@ const SPLITTER_PX = 4;
 
 interface Cell {
   root: HTMLDivElement;
-  header: HTMLDivElement;
   frame: HTMLIFrameElement;
   overlay: HTMLDivElement;
 }
@@ -45,8 +39,6 @@ function post(message: DashboardOutMessage): void {
   vscode.postMessage(message);
 }
 
-addChartEl.addEventListener('click', () => post({ type: 'addChart' }));
-openTextEl.addEventListener('click', () => post({ type: 'openText' }));
 document.getElementById('dash-empty-add')?.addEventListener('click', () => post({ type: 'addChart' }));
 document.getElementById('dash-error-open')?.addEventListener('click', () => post({ type: 'openText' }));
 
@@ -59,18 +51,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-function iconButton(label: string, glyph: string, onClick: () => void, disabled = false): HTMLButtonElement {
-  const button = el('button', 'icon', glyph);
-  button.title = label;
-  button.setAttribute('aria-label', label);
-  button.disabled = disabled;
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    onClick();
-  });
-  return button;
 }
 
 // --- Layout geometry ---------------------------------------------------------
@@ -182,89 +162,28 @@ function withSizes(node: LayoutNode, path: number[], sizes: number[]): LayoutNod
 
 function createCell(key: string): Cell {
   const root = el('div', 'cell');
-  const header = el('div', 'cell-header');
   const frame = el('iframe', 'cell-frame');
   frame.dataset.chart = key;
   frame.title = key;
   frame.srcdoc = chartHtml;
   const overlay = el('div', 'cell-overlay');
   overlay.hidden = true;
-  root.append(header, frame, overlay);
+  root.append(frame, overlay);
   areaEl.appendChild(root);
-  const cell = { root, header, frame, overlay };
+  const cell = { root, frame, overlay };
   cells.set(key, cell);
   return cell;
 }
 
-const STATE_LABEL: Record<DashboardViewChart['state'], string> = {
-  starting: 'Starting',
-  loading: 'Loading',
-  live: 'LIVE',
-  reconnecting: 'Reconnecting',
-  error: 'Error',
-  stopped: 'Stopped',
-};
-
-function scriptChip(key: string, script: DashboardViewScript): HTMLElement {
-  const chip = el('span', `chip state-${script.state}`);
-  const name = el('button', 'chip-name', script.id);
-  const lines = [script.path, ...script.overrides];
-  if (script.message) lines.push('', script.message);
-  lines.push('', 'Click to edit its inputs');
-  name.title = lines.join('\n');
-  name.addEventListener('click', () => post({ type: 'editScript', key, id: script.id }));
-  const toggle = iconButton(
-    script.state === 'off' ? `Run ${script.id}` : `Pause ${script.id}`,
-    script.state === 'off' ? '▶' : '⏸',
-    () => post({ type: 'toggleScript', key, id: script.id })
-  );
-  const remove = iconButton(`Remove ${script.id}`, '×', () => post({ type: 'removeScript', key, id: script.id }));
-  chip.append(el('span', 'chip-dot'), name, toggle, remove);
-  return chip;
-}
-
-function renderHeader(key: string, cell: Cell, chart: DashboardViewChart): void {
-  const header = cell.header;
-  header.replaceChildren();
-  // The chart's own toolbar names the symbol and shows the live state: the
-  // header only says what the toolbar cannot (starting, downloading, errors)
-  header.title = `${chart.symbol} · ${chart.timeframe}\n${chart.provider}`;
-  if (chart.state !== 'live') {
-    const badge = el('span', `cell-state state-${chart.state}`,
-      (chart.state === 'loading' || chart.state === 'starting') && chart.message
-        ? chart.message : STATE_LABEL[chart.state]);
-    if (chart.message) badge.title = chart.message;
-    header.appendChild(badge);
-  }
-  const chips = el('span', 'cell-chips');
-  for (const script of chart.scripts) chips.appendChild(scriptChip(key, script));
-  chips.addEventListener('wheel', (event) => {
-    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) chips.scrollLeft += event.deltaY;
-  }, { passive: true });
-  const addScript = el('button', 'add-script', '+ Script');
-  addScript.disabled = !chart.canAddScript;
-  addScript.title = chart.canAddScript
-    ? 'Add an indicator or a strategy to this chart'
-    : 'This chart runs as many scripts as it can';
-  addScript.addEventListener('click', () => post({ type: 'addScript', key }));
-  const actions = el('span', 'cell-actions');
-  const canAdd = view?.canAddChart ?? false;
-  actions.append(
-    iconButton('Open in a chart tab: trades, performance and stats', '⤢', () => post({ type: 'openFullChart', key })),
-    iconButton('Restart this chart', '↻', () => post({ type: 'restartChart', key })),
-    iconButton('Add a chart to the right', '◫', () => post({ type: 'addChart', beside: key, direction: 'horizontal' }), !canAdd),
-    iconButton('Add a chart below', '⬓', () => post({ type: 'addChart', beside: key, direction: 'vertical' }), !canAdd),
-    iconButton('Remove this chart', '×', () => post({ type: 'removeChart', key }))
-  );
-  header.append(chips, addScript, el('span', 'cell-spacer'), actions);
-
+/** A stopped chart covers its chart (below the toolbar, which can still
+ * change the symbol or remove the chart) with the reason and a Retry. */
+function renderOverlay(key: string, cell: Cell, chart: DashboardViewChart): void {
   cell.overlay.replaceChildren();
   cell.overlay.hidden = chart.state !== 'error';
-  if (chart.state === 'error') {
-    const retry = el('button', 'primary', 'Retry');
-    retry.addEventListener('click', () => post({ type: 'restartChart', key }));
-    cell.overlay.append(el('div', 'overlay-message', chart.message ?? 'The chart stopped.'), retry);
-  }
+  if (chart.state !== 'error') return;
+  const retry = el('button', 'primary', 'Retry');
+  retry.addEventListener('click', () => post({ type: 'restartChart', key }));
+  cell.overlay.append(el('div', 'overlay-message', chart.message ?? 'The chart stopped.'), retry);
 }
 
 function render(layout: LayoutNode | undefined): void {
@@ -301,32 +220,17 @@ function render(layout: LayoutNode | undefined): void {
   }
 }
 
-function summary(v: DashboardView): string {
-  const charts = Object.values(v.charts);
-  const live = charts.filter((c) => c.state === 'live').length;
-  const errors = charts.filter((c) => c.state === 'error').length +
-    charts.reduce((n, c) => n + c.scripts.filter((s) => s.state === 'error').length, 0);
-  const parts = [`${charts.length} chart${charts.length === 1 ? '' : 's'}`];
-  if (charts.length) parts.push(`${live} live`);
-  if (errors) parts.push(`${errors} error${errors === 1 ? '' : 's'}`);
-  return parts.join(' · ');
-}
-
 function showView(next: DashboardView): void {
   view = next;
-  titleEl.textContent = next.name;
   document.title = next.name;
-  addChartEl.disabled = !next.canAddChart;
-  addChartEl.title = next.canAddChart ? 'Add a chart' : 'This dashboard holds as many charts as it can';
   errorEl.hidden = next.error === undefined;
   const message = errorEl.querySelector('.error-message');
   if (message) message.textContent = next.error ?? '';
   emptyEl.hidden = next.error !== undefined || next.layout !== undefined;
-  statusEl.textContent = next.error === undefined ? summary(next) : '';
   render(next.error === undefined ? next.layout : undefined);
   for (const [key, chart] of Object.entries(next.charts)) {
     const cell = cells.get(key);
-    if (cell) renderHeader(key, cell, chart);
+    if (cell) renderOverlay(key, cell, chart);
   }
 }
 

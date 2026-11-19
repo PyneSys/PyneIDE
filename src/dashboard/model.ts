@@ -63,8 +63,6 @@ export interface DashboardScript {
   settings?: Record<string, unknown>;
   /** A strategy also trades on the history (and carries that position live). */
   tradeOnHistory?: boolean;
-  /** False keeps the entry but does not run it. */
-  enabled?: boolean;
 }
 
 export interface DashboardChart {
@@ -120,12 +118,6 @@ function parseScript(raw: unknown, where: string): DashboardScript {
       throw new DashboardFormatError(`${where}.trade_on_history must be true or false`);
     }
     script.tradeOnHistory = raw.trade_on_history;
-  }
-  if (raw.enabled !== undefined) {
-    if (typeof raw.enabled !== 'boolean') {
-      throw new DashboardFormatError(`${where}.enabled must be true or false`);
-    }
-    script.enabled = raw.enabled;
   }
   return script;
 }
@@ -197,7 +189,6 @@ function layoutToToml(node: LayoutNode): unknown {
 
 function scriptToToml(s: DashboardScript): Record<string, unknown> {
   const out: Record<string, unknown> = { id: s.id, path: s.path };
-  if (s.enabled === false) out.enabled = false;
   if (s.tradeOnHistory !== undefined) out.trade_on_history = s.tradeOnHistory;
   if (s.inputs && Object.keys(s.inputs).length) out.inputs = s.inputs;
   if (s.settings && Object.keys(s.settings).length) out.settings = s.settings;
