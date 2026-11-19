@@ -96,6 +96,10 @@ export class ChartComposer {
   /** Time and bar index of the last merged bar, -1 before the first. */
   private lastTime = -1;
   private lastIndex = -1;
+  /** Time of the base's latest live close, -1 before the first. The history's
+   * last bar can still be forming (the downloaded partial bar): its ticks go
+   * out until this close ends them. */
+  private closedTime = -1;
   /** Base bar times by bar index, while flushing (for the slot offsets). */
   private readonly baseTimes: number[] = [];
   private lastBaseRow?: BarRow;
@@ -137,6 +141,11 @@ export class ChartComposer {
           this.baseDone = true;
           this.baseBacklog.push(event);
           this.tryFlush();
+          return;
+        case 'bars':
+          // A live close while a slot is still loading ends its bar's ticks too
+          if (this.baseLive) for (const row of event.d) this.closedTime = Math.max(this.closedTime, row[0]);
+          this.baseBacklog.push(event);
           return;
         default:
           this.baseBacklog.push(event);
@@ -384,6 +393,7 @@ export class ChartComposer {
   private holdRows(rows: BarRow[]): void {
     const added: number[] = [];
     for (const row of rows) {
+      this.closedTime = Math.max(this.closedTime, row[0]);
       const last = this.held[this.held.length - 1];
       if (last && row[0] < last[0]) continue;
       if (last && row[0] === last[0]) {
@@ -434,7 +444,7 @@ export class ChartComposer {
     }
     if (!merged.length) return;
     this.emit({ e: 'bars', d: merged });
-    if (this.baseTick && this.baseTick.d[0] <= this.lastTime) this.baseTick = undefined;
+    if (this.baseTick && this.baseTick.d[0] <= this.closedTime) this.baseTick = undefined;
     this.releasePending();
   }
 
@@ -487,7 +497,7 @@ export class ChartComposer {
   /** The forming bar: the base's candle with the slots' ticks of the same bar. */
   private emitTick(): void {
     const base = this.baseTick;
-    if (!base || base.d[0] <= this.lastTime || this.held.length) return;
+    if (!base || base.d[0] < this.lastTime || base.d[0] <= this.closedTime || this.held.length) return;
     const time = base.d[0];
     const current = (slot: SlotState): TickEvent | undefined =>
       slot.tick && slot.tick.d[0] === time ? slot.tick : undefined;

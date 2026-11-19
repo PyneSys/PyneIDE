@@ -371,6 +371,43 @@ test('a tick merges the base candle with the slots ticks of the same bar', () =>
   assert.equal(out.filter((ev) => ev.e === 'tick').length, 0);
 });
 
+test('the ticks of a still forming last history bar go out until its live close', () => {
+  const { c, out, fire } = liveComposer();
+  // The history's last bar (time 0) is the downloaded partial bar: the feed goes on forming it
+  c.slot('a', { e: 'tick', ran: true, d: row(0, 1.5, [7]), colors: {},
+    drawings: [{ i: 0, op: 'update', obj: 'table', id: 1, s: { id: 1, cells: [] } }] });
+  c.base({ e: 'tick', ran: true, d: row(0, 1.5, []) });
+  fire(TICK);
+  assert.deepEqual(out.pop(), {
+    e: 'tick', ran: true, d: row(0, 1.5, [7]), colors: {},
+    drawings: [{ i: 0, op: 'update', obj: 'table', id: 8, s: { id: 8, cells: [] } }],
+  });
+  // Its live close ends them: a slot's late tick of the same bar is dropped
+  c.base({ e: 'bars', d: [row(0, 1.6)] });
+  c.slot('a', { e: 'bars', d: [row(0, 1.6, [8])] });
+  c.slot('a', { e: 'tick', ran: true, d: row(0, 1.6, [8]) });
+  c.base({ e: 'tick', ran: true, d: row(0, 1.6, []) });
+  fire(TICK);
+  assert.equal(out.filter((ev) => ev.e === 'tick').length, 0);
+});
+
+test('a live close while a slot is loading ends the ticks of its bar', () => {
+  const { c, out, fire } = composer(['a']);
+  c.base(START());
+  c.base({ e: 'bars', d: [row(0, 1)] });
+  c.base({ e: 'live' });
+  // The base forms and closes the history's partial bar before the slot is live
+  c.base({ e: 'tick', ran: true, d: row(0, 1.5, []) });
+  c.base({ e: 'bars', d: [row(0, 1.6)] });
+  c.slot('a', START());
+  c.slot('a', { e: 'plotKeys', keys: ['x'] });
+  c.slot('a', { e: 'bars', d: [row(0, 1.6, [5])] });
+  c.slot('a', { e: 'live' });
+  fire(TICK);
+  assert.deepEqual(out.filter((ev) => ev.e === 'bars').at(-1).d, [row(0, 1.6, [5])]);
+  assert.equal(out.filter((ev) => ev.e === 'tick').length, 0);
+});
+
 test('a slot that fails while loading is left out, the chart still goes live', () => {
   const { c, out } = composer(['a', 'b']);
   c.base(START());
