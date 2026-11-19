@@ -11,6 +11,7 @@ import type { LivePickRequest } from '../data/symbolBrowserPanel';
 import { parseTimeframe } from '../data/timeframes';
 import { BridgeRun } from './bridgeClient';
 import { LiveDownloadProgress } from './liveDownloadProgress';
+import type { ProviderHubs } from './providerHub';
 import {
   DEFAULT_LIVE_FROM,
   liveChartTitle,
@@ -72,7 +73,8 @@ export class LiveChartService implements vscode.Disposable {
     private readonly chartManager: ChartManager,
     private readonly output: vscode.OutputChannel,
     private readonly resolveEnv: () => Promise<LiveChartEnv | undefined>,
-    private readonly pickLive: PickLiveTarget
+    private readonly pickLive: PickLiveTarget,
+    private readonly hubs: ProviderHubs
   ) {}
 
   register(): void {
@@ -168,6 +170,11 @@ export class LiveChartService implements vscode.Disposable {
       await stopRun(previous);
     }
     if (this.charts.get(chartKey) !== chart || chart.run) return;
+    const hub = await this.hubs.acquire(chart.env.pythonBin, chart.env.workdir);
+    if (this.charts.get(chartKey) !== chart || chart.run) {
+      hub.release();
+      return;
+    }
 
     const target = chart.target;
     this.output.appendLine(`--- Live chart: ${target.provider} (workdir: ${chart.env.workdir})`);
@@ -185,6 +192,7 @@ export class LiveChartService implements vscode.Disposable {
       workdir: chart.env.workdir,
       dataOnly: true,
       live: { provider: target.provider, from: target.from },
+      env: hub.env,
       onEvent: (event) => {
         // A restart may have superseded this run, or its tab was closed: its
         // trailing events must not land on the chart the new one is drawing,
@@ -213,6 +221,7 @@ export class LiveChartService implements vscode.Disposable {
     chart.run = run;
 
     const code = await run.exited;
+    hub.release();
     download.close();
     if (chart.run !== run) return;
     chart.run = undefined;

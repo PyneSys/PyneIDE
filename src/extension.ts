@@ -47,6 +47,7 @@ import {
   type DataActionContext,
 } from './run/dataSelect';
 import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveChartService';
+import { ProviderHubs } from './run/providerHub';
 import { DashboardEditorProvider, isDashboardMirrorKey } from './dashboard/dashboardEditor';
 import { newDashboard } from './dashboard/newDashboard';
 import { RunService } from './run/runService';
@@ -192,13 +193,22 @@ export function activate(context: vscode.ExtensionContext): void {
       },
       request
     );
+  // The live runs of a workdir share its data providers through one hub process
+  const providerHubs = new ProviderHubs((line) => runService.runOutput.appendLine(line));
+  runService.setProviderHubs(providerHubs);
+  context.subscriptions.push(
+    { dispose: () => providerHubs.dispose() },
+    // An updated PyneCore may have the hub an older one lacked
+    manager.onDidChangeProjectState(() => providerHubs.forgetUnsupported())
+  );
   // Live charts without a script: their own tabs and bridges, beside the run slot
   const liveCharts = new LiveChartService(
     context,
     chartManager,
     runService.runOutput,
     () => resolveLiveChartEnv(manager),
-    pickLiveTarget
+    pickLiveTarget,
+    providerHubs
   );
   liveCharts.register();
   SymbolBrowserPanel.setLiveChartOpener((provider, env) => void liveCharts.openProvider(provider, env));
@@ -286,6 +296,7 @@ export function activate(context: vscode.ExtensionContext): void {
     resolveEnv: () => resolveLiveChartEnv(manager),
     pickLive: pickLiveTarget,
     compile: compileService,
+    hubs: providerHubs,
     editInputs: async (request) => {
       const uri = await editInputsUri(request.scriptUri, compileService);
       if (uri) await inputsView.openDashboardEntry({ ...request, scriptUri: uri });

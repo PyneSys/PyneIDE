@@ -49,6 +49,7 @@ import {
 import { forgetRememberedData, getRememberedData, pickRunData } from './dataSelect';
 import { askTimeframe, LIVE_UNSUPPORTED, offerLiveCoreUpdate, type LiveChartEnv } from './liveChartService';
 import { LiveDownloadProgress } from './liveDownloadProgress';
+import type { HubLease, ProviderHubs } from './providerHub';
 import {
   DEFAULT_LIVE_FROM,
   forgetLiveTarget,
@@ -238,6 +239,8 @@ export class RunService {
   /** The "old pynecore, no security resolution" warning is shown at most once. */
   private securityUnsupportedWarned = false;
 
+  private providerHubs: ProviderHubs | undefined;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly manager: EnvManager,
@@ -255,6 +258,11 @@ export class RunService {
   /** Wire the Symbol Browser pick of a live chart's target. */
   setPickLiveTarget(cb: PickLiveTarget): void {
     this.pickLiveTarget = cb;
+  }
+
+  /** Wire the provider hubs a live run shares its providers through. */
+  setProviderHubs(hubs: ProviderHubs): void {
+    this.providerHubs = hubs;
   }
 
   /** Wire the editor view that shows the result of a Profile run. */
@@ -692,14 +700,18 @@ export class RunService {
     if (!target || this.startPending) return;
     this.startPending = true;
     let script: PreparedScript | undefined;
+    let hub: HubLease | undefined;
     try {
       script = await this.prepareScript(ctx.doc, { clearOutput: true });
       if (!remembered) await setLiveTarget(this.context, chartKey, target);
+      // A live run shares the workdir's providers with the other live processes.
+      // Its start yields, so the guard holds until executeRun takes the run slot.
+      if (script) hub = await this.providerHubs?.acquire(script.pythonBin, script.workdir);
     } finally {
       this.startPending = false;
     }
     if (!script) return;
-    await this.executeRun({ ...script, live: target });
+    await this.executeRun({ ...script, live: target, hub });
   }
 
   /**
@@ -1573,7 +1585,10 @@ export class RunService {
     debug?: { onEndpoint: (host: string, port: number) => void };
     profile?: boolean;
     robustness?: boolean;
+    /** A live run's hold on the provider hub, released when the run ends. */
+    hub?: HubLease;
   }): Promise<void> {
+    const hub = opts.hub;
     const scriptName = path.basename(opts.scriptPath);
     const chartKey = opts.chartKey;
     // A real run owns the chart: stop any data-only preview streaming to it.
@@ -1660,6 +1675,7 @@ export class RunService {
       ...(opts.debug ? { debugpyPort: 0, batchSize: 1 } : {}),
       ...(opts.profile ? { profile: true } : {}),
       ...(opts.robustness ? { robustness: robustnessSettings(vscode.Uri.file(opts.scriptPath)) } : {}),
+      ...(hub ? { env: hub.env } : {}),
       onEvent: (event) => {
         switch (event.e) {
           case 'start':
@@ -1777,6 +1793,7 @@ export class RunService {
     if (opts.debug) run.setChartBreakpointTimestamps(this.fastChartBreakpointTimestamps);
 
     const code = await run.exited;
+    hub?.release();
     download?.close();
     this.activeRun = undefined;
     this.live = undefined;

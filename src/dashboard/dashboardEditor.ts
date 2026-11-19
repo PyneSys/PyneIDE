@@ -30,6 +30,7 @@ import type { CompileService } from '../compile/service';
 import { BridgeRun, type BridgeEvent, type DownloadEvent } from '../run/bridgeClient';
 import { askTimeframe, offerLiveCoreUpdate, LIVE_UNSUPPORTED, type LiveChartEnv, type PickLiveTarget } from '../run/liveChartService';
 import { providerTimeframe, withTimeframe } from '../run/liveTarget';
+import type { ProviderHubs } from '../run/providerHub';
 import { ChartComposer } from './composer';
 import type {
   DashboardChartState,
@@ -88,6 +89,7 @@ export interface DashboardDeps {
   compile: CompileService;
   editInputs: EditDashboardInputs;
   chartManager: ChartManager;
+  hubs: ProviderHubs;
 }
 
 export class DashboardEditorProvider implements vscode.CustomTextEditorProvider {
@@ -731,6 +733,12 @@ class ChartRun {
       this.setState('error', 'The Python environment is not set up.');
       return;
     }
+    // The chart's processes share the workdir's providers instead of each holding one
+    const hub = await this.deps.hubs.acquire(env.pythonBin, env.workdir);
+    if (!current()) {
+      hub.release();
+      return;
+    }
 
     const scripts = config.scripts;
     for (const s of scripts) {
@@ -760,6 +768,7 @@ class ChartRun {
       workdir: env.workdir,
       dataOnly: true,
       live: { provider: config.provider, from: config.history },
+      env: hub.env,
       onEvent: (event) => {
         if (!current()) return;
         switch (event.e) {
@@ -795,6 +804,7 @@ class ChartRun {
     });
     this.runs.push(base);
     const code = await base.exited;
+    hub.release();
     if (!current()) return;
     if (code !== 0 && !baseError) baseError = `the chart's runner exited with code ${code}`;
     if (baseError) {
@@ -840,6 +850,11 @@ class ChartRun {
       }
     }
     if (!current()) return;
+    const hub = await this.deps.hubs.acquire(env.pythonBin, env.workdir);
+    if (!current()) {
+      hub.release();
+      return;
+    }
     let error: string | undefined;
     const run = BridgeRun.start({
       pythonBin: env.pythonBin,
@@ -857,7 +872,7 @@ class ChartRun {
       outputDir: this.session.outputDir(this.key),
       outputName: script.id,
       // Several processes may run one script: none may rewrite its settings file
-      env: { PYNE_SAVE_SCRIPT_TOML: '0' },
+      env: { PYNE_SAVE_SCRIPT_TOML: '0', ...hub.env },
       onEvent: (event: BridgeEvent) => {
         if (!current()) return;
         if (event.e === 'error') {
@@ -878,6 +893,7 @@ class ChartRun {
     });
     this.runs.push(run);
     const code = await run.exited;
+    hub.release();
     if (!current()) return;
     if (!error) {
       error = code === 0 ? 'stopped' : `the script's runner exited with code ${code}`;
