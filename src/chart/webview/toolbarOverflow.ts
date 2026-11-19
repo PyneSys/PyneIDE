@@ -1,4 +1,6 @@
 const overflowClass = 'in-overflow';
+/** A `data-compact` control's short form, taken while the toolbar runs short of room. */
+const compactClass = 'compact';
 
 export function toolbarAnchor(button: HTMLButtonElement | null): HTMLButtonElement | null {
   if (button?.classList.contains(overflowClass)) {
@@ -41,6 +43,7 @@ export function initToolbarOverflow(onLayout: () => void): void {
   // Keep the instrument, timeframe, a dashboard cell's "Add script" and the
   // status visible for as long as possible.
   const kept = ['tb-data', 'tb-timeframe', 'tb-add-script'];
+  const compactable = Array.from(row.querySelectorAll<HTMLElement>('[data-compact]'));
   const hideOrder = [
     ...items.filter(({ button }) => button && !kept.includes(button.id)).reverse(),
     ...items.filter(({ button }) => !button).reverse(),
@@ -54,6 +57,11 @@ export function initToolbarOverflow(onLayout: () => void): void {
       button && !button.hidden && !button.disabled && control.classList.contains(overflowClass)
     )?.button;
     for (const { control } of items) control.classList.remove(overflowClass);
+    // A control with a short form takes it before anything goes to the menu
+    for (const control of compactable) control.classList.remove(compactClass);
+    if (row.scrollWidth > row.clientWidth + more.offsetWidth) {
+      for (const control of compactable) control.classList.add(compactClass);
+    }
     const needsMore = row.scrollWidth > row.clientWidth + more.offsetWidth;
     more.hidden = !needsMore;
     if (needsMore) {

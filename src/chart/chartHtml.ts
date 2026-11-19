@@ -24,13 +24,19 @@ function scriptTag(script: ChartScript, nonce: string | undefined): string {
   return `<script nonce="${nonce ?? ''}">${code}</script>`;
 }
 
-/** The dashboard cell's "Add script", after the symbol and the timeframe. */
+/** The dashboard cell's "Add script", after the symbol and the timeframe. Where
+ * the toolbar runs short of room it shrinks to its icon and a plus
+ * (`data-compact`, see toolbarOverflow) before any tool goes to the overflow menu. */
 const ADD_SCRIPT_GROUP = `  <div class="toolbar-group">
-    <button id="tb-add-script" title="Add an indicator or a strategy to this chart">
+    <button id="tb-add-script" title="Add an indicator or a strategy to this chart"
+            aria-label="Add script" data-compact>
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="M8.5 15.5c1.2 0 1.8-.8 2-2l1.3-7.5c.2-1.2.8-2 2-2M7.5 8.5h6"></path>
       </svg>
-      <span>Add script</span>
+      <span class="compact-label">Add script</span>
+      <svg class="compact-mark" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 5.5v9M5.5 10h9"></path>
+      </svg>
     </button>
   </div>`;
 
@@ -722,20 +728,13 @@ export function chartHtml(opts: ChartHtmlOptions): string {
     width: 16px; height: 16px; fill: none; stroke: currentColor;
     stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
   }
+  #toolbar #tb-add-script .compact-mark { display: none; width: 12px; height: 12px; }
+  #toolbar #tb-add-script.compact { gap: 0; padding: 0 5px 0 4px; }
+  #toolbar #tb-add-script.compact .compact-label { display: none; }
+  #toolbar #tb-add-script.compact .compact-mark { display: inline; margin-left: -3px; }
   #toolbar #tb-layers.has-error .count-badge {
     color: var(--vscode-editor-background, #1e1e1e);
     background: var(--vscode-errorForeground, #f14c4c);
-  }
-  /* Several charts side by side would repeat a full toolbar each: a cell
-     shows its symbol, timeframe, feed state and "Add script", and the other
-     tools while the pointer is over it or the keyboard is in it. The buttons
-     only fade, so the toolbar keeps its layout. */
-  body.embedded #toolbar .icon-button { transition: opacity 120ms ease-out; }
-  body.embedded:not(:hover):not(:focus-within) #toolbar .icon-button:not(.active):not(.has-error) {
-    opacity: 0;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    body.embedded #toolbar .icon-button { transition: none; }
   }
   #split-popup {
     position: absolute; z-index: 20; display: flex; flex-direction: column; gap: 1px;
