@@ -7,7 +7,6 @@ import { PineAccessPanel } from './api/accessPanel';
 import { AuthService } from './api/auth';
 import { ChartManager } from './chart/chartPanel';
 import { CompileService } from './compile/service';
-import { registerStrictCompileToggle } from './compile/strictCompile';
 import { OhlcvEditorProvider } from './data/ohlcvEditor';
 import { buildOhlcvPreview } from './data/ohlcvPreview';
 import { SymbolBrowserPanel, type SecurityPrefill } from './data/symbolBrowserPanel';
@@ -172,7 +171,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   const compileService = new CompileService(context, auth, compileOutput, pineLs);
   compileService.register();
-  registerStrictCompileToggle(context);
 
   const libraryDiagnostics = new LibraryCallDiagnostics(context);
   libraryDiagnostics.register();

@@ -230,6 +230,11 @@ export class AuthService {
     return new PyneApiClient('', this.baseUrl(), this.log).pricing();
   }
 
+  /** Version of the compiler the API currently runs; needs no key. */
+  compilerVersion(): Promise<string> {
+    return new PyneApiClient('', this.baseUrl(), this.log).compilerVersion();
+  }
+
   async signOut(): Promise<void> {
     if (!(await this.getKey())) {
       void vscode.window.showInformationMessage('PyneIDE: not signed in to PyneSys.');

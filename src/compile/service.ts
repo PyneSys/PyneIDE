@@ -99,10 +99,7 @@ export class CompileService {
 
   /** Whether the .py next to a .pine document was compiled from exactly its current text. */
   isCompiledFrom(doc: vscode.TextDocument): boolean {
-    const strict = vscode.workspace
-      .getConfiguration('pyneide', doc.uri)
-      .get<boolean>('strictCompile', false);
-    return isCompiledFrom(doc.uri.fsPath.replace(/\.pine$/, '.py'), doc.getText(), strict);
+    return isCompiledFrom(doc.uri.fsPath.replace(/\.pine$/, '.py'), doc.getText());
   }
 
   private async compileActiveEditor(): Promise<void> {
@@ -254,13 +251,15 @@ export class CompileService {
   }
 
   private async compileDocument(doc: vscode.TextDocument, trigger: 'manual' | 'run'): Promise<void> {
-    const config = vscode.workspace.getConfiguration('pyneide', doc.uri);
-    const strict = config.get<boolean>('strictCompile', false);
     const script = doc.getText();
     const outputPath = doc.uri.fsPath.replace(/\.pine$/, '.py');
 
-    // The compile stamp in the .py.map: skip the API when nothing changed.
-    if (isCompiledFrom(outputPath, script, strict)) {
+    // The compile stamp in the .py.map: skip the API when nothing changed. A
+    // manual compile also requires the stamp to name the compiler version the
+    // API runs now, so an unchanged script picks up compiler fixes; a run
+    // trusts the hashes alone and works offline.
+    const manualCompilerVersion = trigger === 'manual' ? await this.compilerVersion() : undefined;
+    if (isCompiledFrom(outputPath, script, manualCompilerVersion)) {
       this.log(`Cache hit, skipping compile: ${outputPath}`);
       if (trigger === 'manual') {
         vscode.window.setStatusBarMessage('$(check) Pine output is up-to-date', 3000);
@@ -288,14 +287,17 @@ export class CompileService {
       }
     }
 
-    this.log(`Compiling ${doc.uri.fsPath} (strict=${strict}, trigger=${trigger})`);
+    // Read before compiling: a deploy in between leaves an older version in
+    // the stamp, which only costs one extra compile later, never a stale output.
+    const compilerVersion = manualCompilerVersion ?? (await this.compilerVersion());
+    this.log(`Compiling ${doc.uri.fsPath} (trigger=${trigger})`);
     const result = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Window, title: 'Compiling Pine Script…' },
-      () => this.compileWithLockRetry(client, script, strict)
+      () => this.compileWithLockRetry(client, script)
     );
 
     if (!result.ok) {
-      await this.handleCompileError(doc, result, { strict, trigger });
+      await this.handleCompileError(doc, result, { trigger });
       return;
     }
 
@@ -306,7 +308,7 @@ export class CompileService {
 
     this.diagnostics.delete(doc.uri);
     await vscode.workspace.fs.writeFile(vscode.Uri.file(outputPath), Buffer.from(result.code, 'utf8'));
-    await this.writeSourcemap(outputPath, result, { pine: script, strict, convertedSource });
+    await this.writeSourcemap(outputPath, result, { pine: script, compilerVersion, convertedSource });
     this.log(`Compiled OK: ${outputPath}`);
     vscode.window.setStatusBarMessage(`$(check) Pine compiled: ${path.basename(outputPath)}`, 5000);
 
@@ -324,33 +326,42 @@ export class CompileService {
   }
 
   /** The API serializes compiles per user; retry briefly when the lock is busy. */
-  private async compileWithLockRetry(
-    client: PyneApiClient,
-    script: string,
-    strict: boolean
-  ): Promise<CompileResult> {
-    let result = await client.compile(script, strict, true);
+  private async compileWithLockRetry(client: PyneApiClient, script: string): Promise<CompileResult> {
+    let result = await client.compile(script, true);
     for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
       if (result.ok || result.status !== 429) break;
       if (!result.detail.error.includes('Another compilation is in progress')) break;
       this.log(`Compile lock busy, retrying in ${LOCK_RETRY_MS} ms`);
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
-      result = await client.compile(script, strict, true);
+      result = await client.compile(script, true);
     }
     return result;
   }
 
   /**
+   * Compiler version the API runs now, or undefined when it cannot be read
+   * (offline, older server): the stamp then falls back to the hashes alone.
+   */
+  private async compilerVersion(): Promise<string | undefined> {
+    try {
+      return await this.auth.compilerVersion();
+    } catch (err) {
+      this.log(`Compiler version unavailable: ${flattenErrorMessage(err)}`);
+      return undefined;
+    }
+  }
+
+  /**
    * Persist the compiler's sourcemap next to the output as `<output>.map`,
-   * stamped with the .py and Pine source hashes: a later manual edit of the
-   * .py invalidates it, and an unchanged pair skips the next compile. A
-   * response without a sourcemap (older server) removes any existing map
-   * instead — a stale map must not outlive the code it mapped.
+   * stamped with the .py and Pine source hashes and the compiler version: a
+   * later manual edit of the .py invalidates it, and an unchanged pair skips
+   * the next compile. A response without a sourcemap (older server) removes
+   * any existing map instead — a stale map must not outlive the code it mapped.
    */
   private async writeSourcemap(
     outputPath: string,
     result: Extract<CompileResult, { ok: true }>,
-    source: { pine: string; strict: boolean; convertedSource: boolean }
+    source: { pine: string; compilerVersion: string | undefined; convertedSource: boolean }
   ): Promise<void> {
     const mapPath = sourcemapPathFor(outputPath);
     if (result.sourcemap) {
@@ -358,7 +369,7 @@ export class CompileService {
         ...result.sourcemap,
         py_sha256: sha256(result.code),
         pine_sha256: sha256(source.pine),
-        strict: source.strict,
+        ...(source.compilerVersion !== undefined ? { comp_version: source.compilerVersion } : {}),
         ...(source.convertedSource ? { converted_source: true } : {}),
       };
       await vscode.workspace.fs.writeFile(
@@ -374,7 +385,7 @@ export class CompileService {
   private async handleCompileError(
     doc: vscode.TextDocument,
     result: Extract<CompileResult, { ok: false }>,
-    ctx: { strict: boolean; trigger: 'manual' | 'run' }
+    ctx: { trigger: 'manual' | 'run' }
   ): Promise<void> {
     const { status, detail } = result;
     this.log(`Compile error (HTTP ${status}): ${detail.error}` + (detail.line ? ` [line ${detail.line}]` : ''));

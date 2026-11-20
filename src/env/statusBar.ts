@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 
 import type { AuthService } from '../api/auth';
 import type { Usage, UsagePeriod } from '../api/client';
-import { isStrictCompile } from '../compile/strictCompile';
 import type { PineLsService } from '../pinels/service';
 import type { PluginService } from '../plugins/service';
 import { detectPyne, DETECT_HEAD_BYTES, isPythonSyntax } from '../pyneDetect';
@@ -319,17 +318,6 @@ export class EnvStatusBar {
           });
           break;
       }
-
-      const strict = isStrictCompile(vscode.window.activeTextEditor?.document.uri);
-      items.push({
-        label: strict
-          ? '$(check) Strict compilation: On'
-          : '$(circle-large-outline) Strict compilation: Off',
-        description: strict
-          ? 'Pine-exact block scoping (every variable renamed)'
-          : 'Readable output (surgical renames only)',
-        action: () => void vscode.commands.executeCommand('pyneide.toggleStrictCompile'),
-      });
 
       if (agentProjectFolder()) {
         items.push(

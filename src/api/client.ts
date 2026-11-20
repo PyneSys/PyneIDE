@@ -198,8 +198,8 @@ export class PyneApiClient {
     return { error: text.trim() || `HTTP ${status} error` };
   }
 
-  async compile(script: string, strict: boolean, sourcemap = false): Promise<CompileResult> {
-    const params: Record<string, string> = { script, strict: String(strict) };
+  async compile(script: string, sourcemap = false): Promise<CompileResult> {
+    const params: Record<string, string> = { script };
     if (sourcemap) params.sourcemap = 'true';
     const body = new URLSearchParams(params).toString();
     const res = await this.request('POST', '/compiler/compile', {
@@ -288,6 +288,18 @@ export class PyneApiClient {
       );
     }
     return PyneApiClient.parseJson<{ plans: PricingPlan[] }>(res, 'system/pricing').plans;
+  }
+
+  /** Version of the PyneComp compiler the API currently runs; needs no key. */
+  async compilerVersion(): Promise<string> {
+    const res = await this.request('GET', '/system/version', { auth: false });
+    if (res.status !== 200) {
+      throw new Error(
+        `Failed to fetch the compiler version (HTTP ${res.status}): ` +
+          PyneApiClient.parseErrorDetail(res.text, res.status).error
+      );
+    }
+    return PyneApiClient.parseJson<{ comp_version: string }>(res, 'system/version').comp_version;
   }
 
   /**

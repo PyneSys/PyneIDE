@@ -40,7 +40,6 @@ const SENSITIVE_SETTINGS = [
 
 /** Settings that are plain booleans and go in as they are. */
 const BOOLEAN_SETTINGS = [
-  'strictCompile',
   'debug.justMyCode',
   'pyright.enabled',
   'checker.enabled',

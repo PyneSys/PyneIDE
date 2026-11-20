@@ -5,7 +5,7 @@
  * suffix shapes are part of pynecomp's stable ABI (see pynecomp `renames.py`):
  *
  *  - `__global__` / `__<8 hex>__` — block-scope suffix for variables colliding
- *    with a function/import/module name (every variable in `--strict` mode);
+ *    with a function/import/module name or with another variable of the name;
  *    extra trailing underscores dodge same-named source identifiers.
  *  - `__ren__` (class-body variant `__ren___`) — the canonical cross-unit
  *    rename of exported functions, UDT fields, enum members and keyword names.

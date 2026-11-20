@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The strict compilation setting (`pyneide.strictCompile`) and its toggle: the compiler's default
+  output now follows Pine's block scoping exactly.
+
+### Fixed
+
+- A manual compile of an unchanged script recompiles it when the API runs a newer compiler than
+  the one that produced the output, so compiler fixes reach existing outputs. Running a script
+  still reuses its output offline.
+
 ## [0.14.3] - 2026-11-12
 
 ### Fixed

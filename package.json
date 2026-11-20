@@ -216,11 +216,6 @@
         "category": "PyneIDE"
       },
       {
-        "command": "pyneide.toggleStrictCompile",
-        "title": "Toggle Strict Compilation",
-        "category": "PyneIDE"
-      },
-      {
         "command": "pyneide.runScript",
         "title": "Run Pyne code",
         "category": "PyneIDE",
@@ -1615,13 +1610,6 @@
             "scope": "resource",
             "order": 1,
             "markdownDescription": "Path to the Pyne workdir, relative to the workspace folder (`.` = the folder itself) or absolute. When empty, PyneIDE searches upward for a directory named `workdir` (pynecore behavior)."
-          },
-          "pyneide.strictCompile": {
-            "type": "boolean",
-            "default": false,
-            "scope": "resource",
-            "order": 2,
-            "markdownDescription": "Use strict compilation mode (Pine-exact block scoping; less readable but more compatible output)."
           },
           "pyneide.run.revealOutputOnLog": {
             "type": "boolean",

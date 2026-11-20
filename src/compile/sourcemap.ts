@@ -9,7 +9,7 @@
  * The IDE-written map additionally carries `py_sha256` (hash of the .py it was
  * generated with): the .py is free to edit, and a map that no longer matches
  * the file must not be trusted — a confidently wrong Pine line is worse than
- * no mapping. With `pine_sha256` and `strict` it is also the compile stamp:
+ * no mapping. With `pine_sha256` and `comp_version` it is also the compile stamp:
  * proof that the .py is an unmodified compile of exactly that Pine source. The
  * stamp travels with the files, so moving, copying or cloning the project
  * keeps it, and deleting the files leaves nothing behind.
@@ -24,8 +24,8 @@ export interface StoredSourcemap extends PineSourcemap {
   py_sha256?: string;
   /** sha256 of the Pine source the .py was compiled from (IDE-written maps only). */
   pine_sha256?: string;
-  /** Whether that compile was strict (IDE-written maps only). */
-  strict?: boolean;
+  /** PyneComp version the API reported right before that compile (IDE-written maps only). */
+  comp_version?: string;
   /**
    * True when the source was a Pine v4/v5 script the compiler internally
    * upgraded to v6: the mappings then point at converted v6 lines, not the
@@ -65,12 +65,17 @@ export function isGeneratedOutput(pyPath: string): boolean {
   return pyMatchesStamp(pyPath, readStoredSourcemap(pyPath));
 }
 
-/** Whether the .py is an unmodified compile of exactly this Pine source. */
-export function isCompiledFrom(pyPath: string, pine: string, strict: boolean): boolean {
+/**
+ * Whether the .py is an unmodified compile of exactly this Pine source. With
+ * `compilerVersion`, the stamp must also name that compiler version: a compile
+ * by an older compiler (or a stamp from before versions were recorded) is then
+ * not up-to-date.
+ */
+export function isCompiledFrom(pyPath: string, pine: string, compilerVersion?: string): boolean {
   const map = readStoredSourcemap(pyPath);
   return (
     map?.pine_sha256 === sha256(pine) &&
-    (map.strict ?? false) === strict &&
+    (compilerVersion === undefined || map.comp_version === compilerVersion) &&
     pyMatchesStamp(pyPath, map)
   );
 }
