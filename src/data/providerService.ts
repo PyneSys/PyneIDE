@@ -9,8 +9,14 @@
  * or `{e:'result', id, error}`, with `{e:'progress', id, ...}` in between for a
  * download. If the process dies, every pending request rejects and the next
  * request respawns it.
+ *
+ * With provider hubs the service has no process of its own: the workdir's hub
+ * process answers its requests, so the providers' SDKs and market lists are
+ * loaded once for the symbol browser and the live runs. Without a hub (a
+ * PyneCore that has none) it runs its own process as described above.
  */
 import { trackInterpreter } from '../env/usage';
+import type { HubService, ProviderHubs } from '../run/providerHub';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 
@@ -48,6 +54,8 @@ interface Pending {
   reject: (err: Error) => void;
   onProgress?: (p: DownloadProgressEvent) => void;
   timer?: NodeJS.Timeout;
+  /** Written to a process: lost when that process ends. */
+  sent?: boolean;
 }
 
 export interface ProviderServiceOptions {
@@ -59,17 +67,37 @@ export interface ProviderServiceOptions {
   workdir: string;
   /** Diagnostic sink: pynecore logs (stderr) and lifecycle notes. */
   log?: (line: string) => void;
+  /** The provider hubs to use instead of the ones set with {@link useProviderHubs}. */
+  hubs?: ProviderHubs;
 }
+
+let sharedHubs: ProviderHubs | undefined;
+
+/**
+ * The provider hubs of the extension: every service created from now on is
+ * served by its workdir's hub process.
+ */
+export function useProviderHubs(hubs: ProviderHubs | undefined): void {
+  sharedHubs = hubs;
+}
+
+/** Request ids are unique across the services: several may share a hub process. */
+let nextRequestId = 1;
 
 export class ProviderService {
   private child: ChildProcessWithoutNullStreams | undefined;
-  private nextId = 1;
+  /** The hub process that serves this service; resolves with undefined without one. */
+  private hub: Promise<HubService | undefined> | undefined;
   private readonly pending = new Map<number, Pending>();
   private stdoutBuf = '';
   private disposed = false;
   private paused = false;
 
-  constructor(private readonly opts: ProviderServiceOptions) {}
+  private readonly hubs: ProviderHubs | undefined;
+
+  constructor(private readonly opts: ProviderServiceOptions) {
+    this.hubs = opts.hubs ?? sharedHubs;
+  }
 
   /**
    * Issue one RPC and resolve with its `result`. Rejects with a
@@ -99,8 +127,7 @@ export class ProviderService {
     if (this.paused) {
       return { id: -1, result: Promise.reject(new Error('PyneCore is being updated')) };
     }
-    const child = this.ensureChild();
-    const id = this.nextId++;
+    const id = nextRequestId++;
     const timeoutMs = options.timeoutMs ?? 60_000;
 
     const result = new Promise<T>((resolve, reject) => {
@@ -112,16 +139,16 @@ export class ProviderService {
       if (timeoutMs > 0) {
         entry.timer = setTimeout(() => {
           this.pending.delete(id);
-          this.send({ cmd: 'cancel', id });
+          this.postCancel(id);
           reject(new Error(`Request '${method}' timed out after ${timeoutMs} ms`));
         }, timeoutMs);
       }
       this.pending.set(id, entry);
-      if (!child.stdin.writable) {
-        this.settleReject(id, new Error('Provider service stdin is not writable'));
-        return;
-      }
-      child.stdin.write(JSON.stringify({ cmd: 'rpc', id, method, params }) + '\n');
+      // A request cancelled while it waits for the hub is not written
+      void this.send({ cmd: 'rpc', id, method, params }, true, () => this.pending.get(id) === entry).then((sent) => {
+        if (sent) entry.sent = true;
+        else this.settleReject(id, new Error('Provider service is not running'));
+      });
     });
     return { id, result };
   }
@@ -133,14 +160,21 @@ export class ProviderService {
    * unknown id.
    */
   cancel(id: number): void {
-    this.send({ cmd: 'cancel', id });
+    this.postCancel(id);
     this.settleReject(id, new ProviderServiceError('Cancelled', 'Cancelled', false));
   }
 
   dispose(): void {
     this.disposed = true;
+    // A shared hub process outlives the service: its downloads must stop too
+    for (const [id, entry] of this.pending) {
+      if (entry.sent) this.postCancel(id);
+    }
     this.rejectAll(new Error('Provider service disposed'));
     this.killChild();
+    const hub = this.hub;
+    this.hub = undefined;
+    void hub?.then((service) => service?.release());
   }
 
   /**
@@ -151,10 +185,23 @@ export class ProviderService {
   restart(): void {
     this.rejectAll(new Error('Provider service restarted'));
     this.killChild();
+    const hub = this.hub;
+    void hub?.then((service) => {
+      if (service) service.recycle();
+      // Without a hub so far: the next request looks for one again
+      else if (this.hub === hub) this.hub = undefined;
+    });
   }
 
   async pauseForCoreUpdate(): Promise<void> {
     this.paused = true;
+    const hub = this.hub;
+    this.hub = undefined;
+    if (hub) {
+      this.rejectAll(new Error('Provider service restarted'));
+      // The hub's process must be gone too before the packages change
+      await (await hub)?.releaseNow();
+    }
     const child = this.child;
     if (!child) return;
     const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
@@ -307,11 +354,64 @@ export class ProviderService {
     this.pending.clear();
   }
 
-  private send(cmd: object): void {
-    const child = this.child;
-    if (child && child.stdin.writable) {
-      child.stdin.write(JSON.stringify(cmd) + '\n');
+  /**
+   * The hub process ended: rejects the requests written to it. The ones still
+   * waiting for its replacement (after {@link restart}) go to the new process.
+   */
+  private rejectSent(err: Error): void {
+    for (const [id, entry] of this.pending) {
+      if (!entry.sent) continue;
+      if (entry.timer) clearTimeout(entry.timer);
+      this.pending.delete(id);
+      entry.reject(err);
     }
+  }
+
+  /**
+   * Writes one command to the service: the hub process when there is one, the
+   * service's own process otherwise.
+   *
+   * @param start Start the process when it is not running.
+   * @returns false when the command could not be written.
+   */
+  private async send(cmd: object, start: boolean, wanted: () => boolean): Promise<boolean> {
+    if (this.hubs && (start || this.hub)) {
+      this.hub ??= this.joinHub(this.hubs);
+      const hub = await this.hub;
+      if (this.disposed || this.paused || !wanted()) return false;
+      if (hub) return hub.send(cmd, wanted);
+    }
+    const child = start ? this.ensureChild() : this.child;
+    return this.writeChild(child, cmd);
+  }
+
+  /**
+   * Tells the service to stop request `id`, at once and also after
+   * {@link dispose}: the hub process may run on for other holders.
+   */
+  private postCancel(id: number): void {
+    const cmd = { cmd: 'cancel', id };
+    const hub = this.hub;
+    if (!hub) {
+      this.writeChild(this.child, cmd);
+      return;
+    }
+    void hub.then((service) => {
+      if (service) service.post(cmd);
+      else this.writeChild(this.child, cmd);
+    });
+  }
+
+  private writeChild(child: ChildProcessWithoutNullStreams | undefined, cmd: object): boolean {
+    if (!child || !child.stdin.writable) return false;
+    child.stdin.write(JSON.stringify(cmd) + '\n');
+    return true;
+  }
+
+  private async joinHub(hubs: ProviderHubs): Promise<HubService | undefined> {
+    const hub = await hubs.acquireService(this.opts.pythonBin, this.opts.workdir, (event) => this.handleEvent(event));
+    hub?.onGone(() => this.rejectSent(new Error('Provider service exited')));
+    return hub;
   }
 }
 

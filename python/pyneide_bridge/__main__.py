@@ -123,6 +123,12 @@ def main() -> int:
                         help="Long-lived NDJSON RPC endpoint for the symbol browser "
                              "(providers/brokers/symbols/syminfo/download); ignores "
                              "--script/--data")
+    parser.add_argument("--hub", action="store_true",
+                        help="With --provider-service: also serve the workdir's live runs "
+                             "as their provider hub (needs a PyneCore with "
+                             "pynecore.core.plugin.hub)")
+    parser.add_argument("--hub-port", type=int, default=0, metavar="PORT",
+                        help="With --hub: port the hub listens on (default: a free one)")
     parser.add_argument("--live", default=None, metavar="PROVIDER_STRING",
                         help="Live chart: download the provider string's history "
                              "(e.g. ccxt:BYBIT:BTC/USDT:USDT@1) into memory, run "
@@ -185,6 +191,14 @@ def main() -> int:
         # The service owns stdin (its own RPC reader); no run Control here.
         from .provider_service import ProviderService
         try:
+            if args.hub:
+                try:
+                    from .provider_hub import serve_with_hub
+                except ModuleNotFoundError as exc:
+                    # The IDE reads this line: it then runs without a hub
+                    print(f"ModuleNotFoundError: {exc}", file=sys.stderr, flush=True)
+                    return 1
+                return serve_with_hub(Path(args.workdir).resolve(), emitter, args.hub_port)
             ProviderService(Path(args.workdir).resolve(), emitter).serve()
             return 0
         except Exception as exc:

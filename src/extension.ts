@@ -48,6 +48,7 @@ import {
 } from './run/dataSelect';
 import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveChartService';
 import { ProviderHubs } from './run/providerHub';
+import { useProviderHubs } from './data/providerService';
 import { DashboardEditorProvider, isDashboardMirrorKey } from './dashboard/dashboardEditor';
 import { newDashboard } from './dashboard/newDashboard';
 import { RunService } from './run/runService';
@@ -113,7 +114,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pyneide.updatePyneCore', async (resource?: vscode.Uri) => {
       const project = manager.forResource(resource);
       const state = project.state;
-      const update = () => project.setup({ updateCore: true });
+      const update = async () => {
+        // A hub that only lingers after its last run would keep the packages in use
+        if (state.kind === 'ready') await providerHubs.endIdle(state.pythonBin);
+        return project.setup({ updateCore: true });
+      };
       if (state.kind === 'ready' && state.source === 'managed') {
         await SymbolBrowserPanel.withProvidersPaused(state.pythonBin, update);
       } else {
@@ -194,10 +199,21 @@ export function activate(context: vscode.ExtensionContext): void {
       request
     );
   // The live runs of a workdir share its data providers through one hub process
-  const providerHubs = new ProviderHubs((line) => runService.runOutput.appendLine(line));
+  // and the symbol browser's provider service runs in that process too
+  const providerHubs = new ProviderHubs(
+    (line) => runService.runOutput.appendLine(line),
+    undefined,
+    undefined,
+    undefined,
+    vscode.Uri.joinPath(context.extensionUri, 'python').fsPath
+  );
   runService.setProviderHubs(providerHubs);
+  useProviderHubs(providerHubs);
   context.subscriptions.push(
-    { dispose: () => providerHubs.dispose() },
+    { dispose: () => {
+      useProviderHubs(undefined);
+      providerHubs.dispose();
+    } },
     // An updated PyneCore may have the hub an older one lacked
     manager.onDidChangeProjectState(() => providerHubs.forgetUnsupported())
   );

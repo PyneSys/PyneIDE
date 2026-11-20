@@ -9,7 +9,12 @@
  * the last one ended, so a chart restart finds it running. One that dies while
  * runs use it is started again on the same port: their bridges reconnect by
  * themselves. A PyneCore without the hub module runs every bridge with a
- * provider of its own, as before. vscode-free.
+ * provider of its own, as before.
+ *
+ * Started through the bridge, the hub process is the provider service of the
+ * symbol browser too (`pyneide_bridge --provider-service --hub`): the service
+ * needs the same SDKs and market lists, so it holds the hub like a run does and
+ * talks to it over the process's standard streams. vscode-free.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as crypto from 'node:crypto';
@@ -43,6 +48,38 @@ export interface HubLease {
 
 const NO_HUB: HubLease = { env: {}, release: () => undefined };
 
+/** A provider service's hold on the hub process that answers its requests. */
+export interface HubService {
+  /**
+   * Writes one request line to the service; false when the hub is not running
+   * and could not be started, or the service was released or `wanted` returned
+   * false while it waited for the hub.
+   *
+   * @param wanted Checked right before the write: a request dropped while it
+   *   waited for the hub is not written.
+   */
+  send(message: object, wanted?: () => boolean): Promise<boolean>;
+  /**
+   * Writes one line to the running hub process at once, also after the
+   * service was released (a cancel of a request written earlier); false
+   * without a running process.
+   */
+  post(message: object): boolean;
+  /** The hub process ended: its unanswered requests are lost. */
+  onGone(listener: () => void): void;
+  /** Ends the hub process; it is started again while anything uses it. */
+  recycle(): void;
+  /** The service is done with the hub. */
+  release(): void;
+  /**
+   * Like {@link release}, and a hub nothing else uses ends at once; resolves
+   * when its process is gone.
+   */
+  releaseNow(): Promise<void>;
+}
+
+type ServiceListener = (event: Record<string, unknown>) => void;
+
 class Hub {
   readonly token = crypto.randomBytes(24).toString('hex');
   refs = 0;
@@ -51,14 +88,19 @@ class Hub {
   private child: ChildProcessWithoutNullStreams | undefined;
   private port = 0;
   private starting: Promise<boolean> | undefined;
+  /** The process {@link recycle} ended, to be replaced by a new one. */
+  private recycled: ChildProcessWithoutNullStreams | undefined;
   private stopping = false;
   private linger: ReturnType<typeof setTimeout> | undefined;
   private retry: ReturnType<typeof setTimeout> | undefined;
   private readonly restarts: number[] = [];
+  private readonly serviceListeners = new Set<ServiceListener>();
+  private readonly goneListeners = new Set<() => void>();
 
   constructor(
-    private readonly pythonBin: string,
+    readonly pythonBin: string,
     private readonly workdir: string,
+    private readonly bridgeRoot: string | undefined,
     private readonly log: (line: string) => void,
     private readonly lingerMs: number,
     private readonly startTimeoutMs: number,
@@ -93,6 +135,62 @@ class Hub {
     }, this.lingerMs);
   }
 
+  /**
+   * Resolves once the hub listens, like {@link ready}, but leaves a hub that
+   * waits for its next start alone: false until that start.
+   */
+  running(): Promise<boolean> {
+    if (this.starting) return this.starting;
+    return this.retry ? Promise.resolve(false) : this.ready();
+  }
+
+  /** Writes a line to the running hub's provider service. */
+  write(message: object): boolean {
+    const child = this.child;
+    if (!child || !child.stdin.writable) return false;
+    child.stdin.write(JSON.stringify(message) + '\n');
+    return true;
+  }
+
+  /** Subscribes a provider service to the hub's events; returns the unsubscribe. */
+  listen(onEvent: ServiceListener, onGone: () => void): () => void {
+    this.serviceListeners.add(onEvent);
+    this.goneListeners.add(onGone);
+    return () => {
+      this.serviceListeners.delete(onEvent);
+      this.goneListeners.delete(onGone);
+    };
+  }
+
+  /**
+   * Ends the process; the close handler starts it again while anything uses it.
+   * Until the new process listens, {@link running} waits for it.
+   */
+  recycle(): void {
+    const child = this.child;
+    if (!child || this.recycled === child) return;
+    this.recycled = child;
+    const replaced: Promise<boolean> = new Promise<boolean>((resolve) => {
+      // The close handler of the process has started the new one by now
+      child.once('close', () => {
+        const next = this.starting;
+        resolve(next && next !== replaced ? next : false);
+      });
+    });
+    this.starting = replaced;
+    child.stdin.end();
+    const killer = setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS);
+    child.once('close', () => clearTimeout(killer));
+  }
+
+  /** Stops the hub and resolves when its process is gone. */
+  stopped(): Promise<void> {
+    const child = this.child;
+    this.stop();
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => child.once('close', () => resolve()));
+  }
+
   stop(): void {
     if (this.linger) clearTimeout(this.linger);
     this.linger = undefined;
@@ -111,14 +209,22 @@ class Hub {
 
   private start(): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
-      const args = ['-X', 'utf8', '-m', 'pynecore.core.plugin.hub',
-        '--config-dir', path.join(this.workdir, 'config')];
+      // Through the bridge the hub process is the symbol browser's provider service too
+      const args = this.bridgeRoot
+        ? ['-X', 'utf8', '-m', 'pyneide_bridge', '--provider-service', '--hub', '--workdir', this.workdir]
+        : ['-X', 'utf8', '-m', 'pynecore.core.plugin.hub', '--config-dir', path.join(this.workdir, 'config')];
       // Started again: on the port the running bridges know
-      if (this.port) args.push('--port', String(this.port));
+      if (this.port) args.push(this.bridgeRoot ? '--hub-port' : '--port', String(this.port));
+      const pythonPath = this.bridgeRoot
+        ? { PYTHONPATH: process.env.PYTHONPATH
+          ? `${this.bridgeRoot}${path.delimiter}${process.env.PYTHONPATH}`
+          : this.bridgeRoot }
+        : {};
       const child = spawn(this.pythonBin, args, {
         cwd: this.workdir,
         env: {
           ...process.env,
+          ...pythonPath,
           PYNE_WORK_DIR: this.workdir,
           PYTHONUNBUFFERED: '1',
           PYNE_PROVIDER_HUB_TOKEN: this.token,
@@ -139,20 +245,27 @@ class Hub {
       let stdoutBuf = '';
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
-        if (listening) return;
         stdoutBuf += chunk;
         let nl: number;
-        while (!listening && (nl = stdoutBuf.indexOf('\n')) >= 0) {
+        while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
           const line = stdoutBuf.slice(0, nl);
           stdoutBuf = stdoutBuf.slice(nl + 1);
+          let event: Record<string, unknown> | undefined;
           try {
-            const address = JSON.parse(line) as { port?: unknown };
-            if (typeof address.port !== 'number') throw new Error('no port');
-            this.port = address.port;
+            const parsed: unknown = JSON.parse(line);
+            if (parsed && typeof parsed === 'object') event = parsed as Record<string, unknown>;
+          } catch {
+            event = undefined;
+          }
+          if (listening) {
+            // Everything after the address belongs to the provider service
+            if (event && child === this.child) for (const listener of [...this.serviceListeners]) listener(event);
+          } else if (event && typeof event.port === 'number') {
+            this.port = event.port;
             listening = true;
             clearTimeout(startTimer);
             resolve(true);
-          } catch {
+          } else if (event?.e !== 'hello') {
             this.log(`[hub] unexpected output: ${line.slice(0, 200)}`);
           }
         }
@@ -180,9 +293,20 @@ class Hub {
         clearTimeout(startTimer);
         // A hub stopped before it listened leaves its acquirers without one
         if (!listening) resolve(false);
+        if (listening) for (const listener of [...this.goneListeners]) listener();
         if (this.child !== child) return;
         this.child = undefined;
         this.starting = undefined;
+        if (this.recycled === child) {
+          this.recycled = undefined;
+          // Ended on purpose: replaced at once, not counted as a crash
+          if (this.refs === 0) {
+            this.onGone();
+            return;
+          }
+          void this.ready();
+          return;
+        }
         if (!listening) {
           if (!this.unsupported && !timedOut) this.log(`[hub] did not start (exit code ${code})`);
           if (this.refs === 0) {
@@ -241,12 +365,15 @@ export class ProviderHubs {
    * @param lingerMs How long a hub without a run stays up.
    * @param startTimeoutMs How long a hub may take to report its address.
    * @param restartWindowMs The window a dying hub is started again at most three times in.
+   * @param bridgeRoot Directory that contains the `pyneide_bridge` package: the
+   *   hub then starts through the bridge and serves provider services too.
    */
   constructor(
     private readonly log: (line: string) => void,
     private readonly lingerMs = HUB_LINGER_MS,
     private readonly startTimeoutMs = HUB_START_TIMEOUT_MS,
-    private readonly restartWindowMs = HUB_RESTART_WINDOW_MS
+    private readonly restartWindowMs = HUB_RESTART_WINDOW_MS,
+    private readonly bridgeRoot?: string
   ) {}
 
   /**
@@ -255,12 +382,61 @@ export class ProviderHubs {
    * started: the run then holds its provider itself.
    */
   async acquire(pythonBin: string, workdir: string): Promise<HubLease> {
-    if (this.unsupported.has(pythonBin)) return NO_HUB;
+    return (await this.hold(pythonBin, workdir))?.lease ?? NO_HUB;
+  }
+
+  /**
+   * The hub process as the provider service of a symbol browser, started when
+   * it is not running. Resolves with undefined when the hubs do not start
+   * through the bridge, the installed PyneCore has no hub or it cannot be
+   * started: the service then runs a process of its own.
+   *
+   * @param onEvent Receives every event of the service, also other holders'.
+   */
+  async acquireService(
+    pythonBin: string,
+    workdir: string,
+    onEvent: (event: Record<string, unknown>) => void
+  ): Promise<HubService | undefined> {
+    if (!this.bridgeRoot) return undefined;
+    const held = await this.hold(pythonBin, workdir);
+    if (!held) return undefined;
+    const { hub, lease } = held;
+    const goneListeners = new Set<() => void>();
+    const unlisten = hub.listen(onEvent, () => {
+      for (const listener of [...goneListeners]) listener();
+    });
+    let released = false;
+    const leave = (): boolean => {
+      if (released) return false;
+      released = true;
+      unlisten();
+      return true;
+    };
+    return {
+      send: async (message, wanted) =>
+        !released && (await hub.running()) && !released && (wanted?.() ?? true) && hub.write(message),
+      post: (message) => hub.write(message),
+      onGone: (listener) => void goneListeners.add(listener),
+      recycle: () => hub.recycle(),
+      release: () => {
+        if (leave()) lease.release();
+      },
+      releaseNow: async () => {
+        if (!leave()) return;
+        lease.release();
+        if (hub.refs === 0) await hub.stopped();
+      },
+    };
+  }
+
+  private async hold(pythonBin: string, workdir: string): Promise<{ hub: Hub; lease: HubLease } | undefined> {
+    if (this.unsupported.has(pythonBin)) return undefined;
     const key = `${pythonBin}\0${workdir}`;
     let hub = this.hubs.get(key);
     if (!hub) {
       const created: Hub = new Hub(
-        pythonBin, workdir, this.log, this.lingerMs, this.startTimeoutMs, this.restartWindowMs,
+        pythonBin, workdir, this.bridgeRoot, this.log, this.lingerMs, this.startTimeoutMs, this.restartWindowMs,
         () => {
           if (this.hubs.get(key) === created) this.hubs.delete(key);
         }
@@ -282,9 +458,19 @@ export class ProviderHubs {
       released = true;
       hub.refs--;
       if (hub.refs === 0 && this.hubs.get(key) === hub) this.hubs.delete(key);
-      return NO_HUB;
+      return undefined;
     }
-    return { env: hub.env, release };
+    return { hub, lease: { env: hub.env, release } };
+  }
+
+  /**
+   * Ends the hubs of a Python environment that nothing uses any more, without
+   * their linger; resolves when their processes are gone. For a package update,
+   * which must not find the environment's files in use.
+   */
+  async endIdle(pythonBin: string): Promise<void> {
+    const idle = [...this.hubs.values()].filter((hub) => hub.pythonBin === pythonBin && hub.refs === 0);
+    await Promise.all(idle.map((hub) => hub.stopped()));
   }
 
   /** The Python environments may have changed: look for the hub module again. */

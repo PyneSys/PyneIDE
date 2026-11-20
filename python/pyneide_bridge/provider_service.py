@@ -16,10 +16,10 @@ Wire format (one JSON object per line):
     progress  {"e": "progress", "id": N, "done": ..., "total": ...}
 
 The provider instances carry mutable per-symbol state, so browse requests run
-on a single worker thread (serialized, mirroring the TUI's one-worker rule). A
+on a single worker thread (serialized, mirroring the TUI's one-worker rule). Each
 download runs on its own thread against a *separate* provider instance, so a
 long download never corrupts the symbol info the browser is fetching in the
-background.
+background, and the front ends that share the process can download side by side.
 """
 
 from __future__ import annotations
@@ -155,9 +155,10 @@ class ProviderService:
 
         self._lock = threading.Lock()
         self._cancelled: set[int] = set()
-        self._download_thread: threading.Thread | None = None
-        self._download_id: int | None = None
-        self._download_cancel = threading.Event()
+        # In-flight downloads by request id: several front ends share the process
+        self._downloads: dict[int, threading.Event] = {}
+        # The files those downloads write: one writer per file
+        self._download_paths: set[Path] = set()
 
     # ---- reader loop --------------------------------------------------
 
@@ -195,13 +196,16 @@ class ProviderService:
         if not isinstance(target_id, int):
             return
         with self._lock:
-            if target_id == self._download_id:
-                self._download_cancel.set()
+            download = self._downloads.get(target_id)
+            if download is not None:
+                download.set()
                 return
             self._cancelled.add(target_id)
 
     def _shutdown(self) -> None:
-        self._download_cancel.set()
+        with self._lock:
+            for download in self._downloads.values():
+                download.set()
         self._browse_pool.shutdown(wait=False, cancel_futures=True)
         self._meta_pool.shutdown(wait=False, cancel_futures=True)
 
@@ -347,19 +351,12 @@ class ProviderService:
     # ---- download (own thread, own provider instance) -----------------
 
     def _start_download(self, rid: int, params: dict[str, Any]) -> None:
+        cancel_event = threading.Event()
         with self._lock:
-            if self._download_thread is not None and self._download_thread.is_alive():
-                self._emit_error(
-                    rid, RuntimeError("A download is already in progress"))
-                return
-            self._download_cancel = threading.Event()
-            self._download_id = rid
-            t = threading.Thread(
-                target=self._run_download,
-                args=(rid, params, self._download_cancel),
-                name="pyneide-download", daemon=True)
-            self._download_thread = t
-        t.start()
+            self._downloads[rid] = cancel_event
+        threading.Thread(
+            target=self._run_download, args=(rid, params, cancel_event),
+            name="pyneide-download", daemon=True).start()
 
     def _download_target(self, params: dict[str, Any]) -> tuple[str, str | None, str, str]:
         """Resolve what to download into (provider, broker, symbol, timeframe).
@@ -397,6 +394,7 @@ class ProviderService:
 
     def _run_download(self, rid: int, params: dict[str, Any],
                       cancel_event: threading.Event) -> None:
+        claimed: Path | None = None
         try:
             provider_name, broker, symbol, timeframe = self._download_target(params)
             truncate = bool(params.get("truncate", False))
@@ -413,6 +411,14 @@ class ProviderService:
             full_symbol = f"{broker}:{symbol}" if broker else symbol
             inst = provider_class(symbol=full_symbol, timeframe=timeframe,
                                   ohlcv_dir=self.data_dir, config=config)
+            if inst.ohlcv_path is not None:
+                target = inst.ohlcv_path.resolve()
+                with self._lock:
+                    if target in self._download_paths:
+                        raise RuntimeError(
+                            f"A download into {target.name} is already in progress")
+                    self._download_paths.add(target)
+                claimed = target
             if not truncate and isinstance(time_from, datetime) \
                     and self._file_starts_at(inst.ohlcv_path, time_from):
                 time_from = "continue"
@@ -470,7 +476,9 @@ class ProviderService:
             self._emit_error(rid, exc)
         finally:
             with self._lock:
-                self._download_id = None
+                self._downloads.pop(rid, None)
+                if claimed is not None:
+                    self._download_paths.discard(claimed)
 
     @staticmethod
     def _file_starts_at(ohlcv_path: Path | None, time_from: datetime) -> bool:

@@ -230,3 +230,224 @@ require(${JSON.stringify(fakeHub)});
 });
 
 test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+// ---- the hub process as the symbol browser's provider service ----------------
+
+const serviceBundle = await build({
+  stdin: {
+    contents: "export * from './src/data/providerService'; export { ProviderHubs } from './src/run/providerHub';",
+    resolveDir: process.cwd(),
+    loader: 'ts',
+  },
+  bundle: true, platform: 'node', format: 'esm', write: false,
+});
+const servicePath = path.join(dir, 'providerService.mjs');
+fs.writeFileSync(servicePath, serviceBundle.outputFiles[0].text);
+const { ProviderService, ProviderHubs: ServiceHubs } = await import(servicePath);
+
+// A stand-in for `pyneide_bridge --provider-service [--hub]`: with --hub it
+// listens and reports the address after its hello, and it answers every
+// request with the request itself and its own pid. `slow` is never answered.
+// Every command it reads is logged.
+const received = path.join(dir, 'received.log');
+const fakeBridge = path.join(dir, 'python-bridge');
+fs.writeFileSync(fakeBridge, `#!${process.execPath}
+const fs = require('node:fs');
+const net = require('node:net');
+const readline = require('node:readline');
+const args = process.argv.slice(2);
+const emit = (event) => console.log(JSON.stringify(event));
+const serve = () => {
+  readline.createInterface({ input: process.stdin }).on('line', (line) => {
+    const msg = JSON.parse(line);
+    fs.appendFileSync(${JSON.stringify(received)}, JSON.stringify({ ...msg, pid: process.pid }) + '\\n');
+    if (msg.cmd !== 'rpc' || msg.method === 'slow') return;
+    emit({ e: 'result', id: msg.id, result: { method: msg.method, params: msg.params, pid: process.pid } });
+  }).on('close', () => process.exit(0));
+};
+emit({ e: 'hello', protocol: 4, pid: process.pid });
+fs.appendFileSync(${JSON.stringify(starts)}, JSON.stringify({
+  pid: process.pid, args, token: process.env.PYNE_PROVIDER_HUB_TOKEN, pythonPath: process.env.PYTHONPATH,
+}) + '\\n');
+if (args.includes('--hub')) {
+  const at = args.indexOf('--hub-port');
+  const server = net.createServer((socket) => socket.on('error', () => {}));
+  server.listen(at < 0 ? 0 : Number(args[at + 1]), '127.0.0.1', () => {
+    emit({ e: 'hub', host: '127.0.0.1', port: server.address().port });
+    serve();
+  });
+} else {
+  serve();
+}
+`, { mode: 0o755 });
+
+const oldBridge = path.join(dir, 'python-old-bridge');
+fs.writeFileSync(oldBridge, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args.includes('--hub')) {
+  console.log(JSON.stringify({ e: 'hello', protocol: 4, pid: process.pid }));
+  console.error("ModuleNotFoundError: No module named 'pynecore.core.plugin.hub'");
+  process.exit(1);
+}
+require(${JSON.stringify(fakeBridge)});
+`, { mode: 0o755 });
+
+const bridgeRoot = path.join(dir, 'bridge-root');
+const bridgeHubs = (lingerMs = 50) => new ServiceHubs(() => undefined, lingerMs, undefined, undefined, bridgeRoot);
+
+test('a provider service and the live runs of a workdir share the hub process', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs();
+  const lease = await hubs.acquire(fakeBridge, dir);
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const other = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const [first, second] = await Promise.all([
+    service.request('symbols', { provider: 'ccxt' }),
+    other.request('brokers', { provider: 'ccxt' }),
+  ]);
+  assert.equal(started().length, 1, 'no process beside the hub');
+  const { pid, args, pythonPath } = started()[0];
+  assert.deepEqual(args, ['-X', 'utf8', '-m', 'pyneide_bridge', '--provider-service', '--hub', '--workdir', dir]);
+  assert.ok(pythonPath.split(path.delimiter).includes(bridgeRoot));
+  assert.deepEqual(first, { method: 'symbols', params: { provider: 'ccxt' }, pid });
+  assert.deepEqual(second, { method: 'brokers', params: { provider: 'ccxt' }, pid });
+  assert.ok(await connects(lease.env));
+
+  // The services hold the hub like a run does
+  lease.release();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(alive(pid), 'the services still use the hub');
+  service.dispose();
+  other.dispose();
+  await until(() => !alive(pid), 'the hub to end');
+  hubs.dispose();
+});
+
+test('a provider service gets the hub back after it ended, on the same port', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs();
+  const lease = await hubs.acquire(fakeBridge, dir);
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const { pid } = await service.request('providers');
+  const lost = service.request('slow');
+  process.kill(pid, 'SIGKILL');
+  await assert.rejects(lost, /exited/);
+  await until(() => started().length === 2, 'the hub to start again');
+  const again = await service.request('providers');
+  assert.notEqual(again.pid, pid);
+  assert.deepEqual(started()[1].args.slice(-2), ['--hub-port', lease.env.PYNE_PROVIDER_HUB.split(':')[1]]);
+
+  // A changed plugin set: the process goes, the next request finds a new one
+  service.restart();
+  await until(() => started().length === 3, 'the hub to start again');
+  assert.equal((await service.request('providers')).pid, started()[2].pid);
+  service.dispose();
+  lease.release();
+  hubs.dispose();
+  await until(() => !alive(started()[2].pid), 'the hub to end');
+});
+
+test('a request right after a restart is answered by the new hub process', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs();
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const other = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const { pid } = await service.request('providers');
+  await other.request('providers');
+  // Every symbol browser reloads its providers at once
+  service.restart();
+  other.restart();
+  const [first, second] = await Promise.all([service.request('providers'), other.request('providers')]);
+  assert.equal(started().length, 2, 'one replacement process');
+  assert.notEqual(first.pid, pid);
+  assert.equal(first.pid, started()[1].pid);
+  assert.equal(second.pid, first.pid);
+  service.dispose();
+  other.dispose();
+  hubs.dispose();
+  await until(() => !alive(first.pid), 'the hub to end');
+});
+
+const commands = () => (fs.existsSync(received) ? fs.readFileSync(received, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+
+test('a download cancelled while it waits for a restarted hub is never written', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  fs.rmSync(received, { force: true });
+  const hubs = bridgeHubs();
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const other = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  await service.request('providers');
+  await other.request('providers');
+  service.restart();
+  const { id, result } = service.requestWithHandle('download', { path: 'x.ohlcv' }, { timeoutMs: 0 });
+  // The download waits for the replacement process when the user cancels it
+  await new Promise((resolve) => setImmediate(resolve));
+  service.cancel(id);
+  await assert.rejects(result, { kind: 'Cancelled' });
+  service.dispose();
+  const { pid } = await other.request('providers');
+  assert.equal(pid, started()[1].pid);
+  assert.ok(!commands().some((msg) => msg.cmd === 'rpc' && msg.id === id), 'the download is not written');
+  other.dispose();
+  hubs.dispose();
+  await until(() => !alive(pid), 'the hub to end');
+});
+
+test('a disposed provider service stops its downloads in the shared hub process', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  fs.rmSync(received, { force: true });
+  const hubs = bridgeHubs();
+  const lease = await hubs.acquire(fakeBridge, dir);
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const { id, result } = service.requestWithHandle('slow', {}, { timeoutMs: 0 });
+  await until(() => commands().some((msg) => msg.cmd === 'rpc' && msg.id === id), 'the request to be written');
+  service.dispose();
+  await assert.rejects(result, /disposed/);
+  await until(() => commands().some((msg) => msg.cmd === 'cancel' && msg.id === id), 'the cancel to be written');
+  const { pid } = started()[0];
+  lease.release();
+  hubs.dispose();
+  await until(() => !alive(pid), 'the hub to end');
+});
+
+test('a paused provider service ends an otherwise unused hub at once', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs(60_000);
+  const service = new ProviderService({ pythonBin: fakeBridge, bridgeRoot, workdir: dir, hubs });
+  const { pid } = await service.request('providers');
+  await service.pauseForCoreUpdate();
+  assert.ok(!alive(pid), 'the hub is gone when the pause resolves');
+  await assert.rejects(service.request('providers'), /being updated/);
+  service.resumeAfterCoreUpdate();
+  assert.notEqual((await service.request('providers')).pid, pid);
+  service.dispose();
+  hubs.dispose();
+});
+
+test('a lingering hub ends at once before a package update', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs(60_000);
+  const lease = await hubs.acquire(fakeBridge, dir);
+  const { pid } = started()[0];
+  await hubs.endIdle(fakeBridge);
+  assert.ok(alive(pid), 'a hub in use stays');
+  lease.release();
+  await hubs.endIdle(fakeBridge);
+  assert.ok(!alive(pid));
+  hubs.dispose();
+});
+
+test('without a hub in PyneCore the provider service runs its own process', { skip }, async () => {
+  fs.rmSync(starts, { force: true });
+  const hubs = bridgeHubs();
+  const service = new ProviderService({ pythonBin: oldBridge, bridgeRoot, workdir: dir, hubs });
+  const result = await service.request('providers');
+  assert.equal(result.method, 'providers');
+  const own = started().at(-1);
+  assert.ok(!own.args.includes('--hub'));
+  assert.equal(own.pid, result.pid);
+  assert.deepEqual((await hubs.acquire(oldBridge, dir)).env, {});
+  service.dispose();
+  await until(() => !alive(own.pid), 'the service to end');
+  hubs.dispose();
+});
