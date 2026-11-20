@@ -47,6 +47,7 @@ import {
   type DataActionContext,
 } from './run/dataSelect';
 import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveChartService';
+import { CandleServices } from './run/candleService';
 import { ProviderHubs } from './run/providerHub';
 import { useProviderHubs } from './data/providerService';
 import { DashboardEditorProvider, isDashboardMirrorKey } from './dashboard/dashboardEditor';
@@ -116,7 +117,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const state = project.state;
       const update = async () => {
         // A hub that only lingers after its last run would keep the packages in use
-        if (state.kind === 'ready') await providerHubs.endIdle(state.pythonBin);
+        if (state.kind === 'ready') {
+          await candleServices.endIdle(state.pythonBin);
+          await providerHubs.endIdle(state.pythonBin);
+        }
         return project.setup({ updateCore: true });
       };
       if (state.kind === 'ready' && state.source === 'managed') {
@@ -217,14 +221,24 @@ export function activate(context: vscode.ExtensionContext): void {
     // An updated PyneCore may have the hub an older one lacked
     manager.onDidChangeProjectState(() => providerHubs.forgetUnsupported())
   );
-  // Live charts without a script: their own tabs and bridges, beside the run slot
+  // The live charts without a script of a workdir share one candle process, a client of its hub
+  const candleServices = new CandleServices(
+    providerHubs,
+    vscode.Uri.joinPath(context.extensionUri, 'python').fsPath,
+    (line) => runService.runOutput.appendLine(line)
+  );
+  context.subscriptions.push(
+    candleServices,
+    manager.onDidChangeProjectState(() => candleServices.forgetFailed())
+  );
+  // Live charts without a script: their own tabs, beside the run slot
   const liveCharts = new LiveChartService(
     context,
     chartManager,
     runService.runOutput,
     () => resolveLiveChartEnv(manager),
     pickLiveTarget,
-    providerHubs
+    candleServices
   );
   liveCharts.register();
   SymbolBrowserPanel.setLiveChartOpener((provider, env) => void liveCharts.openProvider(provider, env));
@@ -313,6 +327,7 @@ export function activate(context: vscode.ExtensionContext): void {
     pickLive: pickLiveTarget,
     compile: compileService,
     hubs: providerHubs,
+    candles: candleServices,
     editInputs: async (request) => {
       const uri = await editInputsUri(request.scriptUri, compileService);
       if (uri) await inputsView.openDashboardEntry({ ...request, scriptUri: uri });

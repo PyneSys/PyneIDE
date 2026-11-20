@@ -5,8 +5,9 @@
  * written into it (and saved), and every change of it — from the UI or typed by
  * hand — is what restarts the charts it touched.
  *
- * A chart runs a data-only bridge for its candles and one bridge per script
- * (PyneCore runs one script per process); `ChartComposer` merges them into the
+ * A chart gets its candles from the workdir's candle process (`CandleServices`)
+ * and runs one bridge per script (PyneCore runs one script per process);
+ * `ChartComposer` merges them into the
  * one stream a chart iframe draws. The scripts start once the candles' history
  * is in, from its first bar, so every process runs on the same bars.
  */
@@ -28,6 +29,7 @@ import { ChartStream } from '../chart/chartStream';
 import type { ChartCell, ChartCellAction, ChartCellScript, ChartInMessage, ChartOutMessage } from '../chart/messages';
 import type { CompileService } from '../compile/service';
 import { BridgeRun, type BridgeEvent, type DownloadEvent } from '../run/bridgeClient';
+import type { CandleRun, CandleServices } from '../run/candleService';
 import { askTimeframe, offerLiveCoreUpdate, LIVE_UNSUPPORTED, type LiveChartEnv, type PickLiveTarget } from '../run/liveChartService';
 import { providerTimeframe, withTimeframe } from '../run/liveTarget';
 import type { ProviderHubs } from '../run/providerHub';
@@ -90,6 +92,7 @@ export interface DashboardDeps {
   editInputs: EditDashboardInputs;
   chartManager: ChartManager;
   hubs: ProviderHubs;
+  candles: CandleServices;
 }
 
 export class DashboardEditorProvider implements vscode.CustomTextEditorProvider {
@@ -532,7 +535,7 @@ class ChartRun {
   private frameReady = false;
   /** Bumped on every (re)start: events of a superseded launch are dropped. */
   private generation = 0;
-  private runs: BridgeRun[] = [];
+  private runs: CandleRun[] = [];
   private state: DashboardChartState = 'starting';
   private message: string | undefined;
   private readonly scriptStates = new Map<string, { state: ChartCellScript['state']; message?: string }>();
@@ -733,13 +736,6 @@ class ChartRun {
       this.setState('error', 'The Python environment is not set up.');
       return;
     }
-    // The chart's processes share the workdir's providers instead of each holding one
-    const hub = await this.deps.hubs.acquire(env.pythonBin, env.workdir);
-    if (!current()) {
-      hub.release();
-      return;
-    }
-
     const scripts = config.scripts;
     for (const s of scripts) {
       const kind = scriptKindOf(path.resolve(env.workdir, s.path));
@@ -762,13 +758,12 @@ class ChartRun {
     let baseError: string | undefined;
     let baseErrorKind: string | undefined;
     let scriptsLaunched = false;
-    const base = BridgeRun.start({
+    // The candles come from the workdir's shared candle process when it has a provider hub
+    const base = await this.deps.candles.start({
       pythonBin: env.pythonBin,
-      bridgeRoot,
       workdir: env.workdir,
-      dataOnly: true,
-      live: { provider: config.provider, from: config.history },
-      env: hub.env,
+      provider: config.provider,
+      from: config.history,
       onEvent: (event) => {
         if (!current()) return;
         switch (event.e) {
@@ -802,9 +797,12 @@ class ChartRun {
       },
       onLog: (line) => output.appendLine(`[${this.key}] ${line}`),
     });
+    if (!current()) {
+      base.kill();
+      return;
+    }
     this.runs.push(base);
     const code = await base.exited;
-    hub.release();
     if (!current()) return;
     if (code !== 0 && !baseError) baseError = `the chart's runner exited with code ${code}`;
     if (baseError) {
@@ -917,7 +915,7 @@ function downloadMessage(event: DownloadEvent): string {
 }
 
 /** Stop a bridge and wait for it to exit. */
-async function stopRun(run: BridgeRun): Promise<void> {
+async function stopRun(run: CandleRun): Promise<void> {
   run.cancel();
   const killer = setTimeout(() => run.kill(), STOP_GRACE_MS);
   try {

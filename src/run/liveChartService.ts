@@ -1,17 +1,16 @@
 /**
  * Live charts without a script: a provider's candles, history then live feed,
- * each in a chart tab of its own and a bridge process of its own (`--live` with
- * `--data-only`). They run beside the one script run slot of the RunService,
- * so a script run never stops them; closing the tab stops the chart.
+ * each in a chart tab of its own, their candles from the {@link CandleServices}.
+ * They run beside the one script run slot of the RunService, so a script run
+ * never stops them; closing the tab stops the chart.
  */
 import * as vscode from 'vscode';
 
 import type { ChartManager } from '../chart/chartPanel';
 import type { LivePickRequest } from '../data/symbolBrowserPanel';
 import { parseTimeframe } from '../data/timeframes';
-import { BridgeRun } from './bridgeClient';
+import type { CandleRun, CandleServices } from './candleService';
 import { LiveDownloadProgress } from './liveDownloadProgress';
-import type { ProviderHubs } from './providerHub';
 import {
   DEFAULT_LIVE_FROM,
   liveChartTitle,
@@ -56,7 +55,7 @@ export type PickLiveTarget = (
 interface LiveChart {
   target: LiveTarget;
   env: LiveChartEnv;
-  run: BridgeRun | undefined;
+  run: CandleRun | undefined;
 }
 
 /** Whether a chart key is a live chart without a script. */
@@ -66,6 +65,8 @@ export function isLiveChartKey(chartKey: string): boolean {
 
 export class LiveChartService implements vscode.Disposable {
   private readonly charts = new Map<string, LiveChart>();
+  /** The number of each tab's latest launch. */
+  private readonly launches = new Map<string, number>();
   private nextId = 1;
 
   constructor(
@@ -74,7 +75,7 @@ export class LiveChartService implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
     private readonly resolveEnv: () => Promise<LiveChartEnv | undefined>,
     private readonly pickLive: PickLiveTarget,
-    private readonly hubs: ProviderHubs
+    private readonly candles: CandleServices
   ) {}
 
   register(): void {
@@ -133,6 +134,7 @@ export class LiveChartService implements vscode.Disposable {
     const chart = this.charts.get(chartKey);
     if (!chart) return;
     this.charts.delete(chartKey);
+    this.launches.delete(chartKey);
     // Detached first: the stopping run's trailing events must not reopen the tab
     const run = chart.run;
     chart.run = undefined;
@@ -170,34 +172,29 @@ export class LiveChartService implements vscode.Disposable {
       await stopRun(previous);
     }
     if (this.charts.get(chartKey) !== chart || chart.run) return;
-    const hub = await this.hubs.acquire(chart.env.pythonBin, chart.env.workdir);
-    if (this.charts.get(chartKey) !== chart || chart.run) {
-      hub.release();
-      return;
-    }
+    const launch = (this.launches.get(chartKey) ?? 0) + 1;
+    this.launches.set(chartKey, launch);
 
     const target = chart.target;
     this.output.appendLine(`--- Live chart: ${target.provider} (workdir: ${chart.env.workdir})`);
     let started = false;
     let error: string | undefined;
     let errorKind: string | undefined;
-    let run: BridgeRun | undefined;
+    let run: CandleRun | undefined;
     // A restart or a closed tab already stops a superseded run
     const download = new LiveDownloadProgress(`PyneIDE: live chart of ${target.provider}`, () => {
       if (run && chart.run === run) void stopRun(run);
     });
-    run = BridgeRun.start({
+    const candles = await this.candles.start({
       pythonBin: chart.env.pythonBin,
-      bridgeRoot: vscode.Uri.joinPath(this.context.extensionUri, 'python').fsPath,
       workdir: chart.env.workdir,
-      dataOnly: true,
-      live: { provider: target.provider, from: target.from },
-      env: hub.env,
+      provider: target.provider,
+      from: target.from,
       onEvent: (event) => {
         // A restart may have superseded this run, or its tab was closed: its
         // trailing events must not land on the chart the new one is drawing,
         // nor reopen a closed one
-        if (chart.run !== run || this.charts.get(chartKey) !== chart) return;
+        if (!run || chart.run !== run || this.charts.get(chartKey) !== chart) return;
         switch (event.e) {
           case 'download':
             download.update(event);
@@ -218,10 +215,16 @@ export class LiveChartService implements vscode.Disposable {
       },
       onLog: (line) => this.output.appendLine(line),
     });
+    // A later launch of the tab, or its close, came while the candles started
+    if (this.charts.get(chartKey) !== chart || this.launches.get(chartKey) !== launch || chart.run) {
+      candles.kill();
+      download.close();
+      return;
+    }
+    run = candles;
     chart.run = run;
 
     const code = await run.exited;
-    hub.release();
     download.close();
     if (chart.run !== run) return;
     chart.run = undefined;
@@ -245,7 +248,7 @@ export class LiveChartService implements vscode.Disposable {
 }
 
 /** Stop a live chart's bridge and wait for it to exit. */
-async function stopRun(run: BridgeRun): Promise<void> {
+async function stopRun(run: CandleRun): Promise<void> {
   run.cancel();
   const killer = setTimeout(() => run.kill(), STOP_GRACE_MS);
   try {

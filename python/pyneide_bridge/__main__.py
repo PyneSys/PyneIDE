@@ -129,6 +129,11 @@ def main() -> int:
                              "pynecore.core.plugin.hub)")
     parser.add_argument("--hub-port", type=int, default=0, metavar="PORT",
                         help="With --hub: port the hub listens on (default: a free one)")
+    parser.add_argument("--candle-service", action="store_true",
+                        help="Long-lived process of the workdir's live charts without a "
+                             "script: stdin commands open and close charts, each streams "
+                             "its candles tagged with the chart's number; ignores "
+                             "--script/--data")
     parser.add_argument("--live", default=None, metavar="PROVIDER_STRING",
                         help="Live chart: download the provider string's history "
                              "(e.g. ccxt:BYBIT:BTC/USDT:USDT@1) into memory, run "
@@ -200,6 +205,16 @@ def main() -> int:
                     return 1
                 return serve_with_hub(Path(args.workdir).resolve(), emitter, args.hub_port)
             ProviderService(Path(args.workdir).resolve(), emitter).serve()
+            return 0
+        except Exception as exc:
+            emitter.emit(error_event(exc))
+            return 1
+
+    if args.candle_service:
+        # The service owns stdin (its chart commands); no run Control here.
+        try:
+            from .candle_service import CandleService
+            CandleService(Path(args.workdir).resolve(), emitter).serve()
             return 0
         except Exception as exc:
             emitter.emit(error_event(exc))

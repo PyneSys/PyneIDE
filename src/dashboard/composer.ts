@@ -1,7 +1,7 @@
 /**
- * One dashboard chart is several bridge processes: a data-only one for the
- * candles (the base) and one per script (a slot), since PyneCore runs one
- * script per process. The composer merges their event streams into the single
+ * One dashboard chart is several event streams: the candles' (the base) and
+ * one bridge process per script (a slot), since PyneCore runs one script per
+ * process. The composer merges their event streams into the single
  * stream one chart webview draws, as if one script had plotted everything:
  *
  * - the base gives the start, the candles, the live state and the ticks' OHLC;

@@ -1927,6 +1927,7 @@
     "test:create-script": "node --test test/createScript.test.mjs",
     "test:live-chart": "node --test test/liveChart.test.mjs",
     "test:provider-hub": "node --test test/providerHub.test.mjs",
+    "test:candle-service": "node --test test/candleService.test.mjs",
     "demos:check": "node scripts/pine-demos.mjs",
     "demos:sync": "node scripts/pine-demos.mjs --sync",
     "build": "node esbuild.mjs",

@@ -5,7 +5,9 @@ workdir's ``data``), runs the script on it, then keeps running on the provider's
 live feed. Data only: the bridge never trades.
 With ``--data-only`` the chart has no script: an empty indicator
 (:data:`CANDLES_SCRIPT`) runs in its place, so only the candles stream and no
-output file is written.
+output file is written. The IDE runs such a chart this way only without a
+provider hub; with one, :mod:`~pyneide_bridge.candle_service` streams the candles
+of all of them from one process.
 It has no broker flag and never creates a broker; a provider plugin that is
 also a broker only streams market data here, like any data provider.
 
@@ -51,7 +53,7 @@ import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .control import Control
 from .protocol import Emitter, num_or_none
@@ -201,11 +203,18 @@ class LiveFeed:
                 return
 
 
+class Stoppable(Protocol):
+    """What a download asks of its run: whether it was stopped."""
+
+    @property
+    def cancelled(self) -> bool: ...
+
+
 class _DownloadReporter:
     """Streams the history download's progress as ``download`` events; a
     stopped run aborts the download at its next progress report."""
 
-    def __init__(self, emitter: Emitter, control: Control):
+    def __init__(self, emitter: Emitter, control: Stoppable):
         from pynecore.core.provider_download import DownloadListener
 
         reporter = self
