@@ -14,6 +14,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -312,7 +313,17 @@ def main() -> int:
         import debugpy
         host, port = debugpy.listen(("127.0.0.1", args.debugpy_port))
         emitter.emit({"e": "debugpy", "host": host, "port": port})
-        debugpy.wait_for_client()
+        # A cancel ends the wait too: without a debugger nothing else would,
+        # and the IDE may be gone before it attaches (stdin EOF cancels).
+        # debugpy.wait_for_client() can only be cancelled once it is waiting,
+        # so the wait runs on an event that exists before it starts.
+        import pydevd
+        stop_waiting = threading.Event()
+        control.add_cancel_hook(stop_waiting.set)
+        pydevd.get_global_debugger().block_until_configuration_done(cancel=stop_waiting)
+        if control.cancelled:
+            emitter.emit({"e": "end", "bars": 0, "cancelled": True})
+            return 0
 
     from .runner import run
     try:
