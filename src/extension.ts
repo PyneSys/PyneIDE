@@ -122,10 +122,31 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         return project.setup({ updateCore: true });
       };
-      if (state.kind === 'ready' && state.source === 'managed') {
-        await SymbolBrowserPanel.withProvidersPaused(state.pythonBin, update);
-      } else {
+      if (state.kind !== 'ready' || state.source !== 'managed') {
         await update();
+        return;
+      }
+      // Running live charts keep the packages in use: the user decides whether
+      // they restart for the update
+      const pythonBin = state.pythonBin;
+      const charts = liveCharts.countOn(pythonBin) + (runService.liveRunsOn(pythonBin) ? 1 : 0);
+      if (charts) {
+        const restart = 'Restart and Update';
+        const choice = await vscode.window.showInformationMessage(
+          charts === 1
+            ? 'PyneIDE: a live chart uses this project environment. Updating PyneCore restarts it.'
+            : `PyneIDE: ${charts} live charts use this project environment. Updating PyneCore restarts them.`,
+          restart
+        );
+        if (choice !== restart) return;
+      }
+      const resumeCharts = await liveCharts.pauseForCoreUpdate(pythonBin);
+      const resumeScript = await runService.pauseLiveForCoreUpdate(pythonBin);
+      try {
+        await SymbolBrowserPanel.withProvidersPaused(pythonBin, update);
+      } finally {
+        resumeCharts();
+        resumeScript();
       }
     }),
     vscode.commands.registerCommand('pyneide.showEnvironmentLog', () => output.show()),

@@ -67,6 +67,8 @@ export class LiveChartService implements vscode.Disposable {
   private readonly charts = new Map<string, LiveChart>();
   /** The number of each tab's latest launch. */
   private readonly launches = new Map<string, number>();
+  /** Python environments whose charts wait for a PyneCore update to end. */
+  private readonly paused = new Set<string>();
   private nextId = 1;
 
   constructor(
@@ -141,6 +143,38 @@ export class LiveChartService implements vscode.Disposable {
     if (run) void stopRun(run);
   }
 
+  /** The number of open live charts whose candles come from `pythonBin`. */
+  countOn(pythonBin: string): number {
+    return [...this.charts.values()].filter((chart) => chart.env.pythonBin === pythonBin).length;
+  }
+
+  /**
+   * Stops the live charts of `pythonBin` for a PyneCore update. Their tabs stay
+   * open and start no run until the returned callback starts them again.
+   */
+  async pauseForCoreUpdate(pythonBin: string): Promise<() => void> {
+    this.paused.add(pythonBin);
+    const stopping: Promise<void>[] = [];
+    for (const [chartKey, chart] of this.charts) {
+      if (chart.env.pythonBin !== pythonBin) continue;
+      // A launch still starting its candles drops them when it sees a newer launch
+      this.launches.set(chartKey, (this.launches.get(chartKey) ?? 0) + 1);
+      if (!chart.run) continue;
+      // Detached first, as on a restart: the stopped run must not close the tab
+      const run = chart.run;
+      chart.run = undefined;
+      this.chartManager.onEvent({ e: 'end', bars: 0, cancelled: true }, chartKey);
+      stopping.push(stopRun(run));
+    }
+    await Promise.all(stopping);
+    return () => {
+      this.paused.delete(pythonBin);
+      for (const [chartKey, chart] of this.charts) {
+        if (chart.env.pythonBin === pythonBin && !chart.run) void this.launch(chartKey);
+      }
+    };
+  }
+
   dispose(): void {
     for (const chart of this.charts.values()) {
       const run = chart.run;
@@ -172,6 +206,8 @@ export class LiveChartService implements vscode.Disposable {
       await stopRun(previous);
     }
     if (this.charts.get(chartKey) !== chart || chart.run) return;
+    // A PyneCore update is running: the chart starts on the new one after it
+    if (this.paused.has(chart.env.pythonBin)) return;
     const launch = (this.launches.get(chartKey) ?? 0) + 1;
     this.launches.set(chartKey, launch);
 

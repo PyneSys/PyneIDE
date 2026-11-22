@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PyneIDE: Update PyneCore** no longer refuses while live charts of the project run: it offers
+  to restart them, stops them for the update and starts them again on the new PyneCore.
+
 ### Removed
 
 - The strict compilation setting (`pyneide.strictCompile`) and its toggle: the compiler's default

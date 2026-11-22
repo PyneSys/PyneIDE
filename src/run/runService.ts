@@ -85,6 +85,8 @@ export type PickLiveTarget = (
 /** The state of the live chart run in flight (status bar, control menu). */
 interface LiveRunState {
   target: LiveTarget;
+  /** The interpreter the run's bridge was started with. */
+  pythonBin: string;
   /** `SYMBOL TIMEFRAME` from the run's `start` event; empty while it downloads. */
   label: string;
   /** The history is over, the run is on the live feed. */
@@ -682,6 +684,26 @@ export class RunService {
     }
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(chartKey));
     await this.runDocument(doc);
+  }
+
+  /** Whether a script's live chart runs in `pythonBin`. */
+  liveRunsOn(pythonBin: string): boolean {
+    return this.activeRun !== undefined && this.live?.pythonBin === pythonBin;
+  }
+
+  /**
+   * Stops the script's live chart running in `pythonBin` for a PyneCore
+   * update. The returned callback runs the script live again on its chart,
+   * when the chart is still open and no other run took the slot meanwhile.
+   */
+  async pauseLiveForCoreUpdate(pythonBin: string): Promise<() => void> {
+    const chartKey = this.activeChartKey;
+    if (!this.liveRunsOn(pythonBin) || !chartKey) return () => undefined;
+    await this.drainActiveRun();
+    return () => {
+      if (this.activeRun || this.startPending || !this.chartManager?.hasOpenChart(chartKey)) return;
+      void this.runLive(vscode.Uri.file(chartKey));
+    };
   }
 
   /**
@@ -1595,7 +1617,9 @@ export class RunService {
     this.supersedePreview(chartKey);
     this.activeChartKey = chartKey;
     this.activeRunIsDebug = opts.debug !== undefined;
-    this.live = opts.live ? { target: opts.live, label: '', onFeed: false, feed: undefined } : undefined;
+    this.live = opts.live
+      ? { target: opts.live, pythonBin: opts.pythonBin, label: '', onFeed: false, feed: undefined }
+      : undefined;
     const mode = opts.live
       ? 'Live'
       : opts.debug
