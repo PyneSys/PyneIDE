@@ -29,9 +29,7 @@ from typing import Any
 from pynecore.core.live_runner import LiveStop
 from pynecore.core.provider_download import (DownloadStopped, download_provider_history_resilient,
                                              open_live_stream, require_live_provider)
-# noinspection PyProtectedMember
-from pynecore.core.script_runner import LIVE_TRANSITION, _clean_bar
-from pynecore.core.syminfo import mintick_decimals
+from pynecore.core.script_runner import LIVE_TRANSITION
 
 from .errors import error_event
 from .live import (LiveCancelled, TickThrottle, UNSUPPORTED_KIND, _DownloadReporter,
@@ -72,8 +70,8 @@ def stream_candles(provider: str, time_from: str | None, workdir: Path, emitter:
                    stop: LiveStop) -> int:
     """Stream a provider's candles: the history, then the live feed.
 
-    The rows are the ones a script's run sends for the same bars: the prices and the
-    volume go through the clean-up the script runner applies to a chart bar.
+    The rows carry the bars as the provider served them, the same values a script's
+    run sends for the same bars.
 
     :param provider: The provider string, with the timeframe.
     :param time_from: The history start (a date, days, or ``-N`` bars).
@@ -109,8 +107,6 @@ def stream_candles(provider: str, time_from: str | None, workdir: Path, emitter:
     time_to_ts = bars[-1].timestamp if bars else time_from_ts
     window = [bar for bar in bars if time_from_ts <= bar.timestamp <= time_to_ts]
     size = len(window)
-    mintick = getattr(syminfo, "mintick", 0.0) or 0.0
-    round_decimals = mintick_decimals(mintick) if mintick > 0 else None
 
     emitter.emit({
         "e": "start",
@@ -130,9 +126,9 @@ def stream_candles(provider: str, time_from: str | None, workdir: Path, emitter:
     })
 
     def row(candle: Any) -> list[Any]:
-        o, h, lo, c, v = _clean_bar(candle, round_decimals, False, False)
-        return [int(candle.timestamp), num_or_none(o), num_or_none(h), num_or_none(lo),
-                num_or_none(c), num_or_none(v), None]
+        return [int(candle.timestamp), num_or_none(candle.open), num_or_none(candle.high),
+                num_or_none(candle.low), num_or_none(candle.close), num_or_none(candle.volume),
+                None]
 
     batch: list[list[Any]] = []
     bars_done = 0
