@@ -19,9 +19,10 @@ fs.writeFileSync(modulePath, bundled.outputFiles[0].text);
 const { CandleServices, ProviderHubs } = await import(modulePath);
 
 // A stand-in for the Python of an environment. As the hub it listens and prints
-// its address; as the candle service it answers `open` with a start and a bar and
-// `close` with an end, each followed by the chart's exit; as a bridge of one
-// chart it sends a start and ends on `cancel`. Every start is logged.
+// its address; as the candle service it answers `open` with a start and two bars
+// (from the `from` date when it is one), goes live for a `live:` provider, and
+// answers `close` with an end, each followed by the chart's exit; as a bridge of
+// one chart it sends a start and ends on `cancel`. Every start is logged.
 const starts = path.join(dir, 'starts.log');
 const fake = (name, { hub = true, candles = 'ok' } = {}) => {
   const file = path.join(dir, name);
@@ -55,7 +56,9 @@ if (args.includes('pynecore.core.plugin.hub')) {
     if (msg.cmd === 'open') {
       if (msg.provider === 'die') process.exit(3);
       say({ e: 'start', chart: msg.chart, data: msg.provider, from: msg.from ?? null });
-      say({ e: 'bars', chart: msg.chart, d: [[msg.chart, 1, 2, 0, 1, 5, null]] });
+      const first = /^\\d{4}-/.test(msg.from ?? '') ? Date.parse(msg.from) : msg.chart * 60000;
+      say({ e: 'bars', chart: msg.chart, d: [[first, 1, 2, 0, 1, 5, null], [first + 60000, 1, 2, 0, 1, 5, null]] });
+      if (msg.provider.startsWith('live:')) say({ e: 'live', chart: msg.chart });
       if (msg.provider === 'fail') {
         say({ e: 'error', chart: msg.chart, message: 'no such symbol', kind: 'ProviderError', traceback: '' });
         say({ e: 'exit', chart: msg.chart, code: 1 });
@@ -185,16 +188,76 @@ test("a chart's failure ends that chart only", { skip }, async () => {
   done();
 });
 
-test('a candle process that dies ends its charts with its exit code, the next chart starts a new one', { skip }, async () => {
-  const { open, done } = setup();
+test('a candle process that dies is started again, its charts go on from their last bar', { skip }, async () => {
+  const { lines, open, done } = setup();
+  const live = await open(python, 'live:A@1');
+  const loading = await open(python, 'ccxt:B@1');
+  await until(() => live.events.length === 3 && loading.events.length === 2, 'the first events');
+  const lastBar = live.events[1].d[1][0];
+  process.kill(of('--candle-service')[0].pid, 'SIGKILL');
+
+  await until(() => live.events.length === 6 && loading.events.length === 3, 'the events of the new process');
+  assert.equal(of('--candle-service').length, 2);
+  assert.equal(of('--data-only').length, 0);
+  // No second start or live: the chart learns of the outage and gets the bars from its last one on
+  assert.deepEqual(live.events.map((event) => event.e), ['start', 'bars', 'live', 'feedStatus', 'bars', 'feedStatus']);
+  assert.deepEqual(live.events.filter((event) => event.e === 'feedStatus').map((event) => event.state), ['reconnecting', 'live']);
+  // The new process streams from the bar before the last one; the chart gets its last bar again
+  assert.deepEqual(live.events[4].d.map((row) => row[0]), [lastBar]);
+  // A chart that was not live yet only gets its bars
+  assert.deepEqual(loading.events.map((event) => event.e), ['start', 'bars', 'bars']);
+  assert.deepEqual(loading.events[2].d.map((row) => row[0]), [loading.events[1].d[1][0]]);
+  assert.ok(lines.some((line) => line.includes('starting it again for 2 chart(s)')));
+
+  for (const chart of [live, loading]) {
+    chart.run.cancel();
+    assert.equal(await chart.run.exited, 0);
+    assert.deepEqual(chart.events.at(-1), { e: 'end', bars: 1, cancelled: true });
+  }
+  done();
+});
+
+test('a candle process that keeps dying leaves its charts to bridges of their own', { skip }, async () => {
+  const { lines, open, done } = setup();
   const chart = await open(python, 'ccxt:A@1');
   await until(() => chart.events.length === 2, 'the first events');
+  // Every candle process dies of this chart
   const dying = await open(python, 'die');
-  assert.equal(await dying.run.exited, 3);
-  assert.equal(await chart.run.exited, 3);
-  const again = await open(python, 'ccxt:A@1');
-  await until(() => again.events.length === 2, 'the chart of the new process');
-  assert.equal(of('--candle-service').length, 2);
+  await until(() => of('--data-only').length === 2, 'the two bridges');
+  assert.equal(of('--candle-service').length, 4);
+  assert.ok(lines.some((line) => line.includes('ended 4 times within 60 s')));
+  // Each of the three later processes sent the chart its last bar again
+  assert.deepEqual(chart.events.map((event) => event.e), ['start', 'bars', 'bars', 'bars', 'bars']);
+  const lastBar = chart.events[1].d[1][0];
+  assert.ok(chart.events.slice(2).every((event) => event.d.length === 1 && event.d[0][0] === lastBar));
+  const mine = of('--data-only').find((bridge) => bridge.args.includes('ccxt:A@1'));
+  assert.deepEqual(mine.args.slice(-5), ['--live', 'ccxt:A@1', '--live-from', new Date(lastBar - 60000).toISOString(), '--data-only']);
+  assert.ok(of('--data-only').every((bridge) => /^127\.0\.0\.1:\d+$/.test(bridge.hub)));
+
+  // The next chart does not try the shared process either
+  const next = await open(python, 'ccxt:C@1');
+  await until(() => of('--data-only').length === 3, 'the third bridge');
+  assert.equal(of('--candle-service').length, 4);
+  for (const each of [chart, dying, next]) {
+    each.run.cancel();
+    assert.equal(await each.run.exited, 0);
+  }
+  assert.equal(chart.events.filter((event) => event.e === 'start').length, 1);
+  done();
+});
+
+test('a chart cancelled while its candle process is started again ends', { skip }, async () => {
+  const { open, done } = setup();
+  const chart = await open(python, 'live:A@1');
+  await until(() => chart.events.length === 3, 'the first events');
+  process.kill(of('--candle-service')[0].pid, 'SIGKILL');
+  await until(() => chart.events.some((event) => event.e === 'feedStatus'), 'the outage');
+  chart.run.cancel();
+  assert.equal(await chart.run.exited, 0);
+  assert.equal(chart.events.at(-1).e, 'end');
+  assert.equal(chart.events.at(-1).cancelled, true);
+  // The new process starts all the same; it has no chart
+  await until(() => of('--candle-service').length === 2, 'the new candle process');
   done();
 });
 
