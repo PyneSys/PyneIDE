@@ -20,13 +20,36 @@
  * id = "ema_fast"
  * path = "scripts/ema.py"
  * inputs = { length = 9 }
+ *
+ * [[charts.btc_1.drawings]]
+ * tool = "segment"
+ * timeframe = "1"
+ * color = "#2962FF"
+ * width = 1
+ * dash = "solid"
+ * points = [ [ 2026-11-24T10:00:00.000Z, 97000.5 ], [ 2026-11-24T11:30:00.000Z, 98250 ] ]
  * ```
  *
  * A layout leaf is a chart key; a split lays its children side by side
  * (`horizontal`) or one under the other (`vertical`), `sizes` being their
  * shares of the split (they sum to 1).
+ *
+ * A chart's `drawings` are the user's own: each point is a bar time and a
+ * price, and a Fibonacci retracement also lists its `levels`
+ * (`{ value, color, visible }`). The chart drops a drawing once its bars have
+ * left the chart's history (see `DrawingTools`).
  */
 import { parse, stringify } from 'smol-toml';
+
+import {
+  clampDrawingWidth,
+  DEFAULT_DRAWING_STYLE,
+  type DrawingPoint,
+  type DrawingRecord,
+  type FibLevel,
+  isDrawingColor,
+  isDrawingDash,
+} from '../chart/drawingRecord';
 
 /** Charts one dashboard may hold. */
 export const MAX_CHARTS = 6;
@@ -71,6 +94,8 @@ export interface DashboardChart {
   /** History start: a date, days, or `-N` bars. */
   history: string;
   scripts: DashboardScript[];
+  /** The user's drawings on the chart. */
+  drawings?: DrawingRecord[];
 }
 
 export interface Dashboard {
@@ -122,6 +147,59 @@ function parseScript(raw: unknown, where: string): DashboardScript {
   return script;
 }
 
+function parsePoint(raw: unknown, where: string): DrawingPoint {
+  if (!Array.isArray(raw) || raw.length !== 2 || !(raw[0] instanceof Date) ||
+    typeof raw[1] !== 'number' || !Number.isFinite(raw[0].getTime()) || !Number.isFinite(raw[1])) {
+    throw new DashboardFormatError(`${where} must be [time, price], the time a date-time`);
+  }
+  return { timestamp: raw[0].getTime(), value: raw[1] };
+}
+
+function parseLevel(raw: unknown, where: string): FibLevel {
+  if (!isRecord(raw)) throw new DashboardFormatError(`${where} must be a table`);
+  if (typeof raw.value !== 'number' || !Number.isFinite(raw.value)) {
+    throw new DashboardFormatError(`${where}.value must be a number`);
+  }
+  if (!isDrawingColor(raw.color)) throw new DashboardFormatError(`${where}.color must be #RRGGBB`);
+  if (raw.visible !== undefined && typeof raw.visible !== 'boolean') {
+    throw new DashboardFormatError(`${where}.visible must be true or false`);
+  }
+  return { value: raw.value, color: raw.color, visible: raw.visible ?? true };
+}
+
+function parseDrawing(raw: unknown, where: string): DrawingRecord {
+  if (!isRecord(raw)) throw new DashboardFormatError(`${where} must be a table`);
+  const tool = requireString(raw.tool, `${where}.tool`);
+  if (!Array.isArray(raw.points) || raw.points.length === 0) {
+    throw new DashboardFormatError(`${where}.points must be a non-empty array`);
+  }
+  const points = raw.points.map((p, i) => parsePoint(p, `${where}.points[${i}]`));
+  const style = { ...DEFAULT_DRAWING_STYLE };
+  if (raw.color !== undefined) {
+    if (!isDrawingColor(raw.color)) throw new DashboardFormatError(`${where}.color must be #RRGGBB`);
+    style.color = raw.color;
+  }
+  if (raw.width !== undefined) {
+    if (typeof raw.width !== 'number' || !Number.isFinite(raw.width)) {
+      throw new DashboardFormatError(`${where}.width must be a number`);
+    }
+    style.width = clampDrawingWidth(raw.width);
+  }
+  if (raw.dash !== undefined) {
+    if (!isDrawingDash(raw.dash)) {
+      throw new DashboardFormatError(`${where}.dash must be "solid", "dashed" or "dotted"`);
+    }
+    style.dash = raw.dash;
+  }
+  const drawing: DrawingRecord = { tool, points, style };
+  if (raw.timeframe !== undefined) drawing.timeframe = requireString(raw.timeframe, `${where}.timeframe`);
+  if (raw.levels !== undefined) {
+    if (!Array.isArray(raw.levels)) throw new DashboardFormatError(`${where}.levels must be an array`);
+    drawing.levels = raw.levels.map((l, i) => parseLevel(l, `${where}.levels[${i}]`));
+  }
+  return drawing;
+}
+
 function parseChart(raw: unknown, key: string): DashboardChart {
   const where = `charts.${key}`;
   if (!isRecord(raw)) throw new DashboardFormatError(`${where} must be a table`);
@@ -135,7 +213,13 @@ function parseChart(raw: unknown, key: string): DashboardChart {
     if (ids.has(s.id)) throw new DashboardFormatError(`${where}: script id ${s.id} is used twice`);
     ids.add(s.id);
   }
-  return { provider: requireString(raw.provider, `${where}.provider`), history, scripts };
+  const chart: DashboardChart = { provider: requireString(raw.provider, `${where}.provider`), history, scripts };
+  if (raw.drawings !== undefined) {
+    if (!Array.isArray(raw.drawings)) throw new DashboardFormatError(`${where}.drawings must be an array`);
+    const drawings = raw.drawings.map((d, i) => parseDrawing(d, `${where}.drawings[${i}]`));
+    if (drawings.length) chart.drawings = drawings;
+  }
+  return chart;
 }
 
 function parseLayout(raw: unknown, where: string): LayoutNode {
@@ -195,6 +279,20 @@ function scriptToToml(s: DashboardScript): Record<string, unknown> {
   return out;
 }
 
+function drawingToToml(d: DrawingRecord): Record<string, unknown> {
+  const out: Record<string, unknown> = { tool: d.tool };
+  if (d.timeframe !== undefined) out.timeframe = d.timeframe;
+  out.color = d.style.color;
+  out.width = d.style.width;
+  out.dash = d.style.dash;
+  // A point without a bar time has no place outside the chart that drew it
+  out.points = d.points
+    .filter((p) => p.timestamp !== undefined && p.value !== undefined)
+    .map((p) => [new Date(p.timestamp as number), p.value]);
+  if (d.levels) out.levels = d.levels.map((l) => ({ value: l.value, color: l.color, visible: l.visible }));
+  return out;
+}
+
 /** Serialize a dashboard into its file. */
 export function serializeDashboard(d: Dashboard): string {
   const out: Record<string, unknown> = {};
@@ -208,6 +306,9 @@ export function serializeDashboard(d: Dashboard): string {
   for (const [key, chart] of Object.entries(d.charts)) {
     const c: Record<string, unknown> = { provider: chart.provider, history: chart.history };
     if (chart.scripts.length) c.scripts = chart.scripts.map(scriptToToml);
+    const drawings = (chart.drawings ?? []).map(drawingToToml)
+      .filter((d) => (d.points as unknown[]).length > 0);
+    if (drawings.length) c.drawings = drawings;
     charts[key] = c;
   }
   if (Object.keys(charts).length) out.charts = charts;

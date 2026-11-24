@@ -16,6 +16,7 @@ import type {
 } from '../run/bridgeClient';
 import type { CandleStyleId } from './candleStyle';
 import type { ColorSchemeId } from './colorScheme';
+import type { DrawingRecord } from './drawingRecord';
 import type { PriceScaleId } from './priceScale';
 
 /** One visual chart marker aggregated from every native source breakpoint on
@@ -54,6 +55,10 @@ export interface ChartCell {
   addScriptBlocked?: string;
   /** Why no chart can join the dashboard, when none can. */
   addChartBlocked?: string;
+  /** The user's drawings the dashboard file keeps for the chart. The chart
+   * takes them when it first sees `symbol` and owns them from then on, saving
+   * every change back with a `drawings` action. */
+  drawings: { symbol: string; timeframe: string; records: DrawingRecord[] };
 }
 
 /** A dashboard cell's action, asked from its chart's toolbar or Layers menu. */
@@ -64,7 +69,9 @@ export type ChartCellAction =
   | { kind: 'addChart'; direction: 'horizontal' | 'vertical' }
   | { kind: 'openFullChart' }
   | { kind: 'removeChart' }
-  | { kind: 'restart' };
+  | { kind: 'restart' }
+  /** The chart's drawings changed: the full set for the dashboard file. */
+  | { kind: 'drawings'; symbol: string; records: DrawingRecord[] };
 
 export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }

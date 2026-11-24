@@ -482,6 +482,88 @@ export function chartHtml(opts: ChartHtmlOptions): string {
     height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444);
   }
   #chart-area { flex: 1; min-width: 0; min-height: 0; position: relative; }
+  #drawing-style-bar {
+    position: absolute; z-index: 12; top: 8px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 2px; padding: 3px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 5px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #drawing-style-bar[hidden], #drawing-style-bar [hidden] { display: none; }
+  #drawing-style-bar button {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 28px; height: 26px; padding: 0 3px; border: 0; border-radius: 4px;
+    color: var(--vscode-foreground); background: transparent; cursor: pointer;
+  }
+  #drawing-style-bar button:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #drawing-style-bar button.active { background: var(--vscode-toolbar-activeBackground, #3a3d41); }
+  #drawing-style-bar button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
+  }
+  #drawing-style-bar svg, #drawing-style-popup .ds-option svg {
+    width: 28px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: butt;
+  }
+  #drawing-style-bar svg[viewBox="0 0 20 20"] {
+    width: 17px; height: 17px; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #drawing-style-bar .ds-swatch {
+    width: 16px; height: 16px; border-radius: 3px; box-sizing: border-box;
+    border: 1px solid var(--vscode-panel-border, #666);
+  }
+  #drawing-style-popup {
+    position: fixed; z-index: 21; box-sizing: border-box; padding: 6px;
+    max-height: calc(100% - 8px); overflow: auto; font-size: 12px; user-select: none;
+    color: var(--vscode-foreground);
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #drawing-style-popup[hidden] { display: none; }
+  #drawing-style-popup .ds-palette { display: grid; grid-template-columns: repeat(8, 20px); gap: 4px; }
+  #drawing-style-popup .ds-color {
+    width: 20px; height: 20px; padding: 0; border-radius: 3px; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border, #666);
+  }
+  #drawing-style-popup .ds-color[aria-pressed="true"] {
+    outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 1px;
+  }
+  #drawing-style-popup .ds-custom {
+    display: flex; align-items: center; gap: 8px; margin-top: 8px; cursor: pointer;
+  }
+  #drawing-style-popup input[type="color"] {
+    width: 24px; height: 20px; padding: 0; border: 1px solid var(--vscode-panel-border, #666);
+    border-radius: 3px; background: transparent; cursor: pointer;
+  }
+  #drawing-style-popup .ds-option {
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 3px 10px 3px 4px;
+    border: 0; border-radius: 3px; background: transparent; color: inherit; font: inherit;
+    text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  #drawing-style-popup .ds-option:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #drawing-style-popup .ds-option[aria-pressed="true"] {
+    background: var(--vscode-list-activeSelectionBackground, #04395e);
+    color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+  }
+  #drawing-style-popup .ds-levels { display: flex; flex-direction: column; gap: 3px; }
+  #drawing-style-popup .ds-level { display: flex; align-items: center; gap: 6px; }
+  #drawing-style-popup .ds-level input[type="number"] {
+    width: 64px; padding: 1px 4px; font: inherit; color: var(--vscode-input-foreground, inherit);
+    background: var(--vscode-input-background, transparent);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #555)); border-radius: 2px;
+  }
+  #drawing-style-popup .ds-level-remove {
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; font-size: 14px;
+    color: inherit; background: transparent; cursor: pointer;
+  }
+  #drawing-style-popup .ds-level-remove:hover { background: var(--vscode-list-hoverBackground, #333); }
+  #drawing-style-popup .ds-level-actions { display: flex; gap: 6px; margin-top: 8px; }
+  #drawing-style-popup .ds-level-actions button {
+    padding: 2px 8px; font: inherit; border: 0; border-radius: 2px; cursor: pointer;
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+  }
   #label-tooltip {
     position: absolute; z-index: 10; box-sizing: border-box;
     width: max-content; max-width: min(360px, calc(100% - 8px)); max-height: 45%;

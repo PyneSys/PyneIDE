@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and price channels, Fibonacci retracement and a brush, plus magnet, lock, hide and remove-all.
   Drawings are kept per symbol across re-runs for as long as the chart is open; Delete removes
   the selected one.
+- Drawing styles: a selected drawing gets a bar over the chart to set its color, line width
+  (1–4 px) and solid, dashed or dotted line, or to remove it. The Fibonacci retracement's levels
+  are editable: each has its own value and color, can be hidden, and levels can be added.
+- A live dashboard saves its charts' drawings in the dashboard file, with each point as a bar
+  time and a price. A drawing whose bars have left the chart's history on the timeframe it was
+  drawn on is removed; a horizontal line never expires.
 
 ### Changed
 

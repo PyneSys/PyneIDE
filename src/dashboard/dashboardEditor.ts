@@ -31,7 +31,7 @@ import type { CompileService } from '../compile/service';
 import { BridgeRun, type BridgeEvent, type DownloadEvent } from '../run/bridgeClient';
 import type { CandleRun, CandleServices } from '../run/candleService';
 import { askTimeframe, offerLiveCoreUpdate, LIVE_UNSUPPORTED, type LiveChartEnv, type PickLiveTarget } from '../run/liveChartService';
-import { providerTimeframe, withTimeframe } from '../run/liveTarget';
+import { providerSymbol, providerTimeframe, withTimeframe } from '../run/liveTarget';
 import type { ProviderHubs } from '../run/providerHub';
 import { ChartComposer } from './composer';
 import type {
@@ -366,6 +366,16 @@ class DashboardSession {
       case 'restart':
         void this.charts.get(key)?.start();
         break;
+      case 'drawings':
+        await this.edit((d) => {
+          const chart = d.charts[key];
+          // A save from before a symbol change belongs to the old symbol
+          if (!chart || providerSymbol(chart.provider) !== action.symbol) return undefined;
+          if (action.records.length) chart.drawings = action.records;
+          else delete chart.drawings;
+          return d;
+        });
+        break;
     }
   }
 
@@ -584,6 +594,11 @@ class ChartRun {
       }),
       addScriptBlocked: indicatorBlocked && strategyBlocked ? 'This chart runs as many scripts as it can.' : undefined,
       addChartBlocked: this.session.addChartBlocked(),
+      drawings: {
+        symbol: providerSymbol(this.config.provider),
+        timeframe: providerTimeframe(this.config.provider) ?? '',
+        records: this.config.drawings ?? [],
+      },
     };
   }
 
@@ -685,6 +700,8 @@ class ChartRun {
     await this.session.edit((d) => {
       const chart = d.charts[this.key];
       if (!chart) return undefined;
+      // The drawings mark the old symbol's prices
+      if (providerSymbol(target.provider) !== providerSymbol(chart.provider)) delete chart.drawings;
       chart.provider = target.provider;
       chart.history = target.from;
       return d;

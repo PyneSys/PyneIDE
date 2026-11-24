@@ -1200,7 +1200,9 @@ function startRun(start: StartEvent): void {
     volumePrecision: 2,
   });
   chart.setPeriod(parsePeriod(start.syminfo.period));
-  drawingTools.attach(chart, dataPresentation(st).symbol);
+  // A dashboard chart's drawings belong to its provider symbol, the key of
+  // the dashboard file's set
+  drawingTools.attach(chart, currentCell()?.drawings.symbol ?? dataPresentation(st).symbol);
   requestAnimationFrame(() => {
     if (state?.chart === chart) refreshLegendLayout(state);
   });
@@ -2869,6 +2871,12 @@ function rebaseBars(st: RunState, base: number): void {
   st.viewAnchor = undefined;
 }
 
+/** Drop the drawings whose bars are before the chart's first bar. */
+function expireDrawings(st: RunState): void {
+  const first = st.bars[0];
+  if (first) drawingTools.expireBefore(first.timestamp);
+}
+
 /** The view of a live chart, to put back after its bars were dropped. */
 function liveViewAnchor(st: RunState): ViewAnchor {
   const range = st.chart.getVisibleRange();
@@ -3441,7 +3449,9 @@ const breakpointPickCancelEl = document.getElementById('breakpoint-pick-cancel')
 const drawingTools = new DrawingTools(
   document.getElementById('drawing-tools') as HTMLElement,
   document.getElementById('tb-drawings') as HTMLButtonElement | null,
+  document.getElementById('chart-area') as HTMLElement,
   {
+    save: (symbol, records) => cellAction({ kind: 'drawings', symbol, records }),
     beforeDraw: () => {
       if (measureOverlayId) removeMeasurement();
       if (breakpointSelectionLabel) cancelBreakpointSelection();
@@ -4132,6 +4142,7 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   switch (msg.type) {
     case 'cell':
       setCell(msg.cell);
+      drawingTools.seed(msg.cell.drawings.symbol, msg.cell.drawings.timeframe, msg.cell.drawings.records);
       break;
     case 'reset':
       dataWindowHover = undefined;
@@ -4156,10 +4167,14 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
         state.chart.setStyles({ candle: { priceMark: { last: lastPriceMarkStyles(palette(), state) } } });
         completeChart(state, true);
         syncLiveStatus();
+        expireDrawings(state);
       }
       break;
     case 'barBase':
-      if (state) rebaseBars(state, msg.base);
+      if (state) {
+        rebaseBars(state, msg.base);
+        expireDrawings(state);
+      }
       break;
     case 'tick':
       if (state) applyTick(state, msg.tick);

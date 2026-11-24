@@ -40,6 +40,12 @@ export function providerTimeframe(provider: string): string | undefined {
   return at >= 0 && at < provider.length - 1 ? provider.slice(at + 1) : undefined;
 }
 
+/** The provider string without its timeframe (`ccxt:BINANCE:BTC/USDT`). */
+export function providerSymbol(provider: string): string {
+  const at = provider.lastIndexOf('@');
+  return at >= 0 ? provider.slice(0, at) : provider;
+}
+
 /** The provider string on another timeframe. */
 export function withTimeframe(provider: string, timeframe: string): string {
   const at = provider.lastIndexOf('@');

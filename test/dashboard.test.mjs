@@ -72,6 +72,55 @@ test('serializing and parsing again keeps the dashboard', () => {
   assert.deepEqual(plain(again), plain(d));
 });
 
+test('a chart keeps its drawings: bar times and prices, style and Fibonacci levels', () => {
+  const file = `[charts.a]
+provider = "ccxt:BINANCE:BTC/USDT@60"
+
+[[charts.a.drawings]]
+tool = "segment"
+timeframe = "60"
+color = "#F23645"
+width = 2
+dash = "dotted"
+points = [ [ 2026-11-24T10:00:00.000Z, 97000.5 ], [ 2026-11-24T12:00:00.000Z, 98250 ] ]
+
+[[charts.a.drawings]]
+tool = "fibRetracement"
+points = [ [ 2026-11-24T10:00:00Z, 1 ], [ 2026-11-24T11:00:00Z, 2 ] ]
+
+[[charts.a.drawings.levels]]
+value = 0.618
+color = "#089981"
+`;
+  const d = m.parseDashboard(file);
+  assert.deepEqual(plain(d.charts.a.drawings), [
+    {
+      tool: 'segment', timeframe: '60',
+      points: [{ timestamp: Date.UTC(2026, 10, 24, 10), value: 97000.5 }, { timestamp: Date.UTC(2026, 10, 24, 12), value: 98250 }],
+      style: { color: '#F23645', width: 2, dash: 'dotted' },
+    },
+    {
+      tool: 'fibRetracement',
+      points: [{ timestamp: Date.UTC(2026, 10, 24, 10), value: 1 }, { timestamp: Date.UTC(2026, 10, 24, 11), value: 2 }],
+      style: { color: '#2962FF', width: 1, dash: 'solid' },
+      levels: [{ value: 0.618, color: '#089981', visible: true }],
+    },
+  ]);
+  const text = m.serializeDashboard(d);
+  assert.match(text, /points = \[ \[ 2026-11-24T10:00:00\.000Z, 97000\.5 \]/);
+  assert.deepEqual(plain(m.parseDashboard(text)), plain(d));
+  // A point the chart has no bar time for is left out, and so is a drawing left without points
+  d.charts.a.drawings[0].points = [{ dataIndex: 3, value: 1 }];
+  assert.equal(m.parseDashboard(m.serializeDashboard(d)).charts.a.drawings.length, 1);
+  assert.throws(
+    () => m.parseDashboard('[charts.a]\nprovider = "p"\n[[charts.a.drawings]]\ntool = "segment"\npoints = [[1, 2]]'),
+    /charts\.a\.drawings\[0\]\.points\[0\] must be \[time, price\]/);
+  assert.throws(
+    () => m.parseDashboard('[charts.a]\nprovider = "p"\n[[charts.a.drawings]]\ntool = "segment"\n' +
+      'color = "red"\npoints = [[2026-11-24T10:00:00Z, 2]]'),
+    /charts\.a\.drawings\[0\]\.color must be #RRGGBB/);
+});
+
 test('malformed dashboards are refused with the place of the error', () => {
   assert.throws(() => m.parseDashboard('charts = 1'), /charts must be a table/);
   assert.throws(() => m.parseDashboard('[charts.a]\nhistory = "-5"'), /charts\.a\.provider/);
