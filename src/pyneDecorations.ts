@@ -1,6 +1,6 @@
-import * as fsp from 'node:fs/promises';
 import * as vscode from 'vscode';
 import { DETECT_HEAD_BYTES, detectPyne, type PyneKind } from './pyneDetect';
+import { readPyneSourceHead } from './pyneLanguage';
 
 /**
  * Explorer/tab badge for Pyne scripts: `.py` files whose docstring starts
@@ -46,7 +46,7 @@ export class PyneDecorationProvider implements vscode.FileDecorationProvider {
     const key = uri.toString();
     let kind = this.cache.get(key);
     if (!this.cache.has(key)) {
-      kind = detectPyne(await readHead(uri));
+      kind = detectPyne(await readPyneSourceHead(uri));
       this.cache.set(key, kind);
     }
     if (kind === undefined) {
@@ -60,25 +60,4 @@ export class PyneDecorationProvider implements vscode.FileDecorationProvider {
     }
     return new vscode.FileDecoration('\u{1F332}', 'Pyne script');
   }
-}
-
-/** Read only the head of the file — enough for docstring detection. */
-async function readHead(uri: vscode.Uri): Promise<string> {
-  const open = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
-  if (open !== undefined) {
-    return open.getText().slice(0, DETECT_HEAD_BYTES);
-  }
-  if (uri.scheme === 'file') {
-    const handle = await fsp.open(uri.fsPath, 'r');
-    try {
-      const buffer = Buffer.alloc(DETECT_HEAD_BYTES);
-      const { bytesRead } = await handle.read(buffer, 0, DETECT_HEAD_BYTES, 0);
-      return buffer.subarray(0, bytesRead).toString('utf8');
-    } finally {
-      await handle.close();
-    }
-  }
-  // Remote/virtual schemes: no partial read available, take the whole file.
-  const bytes = await vscode.workspace.fs.readFile(uri);
-  return Buffer.from(bytes.subarray(0, DETECT_HEAD_BYTES)).toString('utf8');
 }

@@ -53,6 +53,7 @@ import { DashboardEditorProvider } from './dashboard/dashboardEditor';
 import { newDashboard } from './dashboard/newDashboard';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
+import { registerScriptPairSwitch } from './scriptPair';
 import { EdgeQuickFixProvider } from './typing/edgeQuickFix';
 import { PyneCheckerService } from './typing/pyneChecker';
 import { SecurityStatusService } from './typing/securityStatus';
@@ -76,6 +77,7 @@ const WALKTHROUGH_ID = 'pyneide.gettingStarted';
 
 export function activate(context: vscode.ExtensionContext): void {
   registerPyneLanguage(context);
+  registerScriptPairSwitch(context);
   new PyneDecorationProvider().register(context);
 
   const ohlcvEditors = new OhlcvEditorProvider(context);

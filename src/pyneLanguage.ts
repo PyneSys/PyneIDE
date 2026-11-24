@@ -1,6 +1,29 @@
+import * as fs from 'node:fs/promises';
+
 import * as vscode from 'vscode';
 
 import { DETECT_HEAD_BYTES, detectPyne, isPythonSyntax } from './pyneDetect';
+
+/** Prefer the editor buffer so unsaved changes to the Pyne marker count. */
+export async function readPyneSourceHead(uri: vscode.Uri): Promise<string> {
+  const key = uri.toString();
+  const open = vscode.workspace.textDocuments.find((doc) => !doc.isClosed && doc.uri.toString() === key);
+  if (open) return open.getText().slice(0, DETECT_HEAD_BYTES);
+
+  if (uri.scheme !== 'file') {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    return Buffer.from(bytes.subarray(0, DETECT_HEAD_BYTES)).toString('utf8');
+  }
+
+  const handle = await fs.open(uri.fsPath, 'r');
+  try {
+    const buffer = Buffer.alloc(DETECT_HEAD_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.toString('utf8', 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
 
 /** Keep Pyne code out of the Python extension's run/debug menus and providers. */
 export function registerPyneLanguage(context: vscode.ExtensionContext): void {

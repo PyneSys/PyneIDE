@@ -559,6 +559,18 @@
         "icon": "$(go-to-file)"
       },
       {
+        "command": "pyneide.switchToPine",
+        "title": "Switch to Pine",
+        "category": "PyneIDE",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "pyneide.switchToPyne",
+        "title": "Switch to Pyne",
+        "category": "PyneIDE",
+        "icon": "$(arrow-swap)"
+      },
+      {
         "command": "pyneide.dashboardDelete",
         "title": "Delete Dashboard…",
         "category": "PyneIDE",
@@ -704,6 +716,14 @@
         {
           "command": "pyneide.dashboardOpenText",
           "when": "activeCustomEditorId == pyneide.dashboard"
+        },
+        {
+          "command": "pyneide.switchToPine",
+          "when": "resourceExtname =~ /^\\.(py|pyne)$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor"
+        },
+        {
+          "command": "pyneide.switchToPyne",
+          "when": "resourceExtname =~ /^\\.pine$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor"
         }
       ],
       "editor/lineNumber/context": [
@@ -834,6 +854,16 @@
         {
           "command": "pyneide.dashboardOpenText",
           "when": "activeCustomEditorId == pyneide.dashboard",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pyneide.switchToPine",
+          "when": "resourceExtname =~ /^\\.(py|pyne)$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pyneide.switchToPyne",
+          "when": "resourceExtname =~ /^\\.pine$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
           "group": "navigation@2"
         }
       ],
@@ -1798,6 +1828,9 @@
         "aliases": [
           "Pyne",
           "pyne"
+        ],
+        "extensions": [
+          ".pyne"
         ],
         "configuration": "./language-configuration-pyne.json",
         "icon": {
