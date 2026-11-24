@@ -67,7 +67,8 @@ export type ChartCellAction =
   | { kind: 'editScript'; id: string }
   | { kind: 'removeScript'; id: string }
   | { kind: 'addChart'; direction: 'horizontal' | 'vertical' }
-  | { kind: 'openFullChart' }
+  /** Fill the whole dashboard with this chart, or put it back in its cell. */
+  | { kind: 'toggleMaximize' }
   | { kind: 'removeChart' }
   | { kind: 'restart' }
   /** The chart's drawings changed: the full set for the dashboard file. */
@@ -77,6 +78,8 @@ export type ChartInMessage =
   | { type: 'reset'; start: StartEvent }
   /** A dashboard cell's scripts and actions; each one replaces the last. */
   | { type: 'cell'; cell: ChartCell }
+  /** The dashboard chart fills the whole dashboard (or is back in its cell). */
+  | { type: 'maximized'; maximized: boolean }
   /** Rows in time order; a row with the last row's timestamp replaces it. */
   | { type: 'bars'; rows: BarRow[] }
   /** A live chart's history is complete: from here on the chart takes single

@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Buttons and other controls in PyneIDE's panels (chart, dashboard, data, symbol browser, symbol
+  map, inputs, plugins) show their tooltips on hover and keyboard focus.
 - A manual compile of an unchanged script recompiles it when the API runs a newer compiler than
   the one that produced the output, so compiler fixes reach existing outputs. Running a script
   still reuses its output offline.

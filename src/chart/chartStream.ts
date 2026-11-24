@@ -70,13 +70,6 @@ export class ChartStream {
   /** Undefined until the first `start` event (or preview). */
   snap: ChartSnapshot | undefined;
 
-  /** Install a copy of another stream's snapshot (a chart tab mirroring a
-   * dashboard chart): its bar base included, so a trimmed live chart's
-   * bar-index drawings and trades stay on their bars. */
-  load(snap: ChartSnapshot): void {
-    this.snap = structuredClone(snap);
-  }
-
   /** Install a bars-only preview of an `.ohlcv` file (no run). */
   preview(start: StartEvent, bars: BarRow[]): void {
     this.snap = { ...emptySnapshot(start), bars, ended: { bars: bars.length, cancelled: false } };

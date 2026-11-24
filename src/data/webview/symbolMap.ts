@@ -19,6 +19,9 @@ import type {
   SymbolMapModel,
 } from '../symbolMapModel';
 import type { SymbolMapInMessage, SymbolMapOutMessage } from '../symbolMapMessages';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 interface VsCodeApi {
   postMessage(message: SymbolMapOutMessage): void;

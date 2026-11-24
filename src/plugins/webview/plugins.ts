@@ -8,6 +8,9 @@ import type { PluginDetail } from '../catalog';
 import { docstringParagraphs } from '../docstring';
 import type { PluginsInMessage, PluginsOutMessage } from '../messages';
 import type { PluginRow, PluginsModel } from '../service';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 interface VsCodeApi {
   postMessage(message: PluginsOutMessage): void;

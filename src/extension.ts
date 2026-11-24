@@ -49,7 +49,7 @@ import { isLiveChartKey, LiveChartService, type LiveChartEnv } from './run/liveC
 import { CandleServices } from './run/candleService';
 import { ProviderHubs } from './run/providerHub';
 import { useProviderHubs } from './data/providerService';
-import { DashboardEditorProvider, isDashboardMirrorKey } from './dashboard/dashboardEditor';
+import { DashboardEditorProvider } from './dashboard/dashboardEditor';
 import { newDashboard } from './dashboard/newDashboard';
 import { RunService } from './run/runService';
 import { ensureSymbolMapFile } from './run/symbolMapFile';
@@ -339,7 +339,6 @@ export function activate(context: vscode.ExtensionContext): void {
     (chartKey) => runService.rerunOpenChart(chartKey)
   );
   const dashboards = new DashboardEditorProvider({
-    chartManager,
     context,
     output: runService.runOutput,
     resolveEnv: () => resolveLiveChartEnv(manager),
@@ -354,19 +353,14 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   dashboards.register();
   chartManager.onSelectData = (chartKey, live) => {
-    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorSelectData(chartKey);
-    else if (isLiveChartKey(chartKey)) void liveCharts.reselect(chartKey);
+    if (isLiveChartKey(chartKey)) void liveCharts.reselect(chartKey);
     else void runService.reselectChartData(chartKey, live);
   };
   chartManager.onSelectTimeframe = (chartKey, timeframe) => {
-    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorSelectTimeframe(chartKey, timeframe);
-    else if (isLiveChartKey(chartKey)) void liveCharts.setTimeframe(chartKey, timeframe);
+    if (isLiveChartKey(chartKey)) void liveCharts.setTimeframe(chartKey, timeframe);
     else void runService.changeLiveTimeframe(chartKey, timeframe);
   };
-  chartManager.onLiveChartClosed = (chartKey) => {
-    if (isDashboardMirrorKey(chartKey)) dashboards.onMirrorClosed(chartKey);
-    else liveCharts.onChartClosed(chartKey);
-  };
+  chartManager.onLiveChartClosed = (chartKey) => liveCharts.onChartClosed(chartKey);
   context.subscriptions.push(vscode.commands.registerCommand('pyneide.newDashboard', () => newDashboard()));
   context.subscriptions.push(
     registerReportCommand(context, { context, manager, pineLs }, auth, compileOutput),

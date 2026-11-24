@@ -23,7 +23,6 @@ import {
   readColorScheme,
   readPriceScale,
 } from '../chart/chartPanel';
-import type { ChartManager } from '../chart/chartPanel';
 import { chartHtml } from '../chart/chartHtml';
 import { ChartStream } from '../chart/chartStream';
 import type { ChartCell, ChartCellAction, ChartCellScript, ChartInMessage, ChartOutMessage } from '../chart/messages';
@@ -63,14 +62,6 @@ import { listDashboardScripts, scriptKindOf } from './scripts';
 /** How long a stopped bridge may take to exit before it is killed. */
 const STOP_GRACE_MS = 4000;
 
-/** Chart keys of the chart tabs that mirror a dashboard chart start with this. */
-const MIRROR_KEY_PREFIX = 'pyneide-dashboard:';
-
-/** Whether a chart key is a chart tab mirroring a dashboard chart. */
-export function isDashboardMirrorKey(chartKey: string): boolean {
-  return chartKey.startsWith(MIRROR_KEY_PREFIX);
-}
-
 /** Edit a dashboard script's inputs; resolves with the new overrides, or
  * undefined when the form was closed without saving. */
 export type EditDashboardInputs = (request: {
@@ -90,7 +81,6 @@ export interface DashboardDeps {
   pickLive: PickLiveTarget;
   compile: CompileService;
   editInputs: EditDashboardInputs;
-  chartManager: ChartManager;
   hubs: ProviderHubs;
   candles: CandleServices;
 }
@@ -98,9 +88,6 @@ export interface DashboardDeps {
 export class DashboardEditorProvider implements vscode.CustomTextEditorProvider {
   static readonly viewType = 'pyneide.dashboard';
   private readonly sessions = new Set<DashboardSession>();
-  /** Chart tabs mirroring a dashboard chart, by their chart key. */
-  private readonly mirrors = new Map<string, ChartRun>();
-  private nextMirror = 1;
   /**
    * Chart runners still stopping, by output directory. They outlive their
    * chart and its dashboard tab: a chart removed and added again, or a
@@ -109,13 +96,6 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
   private readonly stopping = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: DashboardDeps) {}
-
-  /** A chart tab key for a dashboard chart's mirror. */
-  mirrorKey(run: ChartRun): string {
-    const key = `${MIRROR_KEY_PREFIX}${this.nextMirror++}`;
-    this.mirrors.set(key, run);
-    return key;
-  }
 
   /** Runners writing into `outputDir` are stopping until `stop` settles. */
   trackStop(outputDir: string, stop: Promise<void>): void {
@@ -129,20 +109,6 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
   /** Settles once every runner stopped so far that wrote into `outputDir` has exited. */
   stopped(outputDir: string): Promise<void> {
     return this.stopping.get(outputDir) ?? Promise.resolve();
-  }
-
-  /** The mirror's tab closed (or its chart went away). */
-  onMirrorClosed(chartKey: string): void {
-    this.mirrors.get(chartKey)?.detachMirror(chartKey);
-    this.mirrors.delete(chartKey);
-  }
-
-  onMirrorSelectTimeframe(chartKey: string, timeframe: string | undefined): void {
-    this.mirrors.get(chartKey)?.changeTimeframe(timeframe).catch(reportEditError);
-  }
-
-  onMirrorSelectData(chartKey: string): void {
-    this.mirrors.get(chartKey)?.changeSymbol().catch(reportEditError);
   }
 
   register(): void {
@@ -353,9 +319,6 @@ class DashboardSession {
       case 'addChart':
         await this.addChart(key, action.direction);
         break;
-      case 'openFullChart':
-        this.charts.get(key)?.openMirror();
-        break;
       case 'removeChart':
         await this.edit((d) => {
           delete d.charts[key];
@@ -552,8 +515,6 @@ class ChartRun {
   private readonly scriptKinds = new Map<string, ScriptKind>();
   /** Each script's title, from its run's start. */
   private readonly scriptTitles = new Map<string, string>();
-  /** The chart tab mirroring this chart, while one is open. */
-  private mirror: string | undefined;
 
   constructor(
     private readonly deps: DashboardDeps,
@@ -604,33 +565,6 @@ class ChartRun {
 
   postCell(): void {
     if (this.frameReady) this.session.postChart(this.key, { type: 'cell', cell: this.cell() });
-  }
-
-  /** Open (or reveal) a chart tab that mirrors this chart: the whole chart page,
-   * with a strategy's trades, performance and stats under it. */
-  openMirror(): void {
-    const manager = this.deps.chartManager;
-    const title = `${this.session.name} · ${this.key}`;
-    if (this.mirror) {
-      manager.openLiveChart(this.mirror, title);
-      return;
-    }
-    const chartKey = this.session.provider.mirrorKey(this);
-    this.mirror = chartKey;
-    manager.openLiveChart(chartKey, title);
-    if (this.stream.snap) manager.loadSnapshot(chartKey, this.stream.snap);
-  }
-
-  detachMirror(chartKey: string): void {
-    if (this.mirror === chartKey) this.mirror = undefined;
-  }
-
-  private closeMirror(): void {
-    const chartKey = this.mirror;
-    if (!chartKey) return;
-    this.mirror = undefined;
-    this.deps.chartManager.closeChart(chartKey);
-    this.session.provider.onMirrorClosed(chartKey);
   }
 
   pushChartSettings(): void {
@@ -722,7 +656,6 @@ class ChartRun {
   /** The chart left the dashboard (or the dashboard closed). */
   dispose(): void {
     this.stop();
-    this.closeMirror();
   }
 
   stop(): void {
@@ -764,7 +697,6 @@ class ChartRun {
         for (const message of this.stream.apply(event)) {
           if (this.frameReady) this.session.postChart(this.key, message);
         }
-        if (this.mirror) this.deps.chartManager.onEvent(event, this.mirror);
       },
       schedule: (callback, ms) => void setTimeout(callback, ms),
     });
@@ -982,6 +914,9 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
   .splitter.vertical { cursor: row-resize; }
   .splitter:hover, body.dragging .splitter { background: var(--vscode-sash-hoverBorder, #007fd4); }
   body.dragging .cell-frame { pointer-events: none; }
+  /* A maximized chart fills the area; the others keep their size behind it */
+  .cell.behind { visibility: hidden; }
+  body.has-maximized .splitter { display: none; }
   body.drag-x { cursor: col-resize; }
   body.drag-y { cursor: row-resize; }
   .placeholder {

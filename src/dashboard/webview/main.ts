@@ -3,7 +3,8 @@
  * horizontal / vertical splits. Each chart is an iframe of the chart page (see
  * frame.ts); the cells are positioned absolutely from the layout, so a layout
  * change moves and resizes the iframes without reloading them (moving an
- * iframe in the DOM would).
+ * iframe in the DOM would). A maximized chart fills the whole area over the
+ * others, which stay loaded and keep their size behind it.
  */
 import type { ChartFrameMessage } from './frame';
 import type {
@@ -12,7 +13,11 @@ import type {
   DashboardView,
   DashboardViewChart,
 } from '../messages';
+import type { ChartInMessage } from '../../chart/messages';
 import type { LayoutNode, SplitDirection } from '../model';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 declare function acquireVsCodeApi(): { postMessage(message: DashboardOutMessage): void };
 
@@ -34,6 +39,8 @@ interface Cell {
 
 const cells = new Map<string, Cell>();
 let view: DashboardView | undefined;
+/** The chart filling the whole area, if one does. */
+let maximized: string | undefined;
 
 function post(message: DashboardOutMessage): void {
   vscode.postMessage(message);
@@ -186,6 +193,20 @@ function renderOverlay(key: string, cell: Cell, chart: DashboardViewChart): void
   cell.overlay.append(el('div', 'overlay-message', chart.message ?? 'The chart stopped.'), retry);
 }
 
+function postToFrame(key: string, message: ChartInMessage): void {
+  cells.get(key)?.frame.contentWindow?.postMessage(message, '*');
+}
+
+/** Fill the area with `key`'s chart, or (undefined) go back to the layout. */
+function setMaximized(key: string | undefined): void {
+  if (key === maximized) return;
+  const previous = maximized;
+  maximized = key;
+  if (previous !== undefined) postToFrame(previous, { type: 'maximized', maximized: false });
+  if (key !== undefined) postToFrame(key, { type: 'maximized', maximized: true });
+  render(view?.error === undefined ? view?.layout : undefined);
+}
+
 function render(layout: LayoutNode | undefined): void {
   const leaves = new Map<string, Rect>();
   const splitters: SplitterSpec[] = [];
@@ -195,9 +216,16 @@ function render(layout: LayoutNode | undefined): void {
     cell.root.remove();
     cells.delete(key);
   }
+  if (maximized !== undefined && !leaves.has(maximized)) {
+    const key = maximized;
+    maximized = undefined;
+    postToFrame(key, { type: 'maximized', maximized: false });
+  }
+  document.body.classList.toggle('has-maximized', maximized !== undefined);
   for (const [key, rect] of leaves) {
     const cell = cells.get(key) ?? createCell(key);
-    place(cell.root, rect);
+    place(cell.root, key === maximized ? { x: 0, y: 0, w: 1, h: 1 } : rect);
+    cell.root.classList.toggle('behind', maximized !== undefined && key !== maximized);
   }
   for (const old of Array.from(areaEl.querySelectorAll('.splitter'))) old.remove();
   for (const spec of splitters) {
@@ -237,11 +265,18 @@ function showView(next: DashboardView): void {
 window.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as DashboardInMessage | ChartFrameMessage;
   if (data && typeof data === 'object' && 'pyneChartFrame' in data) {
-    const message = data.message as { type?: unknown } | null;
-    const cell = cells.get(data.pyneChartFrame);
-    if (cell && event.source === cell.frame.contentWindow && message && typeof message.type === 'string') {
-      post({ type: 'frame', key: data.pyneChartFrame, message: message as never });
+    const message = data.message as { type?: unknown; action?: { kind?: unknown } } | null;
+    const key = data.pyneChartFrame;
+    const cell = cells.get(key);
+    if (!cell || event.source !== cell.frame.contentWindow || !message || typeof message.type !== 'string') return;
+    // Maximizing is the page's own layout: the extension never hears of it
+    if (message.type === 'cell' && message.action?.kind === 'toggleMaximize') {
+      setMaximized(maximized === key ? undefined : key);
+      return;
     }
+    post({ type: 'frame', key, message: message as never });
+    // A reloaded frame starts in its cell
+    if (message.type === 'ready' && key === maximized) postToFrame(key, { type: 'maximized', maximized: true });
     return;
   }
   switch (data?.type) {
@@ -249,7 +284,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       showView(data.view);
       break;
     case 'chart':
-      cells.get(data.key)?.frame.contentWindow?.postMessage(data.message, '*');
+      postToFrame(data.key, data.message);
       break;
   }
 });

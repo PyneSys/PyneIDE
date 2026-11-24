@@ -15,6 +15,9 @@ import type {
   InputValue,
   PropertyState,
 } from '../inputsMessages';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 interface VsCodeApi {
   postMessage(message: InputsOutMessage): void;

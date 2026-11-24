@@ -108,6 +108,7 @@ import {
   positionSplitPopup,
   scriptOfPlot,
   setCell,
+  setMaximized,
 } from './dashboardCell';
 import {
   buildFigure,
@@ -143,6 +144,9 @@ import {
   type TradeMarkerIndex,
   type TradeMarkerTheme,
 } from './tradeMarkers';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 declare function acquireVsCodeApi(): { postMessage(msg: ChartOutMessage): void };
 
@@ -4140,6 +4144,9 @@ initDashboardCell({
 window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
   const msg = event.data;
   switch (msg.type) {
+    case 'maximized':
+      setMaximized(msg.maximized);
+      break;
     case 'cell':
       setCell(msg.cell);
       drawingTools.seed(msg.cell.drawings.symbol, msg.cell.drawings.timeframe, msg.cell.drawings.records);

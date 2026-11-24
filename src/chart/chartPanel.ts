@@ -23,7 +23,7 @@ import type { RunListener } from '../run/runService';
 import { toCandleStyleId, type CandleStyleId } from './candleStyle';
 import { isChartablePath, openChartKeys } from './chartKey';
 import { chartHtml } from './chartHtml';
-import { ChartStream, type ChartSnapshot } from './chartStream';
+import { ChartStream } from './chartStream';
 import { parseLabelLink } from './labelLinks';
 import { toColorSchemeId, type ColorSchemeId } from './colorScheme';
 import { toPriceScaleId, type PriceScaleId } from './priceScale';
@@ -148,13 +148,6 @@ export class ChartPanel {
    */
   previewData(start: StartEvent, bars: BarRow[]): void {
     this.stream.preview(start, bars);
-    this.reveal();
-    if (this.ready) this.replayFromSnapshot();
-  }
-
-  /** Show a copy of another chart stream's snapshot (see ChartStream.load). */
-  loadSnapshot(snap: ChartSnapshot): void {
-    this.stream.load(snap);
     this.reveal();
     if (this.ready) this.replayFromSnapshot();
   }
@@ -433,12 +426,6 @@ export class ChartManager implements RunListener {
     // chart lifetime and the run updates the already-open tab in place.
     this.dataPreviews.delete(chartKey);
     this.panelFor(chartKey).handleEvent(event);
-  }
-
-  /** Rebuild a chart from another stream's snapshot (a live chart tab
-   * mirroring a dashboard chart). */
-  loadSnapshot(chartKey: string, snap: ChartSnapshot): void {
-    this.panelFor(chartKey).loadSnapshot(snap);
   }
 
   onFinished(_chartKey: string): void {

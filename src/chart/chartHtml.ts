@@ -50,8 +50,8 @@ const CELL_GROUP = `  <div class="toolbar-group">
       </svg>
     </button>
     <button id="tb-full-chart" class="icon-button"
-            title="Open in a chart tab: trades, performance and stats"
-            aria-label="Open in a chart tab">
+            title="Maximize: fill the dashboard, with trades, performance and stats"
+            aria-label="Maximize" aria-pressed="false">
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="M11.5 3.5h5v5M16.5 3.5l-6 6M8.5 16.5h-5v-5M3.5 16.5l6-6"></path>
       </svg>
@@ -865,7 +865,8 @@ export function chartHtml(opts: ChartHtmlOptions): string {
   /* A cell is narrower than a chart tab: the symbol may take more of it, its
      tools go to the overflow menu first */
   body.embedded #toolbar .symbol-button { max-width: min(280px, 55vw); }
-  body.embedded #bottom, body.embedded #panel-splitter, body.embedded #script-legend,
+  body.embedded:not(.maximized) #bottom, body.embedded:not(.maximized) #panel-splitter,
+  body.embedded #script-legend,
   body.embedded #tb-breakpoints, body.embedded #breakpoint-pick { display: none !important; }
   #toolbar #tb-add-script {
     display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px 0 6px;

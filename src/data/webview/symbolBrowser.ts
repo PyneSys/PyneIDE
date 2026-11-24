@@ -22,6 +22,9 @@ import type {
   BrowserOutMessage,
   LiveModeInfo,
 } from '../symbolBrowserMessages';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 const ROW_H = 22;
 const OVERSCAN = 8;

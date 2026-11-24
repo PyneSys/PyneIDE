@@ -147,11 +147,24 @@ export function setCell(next: ChartCell): void {
   hooks?.onChange();
 }
 
+/** The chart fills the dashboard (or is back in its cell): it shows the
+ * bottom panel (trades, performance, stats) only while it does. */
+export function setMaximized(maximized: boolean): void {
+  document.body.classList.toggle('maximized', maximized);
+  if (!fullChartEl) return;
+  fullChartEl.classList.toggle('active', maximized);
+  fullChartEl.setAttribute('aria-pressed', String(maximized));
+  fullChartEl.setAttribute('aria-label', maximized ? 'Restore' : 'Maximize');
+  fullChartEl.title = maximized
+    ? 'Restore: back to the dashboard layout'
+    : 'Maximize: fill the dashboard, with trades, performance and stats';
+}
+
 export function initDashboardCell(cellHooks: DashboardCellHooks): void {
   if (!document.body.classList.contains('embedded')) return;
   hooks = cellHooks;
   addScriptEl?.addEventListener('click', () => cellAction({ kind: 'addScript' }));
-  fullChartEl?.addEventListener('click', () => cellAction({ kind: 'openFullChart' }));
+  fullChartEl?.addEventListener('click', () => cellAction({ kind: 'toggleMaximize' }));
   removeChartEl?.addEventListener('click', () => cellAction({ kind: 'removeChart' }));
   splitEl?.addEventListener('click', (event) => {
     event.stopPropagation();

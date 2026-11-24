@@ -13,6 +13,9 @@ import {
   recordOffset,
   type OhlcvLayout,
 } from '../ohlcvFormat';
+import { installTooltips } from '../../webview/tooltip';
+
+installTooltips();
 
 const ROW_H = 22;
 const OVERSCAN = 6;
