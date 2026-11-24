@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Chart drawing tools: the button at the left end of the chart toolbar opens a tool bar beside
+  the chart with trend line, ray, extended, horizontal and vertical lines, price line, parallel
+  and price channels, Fibonacci retracement and a brush, plus magnet, lock, hide and remove-all.
+  Drawings are kept per symbol across re-runs for as long as the chart is open; Delete removes
+  the selected one.
+
 ### Changed
 
+- KLineChart 10.1.1.
 - **PyneIDE: Update PyneCore** no longer refuses while live charts of the project run: it offers
   to restart them, stops them for the update and starts them again on the new PyneCore.
 

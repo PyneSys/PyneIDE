@@ -1971,7 +1971,7 @@
     "@vscode/vsce-sign@2.1.0": true
   },
   "dependencies": {
-    "klinecharts": "^10.1.0",
+    "klinecharts": "^10.1.1",
     "pyright": "1.1.411",
     "smol-toml": "1.9.1",
     "vscode-languageclient": "^9.0.1"

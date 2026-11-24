@@ -98,6 +98,7 @@ import {
 import { LabelTooltip } from './labelTooltip';
 import { TailCalc, datumReach, formatCountdown, msToPeriodEnd, periodMs } from './liveSeries';
 import { initToolbarOverflow, toolbarAnchor } from './toolbarOverflow';
+import { DrawingTools } from './drawingTools';
 import {
   cellAction,
   closeSplitPopup,
@@ -521,7 +522,7 @@ const labelTooltip = container.parentElement && new LabelTooltip(
   container.parentElement,
   container,
   (pane) => {
-    if (!isFrozen() && !breakpointSelectionLabel && !measureDrawing) {
+    if (!isFrozen() && !breakpointSelectionLabel && !measureDrawing && !drawingTools.isDrawing()) {
       return state?.chart.getDom(pane, 'main')?.getBoundingClientRect();
     }
     return undefined;
@@ -1101,6 +1102,7 @@ function startRun(start: StartEvent): void {
   activeTab = start.scriptType === 'strategy' ? 'performance' : 'trades';
   let viewAnchor: ViewAnchor | undefined;
   if (state) {
+    drawingTools.detach();
     viewAnchor = captureView(state, start);
     // Same script, same feed: hold the picture over the teardown and refill.
     // A different feed must not keep showing bars it no longer draws.
@@ -1198,6 +1200,7 @@ function startRun(start: StartEvent): void {
     volumePrecision: 2,
   });
   chart.setPeriod(parsePeriod(start.syminfo.period));
+  drawingTools.attach(chart, dataPresentation(st).symbol);
   requestAnimationFrame(() => {
     if (state?.chart === chart) refreshLegendLayout(state);
   });
@@ -3435,6 +3438,21 @@ const tbCsvTradesEl = document.getElementById('tb-csv-trades') as HTMLButtonElem
 const breakpointPickEl = document.getElementById('breakpoint-pick') as HTMLDivElement | null;
 const breakpointPickLabelEl = document.getElementById('breakpoint-pick-label');
 const breakpointPickCancelEl = document.getElementById('breakpoint-pick-cancel');
+const drawingTools = new DrawingTools(
+  document.getElementById('drawing-tools') as HTMLElement,
+  document.getElementById('tb-drawings') as HTMLButtonElement | null,
+  {
+    beforeDraw: () => {
+      if (measureOverlayId) removeMeasurement();
+      if (breakpointSelectionLabel) cancelBreakpointSelection();
+      labelTooltip?.dismiss();
+      closePlotsPopup();
+      closeGotoPopup();
+      closeBreakpointsPopup();
+      closeCandlePopup();
+    },
+  },
+);
 
 function syncBreakpointSelectionUi(): void {
   if (!breakpointPickEl) return;
@@ -3639,6 +3657,7 @@ function syncToolbar(): void {
     tbDataEl.setAttribute('aria-label', `${action}. Current: ${detail}`);
   }
   if (tbMeasureEl) tbMeasureEl.disabled = !st;
+  drawingTools.setEnabled(!!st);
   if (tbCsvPlotEl) tbCsvPlotEl.disabled = !(st?.ended && st.start.outputs.plot);
   if (tbCsvTradesEl) {
     const hasTrades = st?.ended === true && listedTrades(st).length > 0 &&
@@ -3900,6 +3919,7 @@ function toggleMeasureDrawing(): void {
   }
   const st = state;
   if (!st) return;
+  drawingTools.cancelDrawing();
   closePlotsPopup();
   closeGotoPopup();
   closeBreakpointsPopup();
@@ -3946,6 +3966,10 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     closeTimeframePopup();
     toolbarAnchor(tbTimeframeEl)?.focus();
+    return;
+  }
+  if (drawingTools.cancelDrawing()) {
+    event.preventDefault();
     return;
   }
   if (!measureDrawing) return;
@@ -4227,7 +4251,10 @@ window.addEventListener('message', (event: MessageEvent<ChartInMessage>) => {
       break;
     case 'breakpointSelection':
       breakpointSelectionLabel = msg.label;
-      if (msg.label) labelTooltip?.dismiss();
+      if (msg.label) {
+        labelTooltip?.dismiss();
+        drawingTools.cancelDrawing();
+      }
       breakpointPointerGesture = undefined;
       syncBreakpointSelectionUi();
       break;

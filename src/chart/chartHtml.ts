@@ -416,6 +416,71 @@ export function chartHtml(opts: ChartHtmlOptions): string {
   }
   #script-legend[hidden] { display: none; }
   #chart-row { flex: 1; min-height: 0; display: flex; }
+  #drawing-tools {
+    flex: 0 0 auto; width: 38px; box-sizing: border-box; padding: 4px 0;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    overflow: hidden; user-select: none;
+    border-right: 1px solid var(--vscode-panel-border, #444);
+    background: var(--vscode-editor-background);
+  }
+  #drawing-tools[hidden], #drawing-tools [hidden], #drawing-tools .dt-overflow { display: none; }
+  #drawing-tools button {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 5px;
+    color: var(--vscode-foreground); background: transparent; cursor: pointer;
+  }
+  #drawing-tools button:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #drawing-tools button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4); outline-offset: -1px;
+  }
+  #drawing-tools button:disabled { opacity: 0.35; cursor: default; }
+  #drawing-tools button.active {
+    color: var(--vscode-button-foreground, #fff);
+    background: var(--vscode-button-background, #0e639c);
+  }
+  #drawing-tools svg {
+    width: 17px; height: 17px; fill: none; stroke: currentColor;
+    stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #drawing-tools .slash { display: none; }
+  #drawing-tools button.active .slash { display: inline; }
+  #drawing-tools .dt-sep {
+    flex: none; width: 20px; height: 1px; margin: 3px 0;
+    background: var(--vscode-panel-border, #444);
+  }
+  #drawing-tools-menu {
+    position: fixed; z-index: 20; display: flex; flex-direction: column; gap: 1px;
+    width: max-content; max-height: calc(100% - 8px); overflow: auto;
+    box-sizing: border-box; padding: 4px; font-size: 12px; user-select: none;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border: 1px solid var(--vscode-panel-border, #444); border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+  #drawing-tools-menu[hidden] { display: none; }
+  #drawing-tools-menu button {
+    display: flex; align-items: center; gap: 8px; padding: 3px 10px 3px 6px;
+    border: 0; border-radius: 3px; background: transparent; color: var(--vscode-foreground);
+    font: inherit; text-align: left; white-space: nowrap; cursor: pointer;
+  }
+  #drawing-tools-menu button:hover:not(:disabled) {
+    background: var(--vscode-list-hoverBackground, #333);
+  }
+  #drawing-tools-menu button:disabled { opacity: 0.4; cursor: default; }
+  #drawing-tools-menu button[aria-pressed="true"] {
+    background: var(--vscode-list-activeSelectionBackground, #04395e);
+    color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+  }
+  #drawing-tools-menu svg {
+    flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor;
+    stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round;
+  }
+  #drawing-tools-menu .slash { display: none; }
+  #drawing-tools-menu button[aria-pressed="true"] .slash { display: inline; }
+  #drawing-tools-menu .dt-menu-sep {
+    height: 1px; margin: 3px 4px; background: var(--vscode-panel-border, #444);
+  }
   #chart-area { flex: 1; min-width: 0; min-height: 0; position: relative; }
   #label-tooltip {
     position: absolute; z-index: 10; box-sizing: border-box;
@@ -761,6 +826,16 @@ export function chartHtml(opts: ChartHtmlOptions): string {
 <div id="toolbar">
 <div id="toolbar-items">
   <div class="toolbar-group">
+    <button id="tb-drawings" class="icon-button" title="Drawing tools"
+            aria-label="Drawing tools" aria-pressed="false" aria-expanded="false"
+            aria-controls="drawing-tools">
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M12.6 3.4 16.6 7.4 7.5 16.5 3 17l.5-4.5z"></path>
+        <path d="M10.8 5.2 14.8 9.2"></path>
+      </svg>
+    </button>
+  </div>
+  <div class="toolbar-group">
     <button id="tb-data" class="symbol-button" title="Select the OHLCV data for this script">
       <span class="symbol-mark" aria-hidden="true">
         <svg viewBox="0 0 16 16">
@@ -854,6 +929,7 @@ ${opts.embedded ? CELL_GROUP : CSV_GROUP}
 </div>
 <div id="script-legend" hidden></div>
 <div id="chart-row">
+<aside id="drawing-tools" aria-label="Drawing tools" hidden></aside>
 <div id="chart-area">
   <div id="chart"></div>
   <div id="chart-busy" role="progressbar" aria-label="Recomputing the chart" hidden></div>

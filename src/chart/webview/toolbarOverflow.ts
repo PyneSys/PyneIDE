@@ -40,9 +40,9 @@ export function initToolbarOverflow(onLayout: () => void): void {
     menu.appendChild(entry);
     return { control, button, entry };
   });
-  // Keep the instrument, timeframe, a dashboard cell's "Add script" and the
-  // status visible for as long as possible.
-  const kept = ['tb-data', 'tb-timeframe', 'tb-add-script'];
+  // Keep the drawing tools toggle, the instrument, timeframe, a dashboard
+  // cell's "Add script" and the status visible for as long as possible.
+  const kept = ['tb-drawings', 'tb-data', 'tb-timeframe', 'tb-add-script'];
   const compactable = Array.from(row.querySelectorAll<HTMLElement>('[data-compact]'));
   const hideOrder = [
     ...items.filter(({ button }) => button && !kept.includes(button.id)).reverse(),
