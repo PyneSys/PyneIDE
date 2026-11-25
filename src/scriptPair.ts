@@ -5,12 +5,6 @@ import * as vscode from 'vscode';
 import { DETECT_HEAD_BYTES, detectPyne } from './pyneDetect';
 import { readPyneSourceHead } from './pyneLanguage';
 
-type ScriptView = 'Pine' | 'Pyne';
-
-function scriptView(uri: vscode.Uri): ScriptView {
-  return /\.pine$/i.test(uri.fsPath) ? 'Pine' : 'Pyne';
-}
-
 function counterparts(document: vscode.TextDocument): string[] {
   if (document.uri.scheme !== 'file') return [];
 
@@ -80,10 +74,12 @@ export function registerScriptPairSwitch(context: vscode.ExtensionContext): void
     }
   };
 
-  const switchTo = async (view: ScriptView, editor = vscode.window.activeTextEditor): Promise<void> => {
-    if (!editor || vscode.window.activeTextEditor !== editor) return;
+  const switchTo = async (language: 'pine' | 'pyne'): Promise<void> => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
     const target = await findCounterpart(counterparts(editor.document));
-    if (!target || scriptView(target) !== view || vscode.window.activeTextEditor !== editor) return;
+    if (!target || (target.fsPath.endsWith('.pine') ? 'pine' : 'pyne') !== language ||
+        vscode.window.activeTextEditor !== editor) return;
     try {
       await vscode.window.showTextDocument(target, { viewColumn: editor.viewColumn, preview: false });
     } catch (error) {
@@ -92,31 +88,10 @@ export function registerScriptPairSwitch(context: vscode.ExtensionContext): void
     }
   };
 
-  const pickView = async (): Promise<void> => {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) return;
-    const source = editor.document.uri;
-    const target = await findCounterpart(counterparts(editor.document));
-    if (!target || vscode.window.activeTextEditor !== editor) return;
-
-    const choices = [source, target].map((uri) => {
-      const view = scriptView(uri);
-      return {
-        view,
-        label: uri === source ? `$(check) ${view}` : view,
-        description: path.basename(uri.fsPath),
-      };
-    });
-    const selected = await vscode.window.showQuickPick(choices, { placeHolder: 'Select Pine or Pyne' });
-    if (selected && selected.view !== scriptView(source)) await switchTo(selected.view, editor);
-  };
-
   context.subscriptions.push(
     { dispose: () => { revision++; watcher?.dispose(); } },
-    vscode.commands.registerCommand('pyneide.switchToPine', () => switchTo('Pine')),
-    vscode.commands.registerCommand('pyneide.switchToPyne', () => switchTo('Pyne')),
-    vscode.commands.registerCommand('pyneide.pickPineView', pickView),
-    vscode.commands.registerCommand('pyneide.pickPyneView', pickView),
+    vscode.commands.registerCommand('pyneide.switchToPine', () => switchTo('pine')),
+    vscode.commands.registerCommand('pyneide.switchToPyne', () => switchTo('pyne')),
     vscode.window.onDidChangeActiveTextEditor(() => void refresh()),
     vscode.workspace.onDidOpenTextDocument(onPythonDocument),
     vscode.workspace.onDidCloseTextDocument(onPythonDocument),
