@@ -6,7 +6,7 @@
  * carry the cell's own controls (`cell` messages of the chart protocol).
  */
 import type { ChartCell, ChartInMessage, ChartOutMessage } from '../chart/messages';
-import type { LayoutNode } from './model';
+import type { DropSide, LayoutNode } from './model';
 
 export type DashboardChartState = ChartCell['state'];
 
@@ -35,6 +35,9 @@ export type DashboardOutMessage =
   /** The empty dashboard's "Add chart". */
   | { type: 'addChart' }
   | { type: 'resize'; path: number[]; sizes: number[] }
+  /** A chart dragged onto `side` of `target`'s cell; no target:
+   * onto that edge of the whole dashboard. */
+  | { type: 'moveChart'; key: string; target: string | undefined; side: DropSide }
   /** A stopped chart's "Retry". */
   | { type: 'restartChart'; key: string }
   /** The invalid file's "Open as text". */

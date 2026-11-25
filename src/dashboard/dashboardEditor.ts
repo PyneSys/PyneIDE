@@ -45,6 +45,7 @@ import {
   DashboardFormatError,
   insertBeside,
   MAX_CHARTS,
+  moveInLayout,
   parseDashboard,
   removeFromLayout,
   resizeSplit,
@@ -299,6 +300,11 @@ class DashboardSession {
       : undefined;
   }
 
+  /** Whether a chart can be dragged to another place: the dashboard holds more than one. */
+  chartsMovable(): boolean {
+    return this.dashboard !== undefined && Object.keys(this.dashboard.charts).length > 1;
+  }
+
   /** A chart's toolbar or Layers menu asked for a cell action. */
   async onCellAction(key: string, action: ChartCellAction): Promise<void> {
     switch (action.kind) {
@@ -390,6 +396,9 @@ class DashboardSession {
         break;
       case 'resize':
         await this.edit((d) => ({ ...d, layout: resizeSplit(d.layout, msg.path, msg.sizes) }));
+        break;
+      case 'moveChart':
+        await this.edit((d) => ({ ...d, layout: moveInLayout(d.layout, msg.key, msg.target, msg.side) }));
         break;
       case 'restartChart':
         void this.charts.get(msg.key)?.start();
@@ -555,6 +564,7 @@ class ChartRun {
       }),
       addScriptBlocked: indicatorBlocked && strategyBlocked ? 'This chart runs as many scripts as it can.' : undefined,
       addChartBlocked: this.session.addChartBlocked(),
+      movable: this.session.chartsMovable(),
       drawings: {
         symbol: providerSymbol(this.config.provider),
         timeframe: providerTimeframe(this.config.provider) ?? '',
@@ -914,6 +924,17 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
   .splitter.vertical { cursor: row-resize; }
   .splitter:hover, body.dragging .splitter { background: var(--vscode-sash-hoverBorder, #007fd4); }
   body.dragging .cell-frame { pointer-events: none; }
+  /* A chart dragged by its grip, and where it would land */
+  body.moving-chart { cursor: grabbing; }
+  .cell.moving { opacity: 0.55; }
+  .drop-indicator {
+    position: absolute; z-index: 3; pointer-events: none; box-sizing: border-box;
+    background: var(--vscode-editorGroup-dropBackground, rgba(83, 89, 93, 0.5));
+    border: 1px solid var(--vscode-focusBorder, #007fd4);
+    transition: left 80ms ease-out, top 80ms ease-out, width 80ms ease-out, height 80ms ease-out;
+  }
+  .drop-indicator[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { .drop-indicator { transition: none; } }
   /* A maximized chart fills the area; the others keep their size behind it */
   .cell.behind { visibility: hidden; }
   body.has-maximized .splitter { display: none; }

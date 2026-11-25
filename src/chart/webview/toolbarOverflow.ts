@@ -21,7 +21,8 @@ export function initToolbarOverflow(onLayout: () => void): void {
     more.setAttribute('aria-expanded', String(open));
   };
 
-  const items = Array.from(row.querySelectorAll<HTMLElement>('.toolbar-group > *'), control => {
+  // A dashboard cell's grip is dragged, never clicked: it stays on the toolbar
+  const items = Array.from(row.querySelectorAll<HTMLElement>('.toolbar-group > :not(.move-grip)'), control => {
     const button = control instanceof HTMLButtonElement ? control : undefined;
     const entry = button ? document.createElement('button') : document.createElement('span');
     entry.className = 'toolbar-overflow-item';

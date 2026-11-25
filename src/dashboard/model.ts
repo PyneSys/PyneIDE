@@ -371,38 +371,42 @@ export function normalizeLayout(node: LayoutNode | undefined, keys: string[]): L
 }
 
 /**
- * Put `key` beside `target` (`horizontal`: to its right, `vertical`: below it),
- * halving the target's cell; without a target, beside the whole layout.
+ * Put `key` beside `target` (`horizontal`: to its right, `vertical`: below it;
+ * `before`: to its left / above it), halving the target's cell; without a
+ * target, beside the whole layout, taking an equal share of a split of the
+ * same direction.
  */
 export function insertBeside(
   layout: LayoutNode | undefined,
   target: string | undefined,
   key: string,
-  direction: SplitDirection
+  direction: SplitDirection,
+  before = false
 ): LayoutNode {
   if (layout === undefined) return key;
+  const pair = (node: LayoutNode): LayoutSplit =>
+    ({ split: direction, sizes: [0.5, 0.5], children: before ? [key, node] : [node, key] });
   if (target === undefined) {
     if (typeof layout !== 'string' && layout.split === direction) {
       const n = layout.children.length + 1;
+      const sizes = layout.sizes.map((s) => s * (n - 1));
       return {
         split: direction,
-        sizes: normalizeSizes([...layout.sizes.map((s) => s * (n - 1)), 1]),
-        children: [...layout.children, key],
+        sizes: normalizeSizes(before ? [1, ...sizes] : [...sizes, 1]),
+        children: before ? [key, ...layout.children] : [...layout.children, key],
       };
     }
-    return { split: direction, sizes: [0.5, 0.5], children: [layout, key] };
+    return pair(layout);
   }
   const visit = (node: LayoutNode): LayoutNode => {
-    if (typeof node === 'string') {
-      return node === target ? { split: direction, sizes: [0.5, 0.5], children: [node, key] } : node;
-    }
+    if (typeof node === 'string') return node === target ? pair(node) : node;
     const at = node.children.indexOf(target);
     if (at >= 0 && node.split === direction) {
       const half = node.sizes[at] / 2;
       const sizes = [...node.sizes];
       sizes.splice(at, 1, half, half);
       const children = [...node.children];
-      children.splice(at + 1, 0, key);
+      children.splice(before ? at : at + 1, 0, key);
       return { split: node.split, sizes, children };
     }
     return { ...node, children: node.children.map(visit) };
@@ -413,6 +417,41 @@ export function insertBeside(
 /** The layout without `key`; its cell's space goes to its neighbours. */
 export function removeFromLayout(layout: LayoutNode | undefined, key: string): LayoutNode | undefined {
   return layout === undefined ? undefined : prune(structuredClone(layout), (k) => k !== key);
+}
+
+/** Where a dragged chart lands: a side of a cell (or of the whole layout), or
+ * the cell's middle, trading places with its chart. */
+export type DropSide = 'left' | 'right' | 'top' | 'bottom' | 'swap';
+
+/**
+ * Move `key` to `side` of `target`'s cell (no target: to that edge of the whole
+ * layout). Its old cell's space goes to its neighbours, and it halves the
+ * target's cell as {@link insertBeside} does; `swap` trades the two charts'
+ * cells and keeps every size. A move onto `key` itself, or onto a chart the
+ * layout does not hold, leaves the layout as it is.
+ */
+export function moveInLayout(
+  layout: LayoutNode | undefined,
+  key: string,
+  target: string | undefined,
+  side: DropSide
+): LayoutNode | undefined {
+  const keys = layoutKeys(layout);
+  if (layout === undefined || !keys.includes(key) || target === key ||
+    (target !== undefined && !keys.includes(target))) {
+    return layout;
+  }
+  if (side === 'swap') {
+    if (target === undefined) return layout;
+    const visit = (node: LayoutNode): LayoutNode => {
+      if (typeof node === 'string') return node === key ? target : node === target ? key : node;
+      return { ...node, children: node.children.map(visit) };
+    };
+    return visit(layout);
+  }
+  const direction: SplitDirection = side === 'left' || side === 'right' ? 'horizontal' : 'vertical';
+  const before = side === 'left' || side === 'top';
+  return insertBeside(removeFromLayout(layout, key), target, key, direction, before);
 }
 
 /**

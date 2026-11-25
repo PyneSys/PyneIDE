@@ -55,6 +55,8 @@ export interface ChartCell {
   addScriptBlocked?: string;
   /** Why no chart can join the dashboard, when none can. */
   addChartBlocked?: string;
+  /** The dashboard holds another chart: the cell's grip can move this one. */
+  movable: boolean;
   /** The user's drawings the dashboard file keeps for the chart. The chart
    * takes them when it first sees `symbol` and owns them from then on, saving
    * every change back with a `drawings` action. */
@@ -70,6 +72,10 @@ export type ChartCellAction =
   /** Fill the whole dashboard with this chart, or put it back in its cell. */
   | { kind: 'toggleMaximize' }
   | { kind: 'removeChart' }
+  /** The cell is dragged by its grip or its toolbar's empty middle: the
+   * pointer in the frame's own coordinates.
+   * The dashboard page follows the drag; the extension never hears of it. */
+  | { kind: 'move'; phase: 'start' | 'move' | 'end' | 'cancel'; x: number; y: number }
   | { kind: 'restart' }
   /** The chart's drawings changed: the full set for the dashboard file. */
   | { kind: 'drawings'; symbol: string; records: DrawingRecord[] };

@@ -40,8 +40,19 @@ const ADD_SCRIPT_GROUP = `  <div class="toolbar-group">
     </button>
   </div>`;
 
-/** The dashboard cell's own actions, at the right end of the toolbar. */
+/** The dashboard cell's own actions, at the right end of the toolbar. The
+ * grip first: dragging it (or the toolbar's empty middle) moves the chart to
+ * another place of the dashboard. It shows while the dashboard holds another
+ * chart (see dashboardCell) and never goes to the overflow menu, where it could
+ * not be dragged. */
 const CELL_GROUP = `  <div class="toolbar-group">
+    <div id="tb-move" class="move-grip" title="Drag to move this chart" hidden>
+      <svg viewBox="0 0 10 16" aria-hidden="true">
+        <circle cx="3" cy="4" r="1.2"></circle><circle cx="7" cy="4" r="1.2"></circle>
+        <circle cx="3" cy="8" r="1.2"></circle><circle cx="7" cy="8" r="1.2"></circle>
+        <circle cx="3" cy="12" r="1.2"></circle><circle cx="7" cy="12" r="1.2"></circle>
+      </svg>
+    </div>
     <button id="tb-split" class="icon-button" title="Add a chart beside this one"
             aria-label="Add a chart beside this one" aria-pressed="false" aria-haspopup="menu">
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -122,6 +133,35 @@ export function chartHtml(opts: ChartHtmlOptions): string {
     background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
   }
   #toolbar button:disabled { opacity: 0.35; cursor: default; }
+  /* The drawing tools toggle: three lines while the bar is closed, folding
+   * into an arrow pointing at the open bar (the way to close it) */
+  #toolbar #tb-drawings.active { color: var(--vscode-foreground); background: transparent; }
+  #toolbar #tb-drawings.active:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #tb-drawings .menu-line {
+    transform-box: fill-box; transform-origin: left center; vector-effect: non-scaling-stroke;
+    transition: transform 180ms ease-in-out;
+  }
+  #tb-drawings[aria-expanded="true"] .menu-line.top { transform: translate(1px, 4px) rotate(-45deg) scaleX(0.5); }
+  #tb-drawings[aria-expanded="true"] .menu-line.middle { transform: translateX(1px) scaleX(0.92); }
+  #tb-drawings[aria-expanded="true"] .menu-line.bottom { transform: translate(1px, -4px) rotate(45deg) scaleX(0.5); }
+  @media (prefers-reduced-motion: reduce) { #tb-drawings .menu-line { transition: none; } }
+  #toolbar .move-grip {
+    flex: none; display: flex; align-items: center; justify-content: center;
+    width: 14px; height: 28px; margin-right: 2px; border-radius: 4px;
+    cursor: grab; touch-action: none; color: var(--vscode-descriptionForeground);
+  }
+  #toolbar .move-grip[hidden], body.maximized #toolbar .move-grip { display: none; }
+  #toolbar .move-grip:hover, #toolbar .move-grip.dragging {
+    color: var(--vscode-foreground);
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, #333));
+  }
+  #toolbar .move-grip.dragging { cursor: grabbing; }
+  #toolbar .move-grip svg { width: 10px; height: 16px; fill: currentColor; }
+  /* A dashboard cell is also dragged by its toolbar's empty middle, as by a title bar */
+  body.cell-movable:not(.maximized) #toolbar .spacer { align-self: stretch; cursor: grab; touch-action: none; }
+  body.cell-movable:not(.maximized) #toolbar .spacer.dragging { cursor: grabbing; }
   #toolbar .symbol-button {
     display: flex; align-items: center; gap: 7px; max-width: min(280px, 34vw);
     height: 28px; min-width: 35px; padding: 0 8px 0 5px; border-radius: 7px;
@@ -913,8 +953,9 @@ export function chartHtml(opts: ChartHtmlOptions): string {
             aria-label="Drawing tools" aria-pressed="false" aria-expanded="false"
             aria-controls="drawing-tools">
       <svg viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M12.6 3.4 16.6 7.4 7.5 16.5 3 17l.5-4.5z"></path>
-        <path d="M10.8 5.2 14.8 9.2"></path>
+        <path class="menu-line top" d="M4 6h12"></path>
+        <path class="menu-line middle" d="M4 10h12"></path>
+        <path class="menu-line bottom" d="M4 14h12"></path>
       </svg>
     </button>
   </div>

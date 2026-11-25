@@ -1,5 +1,5 @@
 /**
- * A chart inside a dashboard cell (`body.embedded`): the cell's toolbar
+ * A chart inside a dashboard cell (`body.embedded`): the cell's grip and toolbar
  * buttons ("Add script", split, full chart, remove), its split menu, and what
  * the Layers menu needs to group the plots by script. The dashboard sends the
  * cell's scripts and limits as `cell` messages; the buttons answer with `cell`
@@ -21,6 +21,9 @@ const splitEl = document.getElementById('tb-split') as HTMLButtonElement | null;
 const fullChartEl = document.getElementById('tb-full-chart') as HTMLButtonElement | null;
 const removeChartEl = document.getElementById('tb-remove-chart') as HTMLButtonElement | null;
 const layersEl = document.getElementById('tb-layers') as HTMLButtonElement | null;
+const moveEl = document.getElementById('tb-move') as HTMLDivElement | null;
+/** The toolbar's empty middle: a second handle to drag the chart by, like a title bar. */
+const toolbarSpaceEl = document.querySelector<HTMLElement>('#toolbar-items > .spacer');
 
 let cell: ChartCell | undefined;
 let hooks: DashboardCellHooks | undefined;
@@ -136,8 +139,71 @@ function syncLayersMark(): void {
   layersEl.setAttribute('aria-label', label);
 }
 
+/** How far (px) the pointer goes before a press on a handle becomes a drag. */
+const DRAG_THRESHOLD_PX = 4;
+
+/**
+ * Drag the chart by `handle` (the grip, or the toolbar's empty middle) once the
+ * pointer has gone a few pixels, so a plain click moves nothing. The handle
+ * holds the pointer for the whole drag, so its moves keep coming here even over
+ * the dashboard's other charts; each goes to the dashboard page, which shows
+ * where the chart would land and moves it on release. Escape cancels the drag.
+ */
+function initMoveHandle(handle: HTMLElement, canMove: () => boolean): void {
+  handle.addEventListener('pointerdown', (down) => {
+    if (down.button !== 0 || !canMove()) return;
+    down.preventDefault();
+    handle.setPointerCapture(down.pointerId);
+    let last = { x: down.clientX, y: down.clientY };
+    let started = false;
+    let done = false;
+    const send = (phase: 'start' | 'move' | 'end' | 'cancel'): void =>
+      cellAction({ kind: 'move', phase, x: last.x, y: last.y });
+    const move = (event: PointerEvent): void => {
+      last = { x: event.clientX, y: event.clientY };
+      if (!started) {
+        if (Math.hypot(last.x - down.clientX, last.y - down.clientY) < DRAG_THRESHOLD_PX) return;
+        started = true;
+        handle.classList.add('dragging');
+        send('start');
+      }
+      send('move');
+    };
+    const finish = (phase: 'end' | 'cancel'): void => {
+      if (done) return;
+      done = true;
+      handle.classList.remove('dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', cancel);
+      handle.removeEventListener('lostpointercapture', cancel);
+      window.removeEventListener('keydown', key, true);
+      if (handle.hasPointerCapture(down.pointerId)) handle.releasePointerCapture(down.pointerId);
+      if (started) send(phase);
+    };
+    const up = (event: PointerEvent): void => {
+      last = { x: event.clientX, y: event.clientY };
+      finish('end');
+    };
+    const cancel = (): void => finish('cancel');
+    const key = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      finish('cancel');
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', cancel);
+    handle.addEventListener('lostpointercapture', cancel);
+    window.addEventListener('keydown', key, true);
+  });
+}
+
 export function setCell(next: ChartCell): void {
   cell = next;
+  if (moveEl) moveEl.hidden = !next.movable;
+  document.body.classList.toggle('cell-movable', next.movable);
   if (addScriptEl) {
     addScriptEl.disabled = next.addScriptBlocked !== undefined;
     addScriptEl.title = next.addScriptBlocked ?? 'Add an indicator or a strategy to this chart';
@@ -163,6 +229,11 @@ export function setMaximized(maximized: boolean): void {
 export function initDashboardCell(cellHooks: DashboardCellHooks): void {
   if (!document.body.classList.contains('embedded')) return;
   hooks = cellHooks;
+  if (moveEl) initMoveHandle(moveEl, () => !moveEl.hidden);
+  if (toolbarSpaceEl) {
+    initMoveHandle(toolbarSpaceEl, () =>
+      cell?.movable === true && !document.body.classList.contains('maximized'));
+  }
   addScriptEl?.addEventListener('click', () => cellAction({ kind: 'addScript' }));
   fullChartEl?.addEventListener('click', () => cellAction({ kind: 'toggleMaximize' }));
   removeChartEl?.addEventListener('click', () => cellAction({ kind: 'removeChart' }));

@@ -4,7 +4,9 @@
  * frame.ts); the cells are positioned absolutely from the layout, so a layout
  * change moves and resizes the iframes without reloading them (moving an
  * iframe in the DOM would). A maximized chart fills the whole area over the
- * others, which stay loaded and keep their size behind it.
+ * others, which stay loaded and keep their size behind it. A chart dragged by
+ * its grip (or its toolbar's empty middle) shows where it would land, and
+ * moves there on release.
  */
 import type { ChartFrameMessage } from './frame';
 import type {
@@ -14,7 +16,7 @@ import type {
   DashboardViewChart,
 } from '../messages';
 import type { ChartInMessage } from '../../chart/messages';
-import type { LayoutNode, SplitDirection } from '../model';
+import { moveInLayout, type DropSide, type LayoutNode, type SplitDirection } from '../model';
 import { installTooltips } from '../../webview/tooltip';
 
 installTooltips();
@@ -165,6 +167,120 @@ function withSizes(node: LayoutNode, path: number[], sizes: number[]): LayoutNod
   return { ...node, children };
 }
 
+// --- Moving a chart ----------------------------------------------------------
+
+/** Within this many pixels of the dashboard's edge a chart lands beside the whole layout. */
+const EDGE_DROP_PX = 16;
+/** A drop at least this far into a cell (a share of its width / height) from
+ * every edge trades places with the cell's chart. */
+const SWAP_INSET = 0.3;
+
+interface Drop {
+  target: string | undefined;
+  side: DropSide;
+  /** Where the chart would land. */
+  rect: Rect;
+}
+
+interface MoveDrag {
+  key: string;
+  layout: LayoutNode;
+  leaves: Map<string, Rect>;
+}
+
+let moving: MoveDrag | undefined;
+const dropEl = el('div', 'drop-indicator');
+dropEl.hidden = true;
+areaEl.appendChild(dropEl);
+
+function nearestSide(distances: Record<'left' | 'right' | 'top' | 'bottom', number>): {
+  side: 'left' | 'right' | 'top' | 'bottom';
+  distance: number;
+} {
+  let best: { side: 'left' | 'right' | 'top' | 'bottom'; distance: number } = { side: 'left', distance: Infinity };
+  for (const side of ['left', 'right', 'top', 'bottom'] as const) {
+    if (distances[side] < best.distance) best = { side, distance: distances[side] };
+  }
+  return best;
+}
+
+/** The drop at a point of the page; none off the area, over the dragged chart,
+ * or where the layout would not change. */
+function dropAt(drag: MoveDrag, clientX: number, clientY: number): Drop | undefined {
+  const area = areaEl.getBoundingClientRect();
+  const ax = clientX - area.left;
+  const ay = clientY - area.top;
+  if (ax < 0 || ay < 0 || ax > area.width || ay > area.height) return undefined;
+  let target: string | undefined;
+  let side: DropSide | undefined;
+  const outer = nearestSide({ left: ax, right: area.width - ax, top: ay, bottom: area.height - ay });
+  if (outer.distance < EDGE_DROP_PX) {
+    side = outer.side;
+  } else {
+    const nx = ax / area.width;
+    const ny = ay / area.height;
+    for (const [key, r] of drag.leaves) {
+      if (nx < r.x || nx > r.x + r.w || ny < r.y || ny > r.y + r.h) continue;
+      if (key === drag.key) return undefined;
+      const fx = (nx - r.x) / r.w;
+      const fy = (ny - r.y) / r.h;
+      const inner = nearestSide({ left: fx, right: 1 - fx, top: fy, bottom: 1 - fy });
+      target = key;
+      side = inner.distance >= SWAP_INSET ? 'swap' : inner.side;
+      break;
+    }
+  }
+  if (side === undefined) return undefined;
+  const next = moveInLayout(drag.layout, drag.key, target, side);
+  if (next === undefined || JSON.stringify(next) === JSON.stringify(drag.layout)) return undefined;
+  const leaves = new Map<string, Rect>();
+  geometry(next, { x: 0, y: 0, w: 1, h: 1 }, [], leaves, []);
+  const rect = leaves.get(drag.key);
+  return rect ? { target, side, rect } : undefined;
+}
+
+function showDrop(drop: Drop | undefined): void {
+  dropEl.hidden = drop === undefined;
+  if (drop) place(dropEl, drop.rect);
+}
+
+function endMove(): void {
+  if (moving) cells.get(moving.key)?.root.classList.remove('moving');
+  moving = undefined;
+  document.body.classList.remove('moving-chart');
+  showDrop(undefined);
+}
+
+/** A chart's drag began, went on or ended (frame coordinates). */
+function onMoveAction(key: string, phase: 'start' | 'move' | 'end' | 'cancel', x: number, y: number): void {
+  const cell = cells.get(key);
+  if (phase === 'start') {
+    endMove();
+    if (!cell || maximized !== undefined || view?.error !== undefined || view?.layout === undefined) return;
+    const leaves = new Map<string, Rect>();
+    geometry(view.layout, { x: 0, y: 0, w: 1, h: 1 }, [], leaves, []);
+    moving = { key, layout: view.layout, leaves };
+    cell.root.classList.add('moving');
+    document.body.classList.add('moving-chart');
+    return;
+  }
+  const drag = moving;
+  if (!drag || drag.key !== key || !cell) return;
+  const frame = cell.frame.getBoundingClientRect();
+  const drop = phase === 'cancel' ? undefined : dropAt(drag, frame.left + x, frame.top + y);
+  if (phase === 'move') {
+    showDrop(drop);
+    return;
+  }
+  endMove();
+  if (drop) {
+    // Show the move at once; the extension's view confirms it
+    if (view) view = { ...view, layout: moveInLayout(drag.layout, key, drop.target, drop.side) };
+    render(view?.layout);
+    post({ type: 'moveChart', key, target: drop.target, side: drop.side });
+  }
+}
+
 // --- Cells -------------------------------------------------------------------
 
 function createCell(key: string): Cell {
@@ -216,6 +332,8 @@ function render(layout: LayoutNode | undefined): void {
     cell.root.remove();
     cells.delete(key);
   }
+  // The layout changed under a drag (a text edit, a chart removed): its drops are stale
+  if (moving && JSON.stringify(layout) !== JSON.stringify(moving.layout)) endMove();
   if (maximized !== undefined && !leaves.has(maximized)) {
     const key = maximized;
     maximized = undefined;
@@ -265,13 +383,24 @@ function showView(next: DashboardView): void {
 window.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as DashboardInMessage | ChartFrameMessage;
   if (data && typeof data === 'object' && 'pyneChartFrame' in data) {
-    const message = data.message as { type?: unknown; action?: { kind?: unknown } } | null;
+    const message = data.message as {
+      type?: unknown;
+      action?: { kind?: unknown; phase?: unknown; x?: unknown; y?: unknown };
+    } | null;
     const key = data.pyneChartFrame;
     const cell = cells.get(key);
     if (!cell || event.source !== cell.frame.contentWindow || !message || typeof message.type !== 'string') return;
     // Maximizing is the page's own layout: the extension never hears of it
     if (message.type === 'cell' && message.action?.kind === 'toggleMaximize') {
       setMaximized(maximized === key ? undefined : key);
+      return;
+    }
+    if (message.type === 'cell' && message.action?.kind === 'move') {
+      const { phase, x, y } = message.action;
+      if ((phase === 'start' || phase === 'move' || phase === 'end' || phase === 'cancel') &&
+        typeof x === 'number' && typeof y === 'number') {
+        onMoveAction(key, phase, x, y);
+      }
       return;
     }
     post({ type: 'frame', key, message: message as never });

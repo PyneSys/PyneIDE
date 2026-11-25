@@ -181,6 +181,46 @@ test('removing a chart gives its space to the neighbours and collapses splits', 
     { split: 'horizontal', sizes: [0.5, 0.25, 0.25], children: ['a', 'c', 'd'] });
 });
 
+test('a chart goes before another, or before the whole layout', () => {
+  assert.deepEqual(plain(m.insertBeside('a', 'a', 'b', 'vertical', true)),
+    { split: 'vertical', sizes: [0.5, 0.5], children: ['b', 'a'] });
+  const row = { split: 'horizontal', sizes: [0.5, 0.5], children: ['a', 'b'] };
+  assert.deepEqual(plain(m.insertBeside(row, 'b', 'c', 'horizontal', true)),
+    { split: 'horizontal', sizes: [0.5, 0.25, 0.25], children: ['a', 'c', 'b'] });
+  assert.deepEqual(plain(m.insertBeside(row, undefined, 'c', 'horizontal', true)),
+    { split: 'horizontal', sizes: [1 / 3, 1 / 3, 1 / 3], children: ['c', 'a', 'b'] });
+  assert.deepEqual(plain(m.insertBeside(row, undefined, 'c', 'vertical', true)),
+    { split: 'vertical', sizes: [0.5, 0.5], children: ['c', row] });
+});
+
+test('a chart moves beside another chart or an edge of the dashboard, or trades places', () => {
+  const layout = {
+    split: 'horizontal', sizes: [0.6, 0.4],
+    children: ['a', { split: 'vertical', sizes: [0.5, 0.5], children: ['b', 'c'] }],
+  };
+  // Its old cell's space goes to the neighbours, it halves the target's cell
+  assert.deepEqual(plain(m.moveInLayout(layout, 'a', 'c', 'bottom')),
+    { split: 'vertical', sizes: [0.5, 0.25, 0.25], children: ['b', 'c', 'a'] });
+  assert.deepEqual(plain(m.moveInLayout(layout, 'b', 'a', 'top')), {
+    split: 'horizontal', sizes: [0.6, 0.4],
+    children: [{ split: 'vertical', sizes: [0.5, 0.5], children: ['b', 'a'] }, 'c'],
+  });
+  // No target: an edge of the whole dashboard
+  const edge = m.moveInLayout(layout, 'c', undefined, 'left');
+  assert.deepEqual(plain({ ...edge, sizes: edge.sizes.map((s) => Math.round(s * 1000) / 1000) }),
+    { split: 'horizontal', sizes: [0.333, 0.4, 0.267], children: ['c', 'a', 'b'] });
+  // A swap keeps every size
+  assert.deepEqual(plain(m.moveInLayout(layout, 'a', 'b', 'swap')), {
+    split: 'horizontal', sizes: [0.6, 0.4],
+    children: ['b', { split: 'vertical', sizes: [0.5, 0.5], children: ['a', 'c'] }],
+  });
+  // Onto itself, onto a chart the layout lacks, or a swap without a target: no change
+  assert.equal(m.moveInLayout(layout, 'a', 'a', 'left'), layout);
+  assert.equal(m.moveInLayout(layout, 'a', 'gone', 'left'), layout);
+  assert.equal(m.moveInLayout(layout, 'a', undefined, 'swap'), layout);
+  assert.equal(m.moveInLayout('a', 'a', undefined, 'left'), 'a');
+});
+
 test('a split is resized by its path, keeping every cell visible', () => {
   const layout = {
     split: 'horizontal', sizes: [0.5, 0.5],
@@ -476,7 +516,7 @@ test('a dashboard chart carries the cell controls on its toolbar, a chart tab it
   const ids = (html) => new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
   const cell = ids(m.chartHtml({ cspSource: 'x', scripts: [], embedded: true }));
   const tab = ids(m.chartHtml({ cspSource: 'x', scripts: [] }));
-  for (const id of ['tb-add-script', 'tb-split', 'tb-full-chart', 'tb-remove-chart']) {
+  for (const id of ['tb-move', 'tb-add-script', 'tb-split', 'tb-full-chart', 'tb-remove-chart']) {
     assert.ok(cell.has(id), `${id} in a dashboard cell`);
     assert.ok(!tab.has(id), `${id} not in a chart tab`);
   }
