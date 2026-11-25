@@ -574,14 +574,20 @@
       {
         "command": "pyneide.switchToPine",
         "title": "Switch to Pine",
-        "category": "PyneIDE",
-        "icon": "$(arrow-swap)"
+        "category": "PyneIDE"
       },
       {
         "command": "pyneide.switchToPyne",
         "title": "Switch to Pyne",
-        "category": "PyneIDE",
-        "icon": "$(arrow-swap)"
+        "category": "PyneIDE"
+      },
+      {
+        "command": "pyneide.pickPineView",
+        "title": "Pine ▾"
+      },
+      {
+        "command": "pyneide.pickPyneView",
+        "title": "Pyne ▾"
       },
       {
         "command": "pyneide.dashboardDelete",
@@ -745,6 +751,14 @@
         {
           "command": "pyneide.switchToPyne",
           "when": "resourceExtname =~ /^\\.pine$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor"
+        },
+        {
+          "command": "pyneide.pickPineView",
+          "when": "false"
+        },
+        {
+          "command": "pyneide.pickPyneView",
+          "when": "false"
         }
       ],
       "editor/lineNumber/context": [
@@ -888,14 +902,14 @@
           "group": "navigation@4"
         },
         {
-          "command": "pyneide.switchToPine",
-          "when": "resourceExtname =~ /^\\.(py|pyne)$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
-          "group": "navigation@2"
+          "command": "pyneide.pickPineView",
+          "when": "resourceExtname =~ /^\\.pine$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
+          "group": "navigation@0"
         },
         {
-          "command": "pyneide.switchToPyne",
-          "when": "resourceExtname =~ /^\\.pine$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
-          "group": "navigation@2"
+          "command": "pyneide.pickPyneView",
+          "when": "resourceExtname =~ /^\\.(py|pyne)$/i && resource in pyneide.pairedScriptResources && !isInDiffEditor",
+          "group": "navigation@0"
         }
       ],
       "editor/title/run": [
