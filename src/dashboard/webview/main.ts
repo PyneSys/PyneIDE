@@ -21,9 +21,16 @@ import { installTooltips } from '../../webview/tooltip';
 
 installTooltips();
 
-declare function acquireVsCodeApi(): { postMessage(message: DashboardOutMessage): void };
+declare function acquireVsCodeApi(): {
+  postMessage(message: DashboardOutMessage): void;
+  setState(state: unknown): void;
+};
 
 const vscode = acquireVsCodeApi();
+// A further window of the dashboard keeps which one it is, so VS Code can
+// restore it where it was in the next session
+const windowState = JSON.parse(document.getElementById('dash-window-state')?.textContent ?? 'null') as unknown;
+if (windowState !== null) vscode.setState(windowState);
 const chartHtml = JSON.parse(document.getElementById('chart-frame-html')?.textContent ?? '""') as string;
 
 const areaEl = document.getElementById('dash-area') as HTMLDivElement;

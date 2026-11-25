@@ -44,14 +44,20 @@ import {
   chartKeyFor,
   DashboardFormatError,
   insertBeside,
+  layoutKeys,
+  layoutOf,
   MAX_CHARTS,
   moveInLayout,
   parseDashboard,
-  removeFromLayout,
+  removeChart,
+  removeWindow,
   resizeSplit,
   scriptIdFor,
   scriptLimitReason,
   serializeDashboard,
+  uniqueKey,
+  windowOf,
+  withLayout,
   type Dashboard,
   type DashboardChart,
   type DashboardScript,
@@ -60,8 +66,47 @@ import {
 } from './model';
 import { listDashboardScripts, scriptKindOf } from './scripts';
 
+/** Where {@link DashboardSession.addChart} puts a chart that opens a window of its own. */
+const NEW_WINDOW = Symbol('new window');
 /** How long a stopped bridge may take to exit before it is killed. */
 const STOP_GRACE_MS = 4000;
+/** The view type of a dashboard's further windows (`windows.<key>`). */
+const WINDOW_VIEW_TYPE = 'pyneide.dashboardWindow';
+/** How long a dashboard that has just opened waits for VS Code to restore its
+ * windows from the last session before it opens them anew. */
+const RESTORE_WAIT_MS = 3000;
+/** How long a new window's panel may take to become the active editor, which
+ * the command moving it into a window of its own acts on. */
+const ACTIVATE_WAIT_MS = 2000;
+
+/** What a further window's page keeps for VS Code to restore it with. */
+interface WindowState {
+  /** The dashboard file. */
+  uri: string;
+  /** The window's key in it. */
+  window: string;
+}
+
+function isWindowState(value: unknown): value is WindowState {
+  return typeof value === 'object' && value !== null &&
+    typeof (value as WindowState).uri === 'string' && typeof (value as WindowState).window === 'string';
+}
+
+/** Resolves once `panel` is the active editor, or after `ms`; true when it is. */
+function whenActive(panel: vscode.WebviewPanel, ms: number): Promise<boolean> {
+  if (panel.active) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (active: boolean): void => {
+      clearTimeout(timer);
+      listener.dispose();
+      resolve(active);
+    };
+    const timer = setTimeout(() => done(false), ms);
+    const listener = panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) done(true);
+    });
+  });
+}
 
 /** Edit a dashboard script's inputs; resolves with the new overrides, or
  * undefined when the form was closed without saving. */
@@ -95,6 +140,13 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
    * dashboard closed and opened again, starts on the same output files.
    */
   private readonly stopping = new Map<string, Promise<void>>();
+  /**
+   * Windows VS Code restored from the last session whose dashboard is not
+   * open yet, by dashboard file and window key. The dashboard takes them when
+   * it opens, so they stay where the user put them.
+   */
+  private readonly orphans = new Map<string, Map<string, Orphan>>();
+  private readonly restored = new vscode.EventEmitter<void>();
 
   constructor(private readonly deps: DashboardDeps) {}
 
@@ -121,17 +173,40 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
         if (!e.affectsConfiguration('pyneide.chart')) return;
         for (const session of this.sessions) session.pushChartSettings();
       }),
-      vscode.commands.registerCommand('pyneide.dashboardAddChart', () =>
-        this.activeSession()?.addChart(undefined, undefined).catch(reportEditError)),
+      vscode.window.registerWebviewPanelSerializer(WINDOW_VIEW_TYPE, {
+        deserializeWebviewPanel: async (panel, state) => this.restoreWindow(panel, state),
+      }),
+      vscode.commands.registerCommand('pyneide.dashboardAddChart', () => {
+        const session = this.activeSession();
+        session?.addChart(undefined, undefined, session.activeWindow()).catch(reportEditError);
+      }),
       vscode.commands.registerCommand('pyneide.dashboardOpenText', () =>
         this.activeSession()?.openText()),
-      { dispose: () => { for (const session of this.sessions) session.dispose(); } }
+      vscode.commands.registerCommand('pyneide.dashboardReopenWindows', () =>
+        this.activeSession()?.reopenWindows()),
+      vscode.commands.registerCommand('pyneide.dashboardRemoveWindow', () => {
+        const session = this.activeSession();
+        session?.removeWindow(session.activeWindow(), true).catch(reportEditError);
+      }),
+      this.restored,
+      {
+        dispose: () => {
+          for (const session of this.sessions) session.dispose();
+          for (const panels of this.orphans.values()) for (const orphan of panels.values()) orphan.panel.dispose();
+        },
+      }
     );
   }
 
-  /** The dashboard of the active editor tab. */
+  /** The dashboard of the active editor tab (its own or one of its windows). */
   private activeSession(): DashboardSession | undefined {
     return [...this.sessions].find((session) => session.active);
+  }
+
+  /** Show "Reopen Closed Dashboard Windows" while the active dashboard has a closed window. */
+  refreshContext(): void {
+    const closed = (this.activeSession()?.closedWindowCount ?? 0) > 0;
+    void vscode.commands.executeCommand('setContext', 'pyneide.dashboardHasClosedWindows', closed);
   }
 
   resolveCustomTextEditor(document: vscode.TextDocument, panel: vscode.WebviewPanel): void {
@@ -141,7 +216,135 @@ export class DashboardEditorProvider implements vscode.CustomTextEditorProvider 
       this.sessions.delete(session);
       session.dispose();
     });
+    const key = document.uri.toString();
+    const restored = this.orphans.get(key);
+    this.orphans.delete(key);
+    for (const [window, orphan] of restored ?? []) {
+      orphan.placeholder.dispose();
+      session.adoptWindow(window, orphan.panel);
+    }
+    session.openWindows(true);
   }
+
+  /** VS Code restored a dashboard window of the last session. */
+  private restoreWindow(panel: vscode.WebviewPanel, state: unknown): void {
+    if (!isWindowState(state) || !fs.existsSync(vscode.Uri.parse(state.uri).fsPath)) {
+      panel.dispose();
+      return;
+    }
+    const session = [...this.sessions].find((s) => s.uri.toString() === state.uri);
+    if (session) {
+      session.adoptWindow(state.window, panel);
+    } else {
+      // It waits for its dashboard, which VS Code opens once its tab shows
+      const panels = this.orphans.get(state.uri) ?? new Map<string, Orphan>();
+      panels.get(state.window)?.panel.dispose();
+      panels.set(state.window, { panel, placeholder: showOrphan(this.deps.context, panel, state) });
+      this.orphans.set(state.uri, panels);
+      panel.onDidDispose(() => {
+        if (this.orphans.get(state.uri)?.get(state.window)?.panel !== panel) return;
+        panels.delete(state.window);
+        if (!panels.size) this.orphans.delete(state.uri);
+      });
+    }
+    this.restored.fire();
+  }
+
+  /**
+   * Settles once VS Code has handed over every dashboard window it restores
+   * from the last session (every such tab has a panel here), or after
+   * {@link RESTORE_WAIT_MS}.
+   */
+  async restoresSettled(): Promise<void> {
+    const deadline = Date.now() + RESTORE_WAIT_MS;
+    while (this.unclaimedWindowTabs() > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          listener.dispose();
+          resolve();
+        }, deadline - Date.now());
+        const listener = this.restored.event(() => {
+          clearTimeout(timer);
+          listener.dispose();
+          resolve();
+        });
+      });
+    }
+  }
+
+  /** Dashboard window tabs VS Code shows that no panel of this extension holds yet. */
+  private unclaimedWindowTabs(): number {
+    const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs)
+      .filter((tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(WINDOW_VIEW_TYPE))
+      .length;
+    let held = 0;
+    for (const session of this.sessions) held += session.windowCount;
+    for (const panels of this.orphans.values()) held += panels.size;
+    return tabs - held;
+  }
+}
+
+/** A restored window waiting for its dashboard, and what its placeholder listens to. */
+interface Orphan {
+  panel: vscode.WebviewPanel;
+  placeholder: vscode.Disposable;
+}
+
+/** A restored window whose dashboard is not open yet: a button opens it. */
+function showOrphan(
+  context: vscode.ExtensionContext,
+  panel: vscode.WebviewPanel,
+  state: WindowState
+): vscode.Disposable {
+  const uri = vscode.Uri.parse(state.uri);
+  panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+  const icons = vscode.Uri.joinPath(context.extensionUri, 'icons');
+  panel.iconPath = {
+    light: vscode.Uri.joinPath(icons, 'dashboard-light.svg'),
+    dark: vscode.Uri.joinPath(icons, 'dashboard-dark.svg'),
+  };
+  const nonce = crypto.randomBytes(16).toString('base64');
+  const name = escapeHtml(fileStem(uri));
+  panel.webview.html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center;
+    font-family: var(--vscode-font-family); font-size: 12px; color: var(--vscode-foreground);
+    background: var(--vscode-editor-background);
+  }
+  p { margin: 0; color: var(--vscode-descriptionForeground); }
+  button {
+    height: 28px; padding: 0 14px; border: 0; border-radius: 4px; cursor: pointer; font: inherit;
+    background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff);
+  }
+  button:hover { background: var(--vscode-button-hoverBackground, #1177bb); }
+</style>
+</head>
+<body>
+<p>This window shows charts of the dashboard ${name}.</p>
+<button id="open">Open dashboard</button>
+<script nonce="${nonce}">
+  const vscode = acquireVsCodeApi();
+  vscode.setState(${JSON.stringify(state).replace(/</g, '\\u003c')});
+  document.getElementById('open').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
+</script>
+</body>
+</html>`;
+  return panel.webview.onDidReceiveMessage((msg: { type?: unknown }) => {
+    if (msg?.type !== 'openDashboard') return;
+    void vscode.commands.executeCommand('vscode.openWith', uri, DashboardEditorProvider.viewType, {
+      viewColumn: vscode.ViewColumn.One,
+    });
+  });
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 /** Show why a dashboard edit was not made. */
@@ -173,33 +376,52 @@ function inputSummary(script: DashboardScript): string {
     .join(', ');
 }
 
+/** One page of a dashboard: its own tab, or one of its further windows. */
+interface DashboardPage {
+  /** The window's key; undefined for the dashboard's own tab. */
+  window: string | undefined;
+  panel: vscode.WebviewPanel;
+  /** The page script answered: it takes views. */
+  ready: boolean;
+  subscriptions: vscode.Disposable[];
+}
+
 class DashboardSession {
   private dashboard: Dashboard | undefined;
   private error: string | undefined;
   private readonly charts = new Map<string, ChartRun>();
-  private ready = false;
+  /** The window each chart is in (undefined: the dashboard's own tab). */
+  private chartWindows = new Map<string, string | undefined>();
+  private readonly main: DashboardPage;
+  /** The open further windows, by key. */
+  private readonly windows = new Map<string, DashboardPage>();
+  /** Windows the user closed: the file keeps them, and they open again with
+   * the dashboard or on "Reopen Closed Dashboard Windows". */
+  private readonly closedWindows = new Set<string>();
+  /** Charts stopped because their window is closed: they start again when it opens. */
+  private readonly paused = new Set<string>();
+  /** Windows are opened one after the other (each new one becomes the active
+   * editor before it moves into a window of its own). */
+  private windowQueue: Promise<void> = Promise.resolve();
+  /** The windows open with the file's changes once the dashboard has taken
+   * those VS Code restores (see {@link DashboardSession.openWindows}). */
+  private windowsStarted = false;
   private disposed = false;
   private env: Promise<LiveChartEnv | undefined> | undefined;
   /** Edits are applied one after the other, each on the file the last one left. */
   private editQueue: Promise<void> = Promise.resolve();
   private readonly subscriptions: vscode.Disposable[] = [];
+  private readonly distRoot: vscode.Uri;
 
   constructor(
     private readonly deps: DashboardDeps,
     readonly provider: DashboardEditorProvider,
     private readonly document: vscode.TextDocument,
-    private readonly panel: vscode.WebviewPanel
+    panel: vscode.WebviewPanel
   ) {
-    const distRoot = vscode.Uri.joinPath(deps.context.extensionUri, 'dist');
-    panel.webview.options = { enableScripts: true, localResourceRoots: [distRoot] };
-    const icons = vscode.Uri.joinPath(deps.context.extensionUri, 'icons');
-    panel.iconPath = {
-      light: vscode.Uri.joinPath(icons, 'dashboard-light.svg'),
-      dark: vscode.Uri.joinPath(icons, 'dashboard-dark.svg'),
-    };
-    panel.webview.html = this.html(panel.webview, distRoot);
+    this.distRoot = vscode.Uri.joinPath(deps.context.extensionUri, 'dist');
+    this.main = this.attach(undefined, panel);
     this.subscriptions.push(
-      panel.webview.onDidReceiveMessage((msg: DashboardOutMessage) => void this.onMessage(msg).catch(reportEditError)),
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (e.document === document && e.contentChanges.length) this.sync();
       })
@@ -207,9 +429,28 @@ class DashboardSession {
     this.sync();
   }
 
-  /** The dashboard's tab is the active editor. */
+  get uri(): vscode.Uri {
+    return this.document.uri;
+  }
+
+  /** The dashboard's tab, or one of its windows, is the active editor. */
   get active(): boolean {
-    return !this.disposed && this.panel.active;
+    return !this.disposed && [this.main, ...this.windows.values()].some((page) => page.panel.active);
+  }
+
+  /** The window of the active editor (undefined: the dashboard's own tab). */
+  activeWindow(): string | undefined {
+    return [...this.windows.values()].find((page) => page.panel.active)?.window;
+  }
+
+  /** The further windows open now. */
+  get windowCount(): number {
+    return this.windows.size;
+  }
+
+  /** The further windows the user closed. */
+  get closedWindowCount(): number {
+    return this.closedWindows.size;
   }
 
   openText(): Thenable<unknown> {
@@ -221,11 +462,170 @@ class DashboardSession {
     this.disposed = true;
     for (const chart of this.charts.values()) chart.dispose();
     this.charts.clear();
+    for (const page of this.windows.values()) {
+      for (const s of page.subscriptions) s.dispose();
+      page.panel.dispose();
+    }
+    this.windows.clear();
+    for (const s of this.main.subscriptions) s.dispose();
     for (const s of this.subscriptions) s.dispose();
   }
 
   get name(): string {
     return this.dashboard?.name ?? fileStem(this.document.uri);
+  }
+
+  /** A further window's title: the dashboard's name and the window's. */
+  private windowTitle(window: string): string {
+    return `${this.name} · ${this.dashboard?.windows[window]?.title ?? window}`;
+  }
+
+  /** Show `panel` as a page of the dashboard. */
+  private attach(window: string | undefined, panel: vscode.WebviewPanel): DashboardPage {
+    const page: DashboardPage = { window, panel, ready: false, subscriptions: [] };
+    panel.webview.options = { enableScripts: true, localResourceRoots: [this.distRoot] };
+    const icons = vscode.Uri.joinPath(this.deps.context.extensionUri, 'icons');
+    panel.iconPath = {
+      light: vscode.Uri.joinPath(icons, 'dashboard-light.svg'),
+      dark: vscode.Uri.joinPath(icons, 'dashboard-dark.svg'),
+    };
+    const state: WindowState | undefined = window === undefined
+      ? undefined
+      : { uri: this.document.uri.toString(), window };
+    panel.webview.html = this.html(panel.webview, state);
+    page.subscriptions.push(
+      panel.webview.onDidReceiveMessage((msg: DashboardOutMessage) =>
+        void this.onMessage(page, msg).catch(reportEditError)),
+      panel.onDidChangeViewState(() => this.provider.refreshContext())
+    );
+    if (window !== undefined) {
+      panel.title = this.windowTitle(window);
+      page.subscriptions.push(panel.onDidDispose(() => {
+        if (this.disposed || this.windows.get(window) !== page) return;
+        // Closed by the user: the file keeps the window, and its charts stop until it opens again
+        for (const s of page.subscriptions) s.dispose();
+        this.windows.delete(window);
+        this.closedWindows.add(window);
+        for (const [key, run] of this.charts) if (this.chartWindows.get(key) === window) run.frameGone();
+        this.updatePaused();
+        this.provider.refreshContext();
+        void this.offerClosed(window).catch(reportEditError);
+      }));
+      this.windows.set(window, page);
+    }
+    return page;
+  }
+
+  /** Whether chart `key` is in a window the user closed. */
+  private isHidden(key: string): boolean {
+    const window = this.chartWindows.get(key);
+    return window !== undefined && this.closedWindows.has(window);
+  }
+
+  /** Stop the charts of the closed windows, and start those of the reopened ones again. */
+  private updatePaused(): void {
+    for (const [key, run] of this.charts) {
+      const hidden = this.isHidden(key);
+      if (hidden && !this.paused.has(key)) {
+        this.paused.add(key);
+        run.stop();
+      } else if (!hidden && this.paused.has(key)) {
+        this.paused.delete(key);
+        void run.start();
+      }
+    }
+  }
+
+  /** A window was closed: say it opens again, and offer to reopen or remove it. */
+  private async offerClosed(window: string): Promise<void> {
+    const title = this.dashboard?.windows[window]?.title ?? window;
+    const choice = await vscode.window.showInformationMessage(
+      `PyneIDE: the window "${title}" of ${this.name} is closed and its charts are stopped. ` +
+      'It opens again with the dashboard.',
+      'Reopen',
+      'Remove from Dashboard'
+    );
+    if (this.disposed || !this.closedWindows.has(window)) return;
+    if (choice === 'Reopen') this.reopenWindows([window]);
+    else if (choice === 'Remove from Dashboard') await this.removeWindow(window, false);
+  }
+
+  /** "Remove Window from Dashboard": the window and its charts leave the file;
+   * `confirm` asks first. */
+  async removeWindow(window: string | undefined, confirm: boolean): Promise<void> {
+    const entry = window === undefined ? undefined : this.dashboard?.windows[window];
+    if (window === undefined || !entry) return;
+    if (confirm) {
+      const count = layoutKeys(entry.layout).length;
+      const answer = await vscode.window.showWarningMessage(
+        `Remove the window "${entry.title ?? window}" and its ${count === 1 ? 'chart' : `${count} charts`} ` +
+        'from the dashboard?',
+        { modal: true, detail: 'Their scripts, inputs and drawings leave the dashboard file.' },
+        'Remove'
+      );
+      if (answer !== 'Remove') return;
+    }
+    await this.edit((d) => removeWindow(d, window));
+  }
+
+  /** Take a window VS Code restored from the last session, in place of one
+   * opened anew (the restored one is where the user put it). */
+  adoptWindow(window: string, panel: vscode.WebviewPanel): void {
+    if (this.disposed || (this.dashboard && !this.dashboard.windows[window])) {
+      panel.dispose();
+      return;
+    }
+    const previous = this.windows.get(window);
+    if (previous) {
+      this.windows.delete(window);
+      for (const s of previous.subscriptions) s.dispose();
+      previous.panel.dispose();
+    }
+    this.closedWindows.delete(window);
+    for (const [key, run] of this.charts) if (this.chartWindows.get(key) === window) run.frameGone();
+    this.attach(window, panel);
+    this.updatePaused();
+    this.provider.refreshContext();
+  }
+
+  /** Open the file's windows that are not open; `first`: the dashboard has
+   * just opened, so the windows VS Code restores are waited for first. */
+  openWindows(first = false): void {
+    if (first) this.windowsStarted = true;
+    if (!this.windowsStarted) return;
+    const run = async (): Promise<void> => {
+      if (first) await this.provider.restoresSettled();
+      for (const window of Object.keys(this.dashboard?.windows ?? {})) {
+        if (this.disposed) return;
+        if (this.windows.has(window) || this.closedWindows.has(window)) continue;
+        await this.openWindow(window);
+      }
+    };
+    this.windowQueue = this.windowQueue.then(run, run).catch(reportEditError);
+  }
+
+  /** "Reopen Closed Dashboard Windows": open `windows` (all closed ones by
+   * default) again, and start their charts. */
+  reopenWindows(windows: string[] = [...this.closedWindows]): void {
+    for (const window of windows) this.closedWindows.delete(window);
+    this.updatePaused();
+    this.provider.refreshContext();
+    this.openWindows();
+  }
+
+  /** Open a further window: a panel moved into a window of its own. */
+  private async openWindow(window: string): Promise<void> {
+    const panel = vscode.window.createWebviewPanel(
+      WINDOW_VIEW_TYPE,
+      this.windowTitle(window),
+      { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [this.distRoot] }
+    );
+    this.attach(window, panel);
+    // The command moves the active editor
+    if (await whenActive(panel, ACTIVATE_WAIT_MS)) {
+      await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+    }
   }
 
   /** The workdir-relative output directory of a chart. */
@@ -246,7 +646,8 @@ class DashboardSession {
     for (const chart of this.charts.values()) chart.pushChartSettings();
   }
 
-  /** The file changed (or was opened): start, restart and stop its charts. */
+  /** The file changed (or was opened): start, restart and stop its charts,
+   * and open and close its windows. */
   private sync(): void {
     if (this.disposed) return;
     try {
@@ -257,40 +658,79 @@ class DashboardSession {
       this.postView();
       return;
     }
-    const charts = this.dashboard.charts;
+    const dashboard = this.dashboard;
+    const charts = dashboard.charts;
+    const chartWindows = new Map(Object.keys(charts).map((key) => [key, windowOf(dashboard, key)]));
     for (const [key, run] of [...this.charts]) {
       if (!charts[key]) {
         run.dispose();
         this.charts.delete(key);
+        this.paused.delete(key);
+      } else if (chartWindows.get(key) !== this.chartWindows.get(key)) {
+        // Its chart page is in another window now
+        run.frameGone();
       }
     }
+    this.chartWindows = chartWindows;
     for (const [key, chart] of Object.entries(charts)) {
       const run = this.charts.get(key);
       if (!run) {
         const next = new ChartRun(this.deps, this, key, chart);
         this.charts.set(key, next);
-        void next.start();
+        if (this.isHidden(key)) this.paused.add(key);
+        else void next.start();
       } else if (chartSignature(run.config) !== chartSignature(chart)) {
         run.config = chart;
-        void run.start();
+        // A stopped chart starts on its new config when its window opens
+        if (!this.paused.has(key)) void run.start();
       } else {
         run.config = chart;
       }
     }
+    for (const [window, page] of [...this.windows]) {
+      if (dashboard.windows[window]) {
+        page.panel.title = this.windowTitle(window);
+        continue;
+      }
+      this.windows.delete(window);
+      for (const s of page.subscriptions) s.dispose();
+      page.panel.dispose();
+    }
+    for (const window of [...this.closedWindows]) {
+      if (!dashboard.windows[window]) this.closedWindows.delete(window);
+    }
+    // A chart may have left a closed window by a text edit
+    this.updatePaused();
+    this.provider.refreshContext();
     this.postView();
+    this.openWindows();
   }
 
   postView(): void {
-    if (!this.ready || this.disposed) return;
+    if (this.disposed) return;
+    for (const page of [this.main, ...this.windows.values()]) this.postPageView(page);
+    for (const run of this.charts.values()) run.postCell();
+  }
+
+  private postPageView(page: DashboardPage): void {
+    if (!page.ready) return;
+    const title = page.window === undefined ? this.name : this.windowTitle(page.window);
     const view: DashboardView = this.error !== undefined || !this.dashboard
       ? { name: fileStem(this.document.uri), layout: undefined, charts: {}, error: this.error }
       : {
-          name: this.name,
-          layout: this.dashboard.layout,
-          charts: Object.fromEntries([...this.charts].map(([key, run]) => [key, run.view()])),
+          name: title,
+          layout: layoutOf(this.dashboard, page.window),
+          charts: Object.fromEntries([...this.charts]
+            .filter(([key]) => this.chartWindows.get(key) === page.window)
+            .map(([key, run]) => [key, run.view()])),
         };
-    void this.panel.webview.postMessage({ type: 'view', view } satisfies DashboardInMessage);
-    for (const run of this.charts.values()) run.postCell();
+    void page.panel.webview.postMessage({ type: 'view', view } satisfies DashboardInMessage);
+  }
+
+  /** The open page that shows chart `key`. */
+  private pageOf(key: string): DashboardPage | undefined {
+    const window = this.chartWindows.get(key);
+    return window === undefined ? this.main : this.windows.get(window);
   }
 
   /** Why no chart can join the dashboard, when none can. */
@@ -300,9 +740,9 @@ class DashboardSession {
       : undefined;
   }
 
-  /** Whether a chart can be dragged to another place: the dashboard holds more than one. */
-  chartsMovable(): boolean {
-    return this.dashboard !== undefined && Object.keys(this.dashboard.charts).length > 1;
+  /** Whether chart `key` can be dragged to another place: its window holds another chart. */
+  chartMovable(key: string): boolean {
+    return this.dashboard !== undefined && layoutKeys(layoutOf(this.dashboard, this.chartWindows.get(key))).length > 1;
   }
 
   /** A chart's toolbar or Layers menu asked for a cell action. */
@@ -326,11 +766,10 @@ class DashboardSession {
         await this.addChart(key, action.direction);
         break;
       case 'removeChart':
-        await this.edit((d) => {
-          delete d.charts[key];
-          d.layout = removeFromLayout(d.layout, key);
-          return d;
-        });
+        await this.edit((d) => removeChart(d, key));
+        break;
+      case 'addChartWindow':
+        await this.addChart(undefined, undefined, NEW_WINDOW);
         break;
       case 'restart':
         void this.charts.get(key)?.start();
@@ -350,7 +789,7 @@ class DashboardSession {
 
   postChart(key: string, message: ChartInMessage): void {
     if (this.disposed) return;
-    void this.panel.webview.postMessage({ type: 'chart', key, message } satisfies DashboardInMessage);
+    void this.pageOf(key)?.panel.webview.postMessage({ type: 'chart', key, message } satisfies DashboardInMessage);
   }
 
   /** Rewrite the file through `change` (on the document's current text) and
@@ -379,26 +818,31 @@ class DashboardSession {
     return this.editQueue;
   }
 
-  private async onMessage(msg: DashboardOutMessage): Promise<void> {
+  private async onMessage(page: DashboardPage, msg: DashboardOutMessage): Promise<void> {
     switch (msg.type) {
       case 'ready':
-        this.ready = true;
-        this.postView();
+        // A page (re)loaded, as one moved into another window does: its charts load anew
+        page.ready = true;
+        for (const [key, run] of this.charts) if (this.chartWindows.get(key) === page.window) run.frameGone();
+        this.postPageView(page);
         break;
       case 'frame':
+        // A chart page left behind in a window the chart has just left
+        if (this.chartWindows.get(msg.key) !== page.window) break;
         this.charts.get(msg.key)?.onFrameMessage(msg.message);
         break;
       case 'openText':
         await this.openText();
         break;
       case 'addChart':
-        await this.addChart(undefined, undefined);
+        await this.addChart(undefined, undefined, page.window);
         break;
       case 'resize':
-        await this.edit((d) => ({ ...d, layout: resizeSplit(d.layout, msg.path, msg.sizes) }));
+        await this.edit((d) => withLayout(d, page.window, resizeSplit(layoutOf(d, page.window), msg.path, msg.sizes)));
         break;
       case 'moveChart':
-        await this.edit((d) => ({ ...d, layout: moveInLayout(d.layout, msg.key, msg.target, msg.side) }));
+        await this.edit((d) =>
+          withLayout(d, page.window, moveInLayout(layoutOf(d, page.window), msg.key, msg.target, msg.side)));
         break;
       case 'restartChart':
         void this.charts.get(msg.key)?.start();
@@ -406,7 +850,14 @@ class DashboardSession {
     }
   }
 
-  async addChart(beside: string | undefined, direction: SplitDirection | undefined): Promise<void> {
+  /** Add a chart beside chart `beside` (in its window), or, without one, at
+   * the right edge of `window` (undefined: the dashboard's own tab;
+   * {@link NEW_WINDOW}: a new window). */
+  async addChart(
+    beside: string | undefined,
+    direction: SplitDirection | undefined,
+    window?: string | typeof NEW_WINDOW
+  ): Promise<void> {
     if (!this.dashboard) return;
     if (Object.keys(this.dashboard.charts).length >= MAX_CHARTS) {
       void vscode.window.showWarningMessage(`PyneIDE: a dashboard holds at most ${MAX_CHARTS} charts.`);
@@ -418,10 +869,11 @@ class DashboardSession {
     if (!target) return;
     await this.edit((d) => {
       if (Object.keys(d.charts).length >= MAX_CHARTS) return undefined;
+      const into = beside !== undefined ? windowOf(d, beside)
+        : window === NEW_WINDOW ? uniqueKey('window', Object.keys(d.windows)) : window;
       const key = chartKeyFor(target.provider, Object.keys(d.charts));
       d.charts[key] = { provider: target.provider, history: target.from, scripts: [] };
-      d.layout = insertBeside(d.layout, beside, key, direction ?? 'horizontal');
-      return d;
+      return withLayout(d, into, insertBeside(layoutOf(d, into), beside, key, direction ?? 'horizontal'));
     });
   }
 
@@ -492,7 +944,8 @@ class DashboardSession {
     });
   }
 
-  private html(webview: vscode.Webview, distRoot: vscode.Uri): string {
+  private html(webview: vscode.Webview, state: WindowState | undefined): string {
+    const distRoot = this.distRoot;
     const asset = (name: string): string => webview.asWebviewUri(vscode.Uri.joinPath(distRoot, name)).toString();
     const code = (name: string): string => fs.readFileSync(path.join(distRoot.fsPath, name), 'utf8');
     // The chart iframes are `srcdoc` documents, whose requests the webview's
@@ -507,7 +960,8 @@ class DashboardSession {
     });
     // Data, not code: `<` escaped so the page cannot end the script element early
     const frameJson = JSON.stringify(frame).replace(/</g, '\\u003c');
-    return dashboardHtml(webview.cspSource, nonce, asset('dashboard-webview.js'), frameJson);
+    const stateJson = JSON.stringify(state ?? null).replace(/</g, '\\u003c');
+    return dashboardHtml(webview.cspSource, nonce, asset('dashboard-webview.js'), frameJson, stateJson);
   }
 }
 
@@ -564,7 +1018,7 @@ class ChartRun {
       }),
       addScriptBlocked: indicatorBlocked && strategyBlocked ? 'This chart runs as many scripts as it can.' : undefined,
       addChartBlocked: this.session.addChartBlocked(),
-      movable: this.session.chartsMovable(),
+      movable: this.session.chartMovable(this.key),
       drawings: {
         symbol: providerSymbol(this.config.provider),
         timeframe: providerTimeframe(this.config.provider) ?? '',
@@ -582,6 +1036,12 @@ class ChartRun {
     this.session.postChart(this.key, { type: 'candleStyle', style: readCandleStyle() });
     this.session.postChart(this.key, { type: 'priceScale', scale: readPriceScale() });
     this.session.postChart(this.key, { type: 'colorScheme', scheme: readColorScheme() });
+  }
+
+  /** The chart page went away (its window closed, reloaded or is another
+   * one now): nothing goes to it until a new one is ready. */
+  frameGone(): void {
+    this.frameReady = false;
   }
 
   onFrameMessage(msg: ChartOutMessage): void {
@@ -884,7 +1344,13 @@ async function stopRun(run: CandleRun): Promise<void> {
   }
 }
 
-function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, frameJson: string): string {
+function dashboardHtml(
+  cspSource: string,
+  nonce: string,
+  scriptUri: string,
+  frameJson: string,
+  stateJson: string
+): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -966,6 +1432,7 @@ function dashboardHtml(cspSource: string, nonce: string, scriptUri: string, fram
   </div>
 </div>
 <script id="chart-frame-html" type="application/json">${frameJson}</script>
+<script id="dash-window-state" type="application/json">${stateJson}</script>
 <script src="${scriptUri}"></script>
 </body>
 </html>`;

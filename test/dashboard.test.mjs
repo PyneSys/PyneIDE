@@ -146,6 +146,125 @@ provider = "q"
   assert.equal(m.parseDashboard('[charts.a]\nprovider = "p"').layout, 'a');
 });
 
+const WINDOWS_FILE = `
+[layout]
+split = "horizontal"
+children = ["a", "b"]
+
+[windows.second]
+title = "Majors"
+
+[windows.second.layout]
+split = "vertical"
+sizes = [0.7, 0.3]
+children = ["c", "d"]
+
+[windows.third.layout]
+split = "horizontal"
+children = ["e"]
+
+[charts.a]
+provider = "p:X:A@1"
+[charts.b]
+provider = "p:X:B@1"
+[charts.c]
+provider = "p:X:C@1"
+[charts.d]
+provider = "p:X:D@1"
+[charts.e]
+provider = "p:X:E@1"
+`;
+
+test('a dashboard keeps further windows, each with its own layout and title', () => {
+  const d = m.parseDashboard(WINDOWS_FILE);
+  assert.deepEqual(plain(d.layout), { split: 'horizontal', sizes: [0.5, 0.5], children: ['a', 'b'] });
+  assert.deepEqual(Object.keys(d.windows), ['second', 'third']);
+  assert.equal(d.windows.second.title, 'Majors');
+  assert.deepEqual(plain(d.windows.second.layout), { split: 'vertical', sizes: [0.7, 0.3], children: ['c', 'd'] });
+  assert.equal(d.windows.third.title, undefined);
+  assert.equal(d.windows.third.layout, 'e');
+  assert.equal(m.windowOf(d, 'a'), undefined);
+  assert.equal(m.windowOf(d, 'd'), 'second');
+  assert.equal(m.windowOf(d, 'e'), 'third');
+  const text = m.serializeDashboard(d);
+  assert.match(text, /\[windows\.second\]\ntitle = "Majors"/);
+  assert.deepEqual(plain(m.parseDashboard(text)), plain(d));
+  // A dashboard without windows writes none
+  assert.doesNotMatch(m.serializeDashboard(m.parseDashboard('[charts.a]\nprovider = "p"')), /windows/);
+});
+
+test('every chart is in exactly one window, and a window without charts is dropped', () => {
+  const d = m.parseDashboard(`
+[layout]
+split = "horizontal"
+children = ["a"]
+[windows.w1.layout]
+split = "horizontal"
+children = ["a", "b", "gone"]
+[windows.w2.layout]
+split = "horizontal"
+children = ["b"]
+[windows.w3]
+title = "Empty"
+[charts.a]
+provider = "p"
+[charts.b]
+provider = "q"
+[charts.c]
+provider = "r"
+`);
+  // a stays in the dashboard's own layout, b in the first window that places it,
+  // c (placed nowhere) joins the dashboard's own layout
+  assert.deepEqual(plain(d.layout), { split: 'horizontal', sizes: [0.5, 0.5], children: ['a', 'c'] });
+  assert.deepEqual(Object.keys(d.windows), ['w1']);
+  assert.equal(d.windows.w1.layout, 'b');
+  assert.throws(() => m.parseDashboard('[windows."a b".layout]\nchildren = ["x"]\nsplit = "horizontal"'),
+    /window key may hold/);
+  assert.throws(() => m.parseDashboard('windows = 1'), /windows must be a table/);
+  assert.throws(() => m.parseDashboard('[windows.w]\ntitle = 3'), /windows\.w\.title/);
+});
+
+test('a chart opens a new window, or joins one; an emptied window goes', () => {
+  const d = m.parseDashboard(WINDOWS_FILE);
+  // A window key the dashboard does not have is a new window
+  const key = m.uniqueKey('window', Object.keys(d.windows));
+  assert.equal(key, 'window');
+  let next = { ...d, charts: { ...d.charts, f: { provider: 'p:X:F@1', history: '-500', scripts: [] } } };
+  next = m.withLayout(next, key, m.insertBeside(m.layoutOf(next, key), undefined, 'f', 'horizontal'));
+  assert.deepEqual(plain(next.windows.window), { layout: 'f' });
+  assert.equal(m.windowOf(next, 'f'), 'window');
+  // An existing window takes the chart at its right edge
+  next = m.withLayout(next, 'third', m.insertBeside(m.layoutOf(next, 'third'), undefined, 'g', 'horizontal'));
+  assert.deepEqual(plain(next.windows.third.layout), { split: 'horizontal', sizes: [0.5, 0.5], children: ['e', 'g'] });
+  // The result survives the file (g, which has no chart, is left out)
+  const again = m.parseDashboard(m.serializeDashboard(next));
+  assert.equal(again.windows.window.layout, 'f');
+  assert.equal(again.windows.third.layout, 'e');
+  // A window without a layout is no window
+  assert.deepEqual(Object.keys(m.withLayout(again, 'window', undefined).windows), ['second', 'third']);
+});
+
+test('removing a window removes its charts with it', () => {
+  const d = m.parseDashboard(WINDOWS_FILE);
+  const next = m.removeWindow(d, 'second');
+  assert.deepEqual(Object.keys(next.windows), ['third']);
+  assert.deepEqual(Object.keys(next.charts), ['a', 'b', 'e']);
+  assert.deepEqual(plain(m.parseDashboard(m.serializeDashboard(next))), plain(next));
+  assert.equal(m.removeWindow(d, 'nope'), d);
+});
+
+test('removing the last chart of a window removes the window', () => {
+  const d = m.parseDashboard(WINDOWS_FILE);
+  let next = m.removeChart(d, 'e');
+  assert.equal(next.charts.e, undefined);
+  assert.equal(next.windows.third, undefined);
+  next = m.removeChart(next, 'c');
+  assert.equal(next.windows.second.layout, 'd');
+  next = m.removeChart(next, 'a');
+  assert.equal(next.layout, 'b');
+  assert.deepEqual(plain(m.withLayout(next, 'second', undefined).windows), {});
+});
+
 test('a chart goes beside another, splitting its cell', () => {
   let layout = m.insertBeside(undefined, undefined, 'a', 'horizontal');
   assert.equal(layout, 'a');

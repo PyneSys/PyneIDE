@@ -1,9 +1,10 @@
 /**
  * A chart inside a dashboard cell (`body.embedded`): the cell's grip and toolbar
- * buttons ("Add script", split, full chart, remove), its split menu, and what
- * the Layers menu needs to group the plots by script. The dashboard sends the
- * cell's scripts and limits as `cell` messages; the buttons answer with `cell`
- * actions. A chart tab has none of these elements, so nothing here runs there.
+ * buttons ("Add script", split, full chart, remove), its split menu (a chart
+ * beside this one, or in a new window), and what the Layers menu needs to group
+ * the plots by script. The dashboard sends the cell's scripts and limits as
+ * `cell` messages; the buttons answer with `cell` actions. A chart tab has none
+ * of these elements, so nothing here runs there.
  */
 import type { ChartCell, ChartCellAction, ChartCellScript, ChartOutMessage } from '../messages';
 import { toolbarAnchor } from './toolbarOverflow';
@@ -49,9 +50,14 @@ export function cellAction(action: ChartCellAction): void {
   hooks?.post({ type: 'cell', action });
 }
 
-const SPLIT_CHOICES: Array<{ direction: 'horizontal' | 'vertical'; label: string; icon: string }> = [
-  { direction: 'horizontal', label: 'Add chart to the right', icon: 'M10 3.5v13M13 10h3M14.5 8.5v3' },
-  { direction: 'vertical', label: 'Add chart below', icon: 'M2.5 10h15M10 12.5v3M8.5 14h3' },
+const SPLIT_CHOICES: Array<{ action: ChartCellAction; label: string; icon: string }> = [
+  {
+    action: { kind: 'addChart', direction: 'horizontal' },
+    label: 'Add chart to the right',
+    icon: 'M10 3.5v13M13 10h3M14.5 8.5v3',
+  },
+  { action: { kind: 'addChart', direction: 'vertical' }, label: 'Add chart below', icon: 'M2.5 10h15M10 12.5v3M8.5 14h3' },
+  { action: { kind: 'addChartWindow' }, label: 'Add chart in a new window', icon: 'M11.5 6.5h4v4M15.5 6.5l-5 5' },
 ];
 
 function ensureSplitPopup(): HTMLDivElement {
@@ -64,14 +70,13 @@ function ensureSplitPopup(): HTMLDivElement {
     const item = document.createElement('button');
     item.type = 'button';
     item.setAttribute('role', 'menuitem');
-    item.dataset.direction = choice.direction;
     item.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true">' +
       `<rect x="2.5" y="3.5" width="15" height="13" rx="1.5"></rect><path d="${choice.icon}"></path></svg>`;
     item.append(choice.label);
     item.addEventListener('click', (event) => {
       event.stopPropagation();
       closeSplitPopup();
-      cellAction({ kind: 'addChart', direction: choice.direction });
+      cellAction(choice.action);
     });
     popup.appendChild(item);
   }

@@ -49,6 +49,7 @@
     "onDebugDynamicConfigurations:pyne",
     "onCustomEditor:pyneide.ohlcvTable",
     "onCustomEditor:pyneide.dashboard",
+    "onWebviewPanel:pyneide.dashboardWindow",
     "onLanguage:pyne",
     "onUri"
   ],
@@ -559,6 +560,18 @@
         "icon": "$(go-to-file)"
       },
       {
+        "command": "pyneide.dashboardReopenWindows",
+        "title": "Reopen Closed Dashboard Windows",
+        "category": "PyneIDE",
+        "icon": "$(multiple-windows)"
+      },
+      {
+        "command": "pyneide.dashboardRemoveWindow",
+        "title": "Remove Window from Dashboard…",
+        "category": "PyneIDE",
+        "icon": "$(trash)"
+      },
+      {
         "command": "pyneide.switchToPine",
         "title": "Switch to Pine",
         "category": "PyneIDE",
@@ -711,11 +724,19 @@
         },
         {
           "command": "pyneide.dashboardAddChart",
-          "when": "activeCustomEditorId == pyneide.dashboard"
+          "when": "activeCustomEditorId == pyneide.dashboard || activeWebviewPanelId == pyneide.dashboardWindow"
         },
         {
           "command": "pyneide.dashboardOpenText",
           "when": "activeCustomEditorId == pyneide.dashboard"
+        },
+        {
+          "command": "pyneide.dashboardReopenWindows",
+          "when": "(activeCustomEditorId == pyneide.dashboard || activeWebviewPanelId == pyneide.dashboardWindow) && pyneide.dashboardHasClosedWindows"
+        },
+        {
+          "command": "pyneide.dashboardRemoveWindow",
+          "when": "activeWebviewPanelId == pyneide.dashboardWindow"
         },
         {
           "command": "pyneide.switchToPine",
@@ -848,13 +869,23 @@
         },
         {
           "command": "pyneide.dashboardAddChart",
-          "when": "activeCustomEditorId == pyneide.dashboard",
+          "when": "activeCustomEditorId == pyneide.dashboard || activeWebviewPanelId == pyneide.dashboardWindow",
           "group": "navigation@1"
         },
         {
           "command": "pyneide.dashboardOpenText",
           "when": "activeCustomEditorId == pyneide.dashboard",
           "group": "navigation@2"
+        },
+        {
+          "command": "pyneide.dashboardReopenWindows",
+          "when": "(activeCustomEditorId == pyneide.dashboard || activeWebviewPanelId == pyneide.dashboardWindow) && pyneide.dashboardHasClosedWindows",
+          "group": "navigation@3"
+        },
+        {
+          "command": "pyneide.dashboardRemoveWindow",
+          "when": "activeWebviewPanelId == pyneide.dashboardWindow",
+          "group": "navigation@4"
         },
         {
           "command": "pyneide.switchToPine",

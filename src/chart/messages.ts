@@ -69,6 +69,8 @@ export type ChartCellAction =
   | { kind: 'editScript'; id: string }
   | { kind: 'removeScript'; id: string }
   | { kind: 'addChart'; direction: 'horizontal' | 'vertical' }
+  /** Add a chart in a new window of the dashboard, which can go to another screen. */
+  | { kind: 'addChartWindow' }
   /** Fill the whole dashboard with this chart, or put it back in its cell. */
   | { kind: 'toggleMaximize' }
   | { kind: 'removeChart' }

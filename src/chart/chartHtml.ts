@@ -53,8 +53,8 @@ const CELL_GROUP = `  <div class="toolbar-group">
         <circle cx="3" cy="12" r="1.2"></circle><circle cx="7" cy="12" r="1.2"></circle>
       </svg>
     </div>
-    <button id="tb-split" class="icon-button" title="Add a chart beside this one"
-            aria-label="Add a chart beside this one" aria-pressed="false" aria-haspopup="menu">
+    <button id="tb-split" class="icon-button" title="Add a chart beside this one or in a new window"
+            aria-label="Add a chart beside this one or in a new window" aria-pressed="false" aria-haspopup="menu">
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <rect x="2.5" y="3.5" width="15" height="13" rx="1.5"></rect>
         <path d="M10 3.5v13"></path>

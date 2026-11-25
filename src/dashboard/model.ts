@@ -12,6 +12,14 @@
  * sizes = [0.6, 0.4]
  * children = ["btc_1", { split = "vertical", sizes = [0.5, 0.5], children = ["eth_5", "btc_60"] }]
  *
+ * [windows.second]
+ * title = "Majors"
+ *
+ * [windows.second.layout]
+ * split = "horizontal"
+ * sizes = [0.5, 0.5]
+ * children = ["sol_5", "xrp_5"]
+ *
  * [charts.btc_1]
  * provider = "ccxt:BINANCE:BTC/USDT@1"
  * history = "-500"
@@ -33,6 +41,12 @@
  * A layout leaf is a chart key; a split lays its children side by side
  * (`horizontal`) or one under the other (`vertical`), `sizes` being their
  * shares of the split (they sum to 1).
+ *
+ * `[layout]` is the dashboard's own tab. Each `windows.<key>` is a further
+ * window of the same dashboard, with its own layout and an optional `title`, that
+ * the dashboard opens as a separate window (to put on another screen). Every chart
+ * is in exactly one layout: a chart no layout places joins the dashboard's own,
+ * and a window without charts is no window.
  *
  * A chart's `drawings` are the user's own: each point is a bar time and a
  * price, and a Fibonacci retracement also lists its `levels`
@@ -98,9 +112,19 @@ export interface DashboardChart {
   drawings?: DrawingRecord[];
 }
 
+/** A further window of a dashboard. */
+export interface DashboardWindow {
+  title?: string;
+  /** Never undefined in a parsed dashboard: a window without charts is dropped. */
+  layout: LayoutNode | undefined;
+}
+
 export interface Dashboard {
   name?: string;
+  /** The dashboard tab's own layout. */
   layout: LayoutNode | undefined;
+  /** The further windows by key, in file order. */
+  windows: Record<string, DashboardWindow>;
   charts: Record<string, DashboardChart>;
 }
 
@@ -259,7 +283,92 @@ export function parseDashboard(text: string): Dashboard {
   }
   const name = raw.name === undefined ? undefined : requireString(raw.name, 'name');
   const layout = raw.layout === undefined ? undefined : parseLayout(raw.layout, 'layout');
-  return { name, layout: normalizeLayout(layout, Object.keys(charts)), charts };
+  const windowsRaw = optionalTable(raw.windows, 'windows') ?? {};
+  const windows: Record<string, DashboardWindow> = {};
+  for (const [key, value] of Object.entries(windowsRaw)) {
+    const where = `windows.${key}`;
+    if (!KEY_RE.test(key)) {
+      throw new DashboardFormatError(`window key may hold letters, digits, _ and - only: ${key}`);
+    }
+    if (!isRecord(value)) throw new DashboardFormatError(`${where} must be a table`);
+    const window: DashboardWindow = {
+      layout: value.layout === undefined ? undefined : parseLayout(value.layout, `${where}.layout`),
+    };
+    if (value.title !== undefined) window.title = requireString(value.title, `${where}.title`);
+    windows[key] = window;
+  }
+  return normalizeDashboard({ name, layout, windows, charts });
+}
+
+/**
+ * The dashboard with every chart in exactly one layout: a chart a layout
+ * already placed leaves the later ones (the dashboard's own layout first, then
+ * the windows in file order), a chart no layout places joins the dashboard's
+ * own at the right edge, and a window left without charts is dropped.
+ */
+export function normalizeDashboard(d: Dashboard): Dashboard {
+  const known = new Set(Object.keys(d.charts));
+  const seen = new Set<string>();
+  const keep = (key: string): boolean => {
+    if (!known.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+  let layout = d.layout === undefined ? undefined : prune(structuredClone(d.layout), keep);
+  const windows: Record<string, DashboardWindow> = {};
+  for (const [key, window] of Object.entries(d.windows)) {
+    const windowLayout = window.layout === undefined ? undefined : prune(structuredClone(window.layout), keep);
+    if (windowLayout !== undefined) windows[key] = { ...window, layout: windowLayout };
+  }
+  for (const key of known) {
+    if (seen.has(key)) continue;
+    layout = layout === undefined ? key : insertBeside(layout, undefined, key, 'horizontal');
+  }
+  return { ...d, layout, windows };
+}
+
+/** The window whose layout holds `chartKey`: a window key, or undefined for
+ * the dashboard's own layout (and for a chart no layout holds). */
+export function windowOf(d: Dashboard, chartKey: string): string | undefined {
+  for (const [key, window] of Object.entries(d.windows)) {
+    if (layoutKeys(window.layout).includes(chartKey)) return key;
+  }
+  return undefined;
+}
+
+/** The layout of a window (undefined: the dashboard's own). */
+export function layoutOf(d: Dashboard, window: string | undefined): LayoutNode | undefined {
+  return window === undefined ? d.layout : d.windows[window]?.layout;
+}
+
+/** The dashboard with `layout` in place of a window's (undefined: the
+ * dashboard's own); a window key it does not have yet is a new window, and a
+ * window left without charts is dropped. */
+export function withLayout(d: Dashboard, window: string | undefined, layout: LayoutNode | undefined): Dashboard {
+  if (window === undefined) return { ...d, layout };
+  const windows = { ...d.windows };
+  if (layout === undefined) delete windows[window];
+  else windows[window] = { ...windows[window], layout };
+  return { ...d, windows };
+}
+
+/** The dashboard without further window `window` and the charts in it. */
+export function removeWindow(d: Dashboard, window: string): Dashboard {
+  const entry = d.windows[window];
+  if (!entry) return d;
+  const charts = { ...d.charts };
+  for (const key of layoutKeys(entry.layout)) delete charts[key];
+  const windows = { ...d.windows };
+  delete windows[window];
+  return { ...d, windows, charts };
+}
+
+/** The dashboard without chart `key`; its cell's space goes to its neighbours. */
+export function removeChart(d: Dashboard, key: string): Dashboard {
+  const window = windowOf(d, key);
+  const charts = { ...d.charts };
+  delete charts[key];
+  return { ...withLayout(d, window, removeFromLayout(layoutOf(d, window), key)), charts };
 }
 
 function roundSize(v: number): number {
@@ -297,11 +406,19 @@ function drawingToToml(d: DrawingRecord): Record<string, unknown> {
 export function serializeDashboard(d: Dashboard): string {
   const out: Record<string, unknown> = {};
   if (d.name !== undefined) out.name = d.name;
-  if (d.layout !== undefined) {
-    // A lone chart is still a table, so the file keeps one shape
-    out.layout = layoutToToml(typeof d.layout === 'string'
-      ? { split: 'horizontal', sizes: [1], children: [d.layout] } : d.layout);
+  // A lone chart is still a table, so the file keeps one shape
+  const layoutTable = (node: LayoutNode): unknown => layoutToToml(typeof node === 'string'
+    ? { split: 'horizontal', sizes: [1], children: [node] } : node);
+  if (d.layout !== undefined) out.layout = layoutTable(d.layout);
+  const windows: Record<string, unknown> = {};
+  for (const [key, window] of Object.entries(d.windows)) {
+    if (window.layout === undefined) continue;
+    const w: Record<string, unknown> = {};
+    if (window.title !== undefined) w.title = window.title;
+    w.layout = layoutTable(window.layout);
+    windows[key] = w;
   }
+  if (Object.keys(windows).length) out.windows = windows;
   const charts: Record<string, unknown> = {};
   for (const [key, chart] of Object.entries(d.charts)) {
     const c: Record<string, unknown> = { provider: chart.provider, history: chart.history };
@@ -349,25 +466,6 @@ function prune(node: LayoutNode, keep: (key: string) => boolean): LayoutNode | u
   if (children.length === 0) return undefined;
   if (children.length === 1) return children[0];
   return { split: node.split, sizes: normalizeSizes(sizes), children };
-}
-
-/**
- * The layout of exactly `keys`: leaves of unknown or repeated charts go, and a
- * chart the layout does not place is added at the right edge.
- */
-export function normalizeLayout(node: LayoutNode | undefined, keys: string[]): LayoutNode | undefined {
-  const known = new Set(keys);
-  const seen = new Set<string>();
-  let layout = node === undefined ? undefined : prune(structuredClone(node), (key) => {
-    if (!known.has(key) || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  for (const key of keys) {
-    if (seen.has(key)) continue;
-    layout = layout === undefined ? key : insertBeside(layout, undefined, key, 'horizontal');
-  }
-  return layout;
 }
 
 /**
@@ -519,5 +617,5 @@ export function scriptLimitReason(kinds: ScriptKind[], adding: ScriptKind): stri
 
 /** A new, empty dashboard. */
 export function emptyDashboard(name: string): Dashboard {
-  return { name, layout: undefined, charts: {} };
+  return { name, layout: undefined, windows: {}, charts: {} };
 }
