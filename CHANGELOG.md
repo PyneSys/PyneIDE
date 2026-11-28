@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-28
+
 ### Added
+
+- **Run Live** runs Pine and Pyne scripts on provider history and then follows the live feed.
+  Charts update during the open candle, and live strategies can show their open trades.
+- Open live charts without a script, switch symbols or timeframes, and arrange multiple live
+  charts and scripts in dashboards with independent layouts. Dashboards use `*.dashboard.toml` files.
+- Switch between paired Pine and Pyne source files from the editor title bar.
 
 - Chart drawing tools: the button at the left end of the chart toolbar opens a tool bar beside
   the chart with trend line, ray, extended, horizontal and vertical lines, price line, parallel

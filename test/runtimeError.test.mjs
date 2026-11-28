@@ -139,7 +139,18 @@ function fixture(t) {
   });
   const liveCharts = new module.exports.LiveChartService(context, {
     openLiveChart() {}, onEvent() {}, closeChart: (key) => closedCharts.push(key),
-  }, channel);
+  }, channel, undefined, undefined, {
+    async start(options) {
+      return {
+        cancel() {},
+        kill() {},
+        exited: new Promise((resolve) => setImmediate(() => {
+          if (event) options.onEvent(event);
+          resolve(exitCode);
+        })),
+      };
+    },
+  });
   return {
     root, script, markers, notices, opened, logs, commands, closedCharts, state, picks, browsers,
     attachChartPicker(pickLiveTarget, start) {
