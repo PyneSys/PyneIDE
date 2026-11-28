@@ -155,6 +155,8 @@ built in.
 
 ## Live charts
 
+![PyneIDE live dashboard with Kraken BTC/USD, ETH/USD and SOL/USD charts. A Pyne script overlays two EMAs on the BTC/USD chart.](media/live-dashboard.png)
+
 **Run Live** (the **Live** CodeLens on a script) runs the script on a provider's
 recent history, then keeps it running on the provider's live feed: the forming
 candle, the plots, the drawings and a strategy's trades update with every tick.
