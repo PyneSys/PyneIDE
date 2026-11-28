@@ -13,6 +13,7 @@ import * as vscode from 'vscode';
 
 import { canonicalChartKey } from '../chart/chartKey';
 import type { ChartManager } from '../chart/chartPanel';
+import { dashboardStem, isDashboardFile } from '../dashboard/model';
 import { OhlcvEditorProvider } from '../data/ohlcvEditor';
 import { buildOutputPreview, resolveOutputPair } from '../data/outputPreview';
 import { parseSymInfo, readOhlcvStats } from '../data/syminfo';
@@ -304,7 +305,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
     const dir = path.join(this.workdir!, DASHBOARDS_DIR);
     let names: string[];
     try {
-      names = fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.toml'));
+      names = fs.readdirSync(dir).filter(isDashboardFile);
     } catch {
       names = [];
     }
@@ -316,7 +317,7 @@ export class PyneWorkspaceProvider implements vscode.TreeDataProvider<PyneNode> 
 
   private dashboardItem(node: DashboardNode): vscode.TreeItem {
     const item = new vscode.TreeItem(
-      path.basename(node.uri.fsPath).replace(/\.toml$/i, ''),
+      dashboardStem(path.basename(node.uri.fsPath)),
       vscode.TreeItemCollapsibleState.None
     );
     item.iconPath = new vscode.ThemeIcon('graph');

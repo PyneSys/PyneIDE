@@ -1,5 +1,5 @@
 /**
- * The live dashboard file (`dashboards/<name>.toml` in the workdir): what charts
+ * The live dashboard file (`dashboards/<name>.dashboard.toml` in the workdir): what charts
  * it holds, how they are laid out, and which scripts run on each chart with
  * which inputs. vscode-free, so the parsing and the layout edits are testable
  * on their own.
@@ -64,6 +64,20 @@ import {
   isDrawingColor,
   isDrawingDash,
 } from '../chart/drawingRecord';
+
+/** The extension of a dashboard file: TOML inside, but told apart from a
+ * script's own `.toml` by its name, wherever the file lives. */
+export const DASHBOARD_EXT = '.dashboard.toml';
+
+/** Whether a file name is a dashboard's. */
+export function isDashboardFile(fileName: string): boolean {
+  return fileName.toLowerCase().endsWith(DASHBOARD_EXT);
+}
+
+/** A dashboard's name from its file name: `btc-scalping.dashboard.toml` -> `btc-scalping`. */
+export function dashboardStem(fileName: string): string {
+  return isDashboardFile(fileName) ? fileName.slice(0, -DASHBOARD_EXT.length) : fileName;
+}
 
 /** Charts one dashboard may hold. */
 export const MAX_CHARTS = 6;

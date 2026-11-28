@@ -1962,7 +1962,7 @@
         "displayName": "Pyne Dashboard",
         "selector": [
           {
-            "filenamePattern": "**/dashboards/*.toml"
+            "filenamePattern": "*.dashboard.toml"
           }
         ],
         "priority": "default"

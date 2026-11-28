@@ -1,5 +1,5 @@
 /**
- * The dashboard editor: a custom editor of `dashboards/*.toml` that shows the
+ * The dashboard editor: a custom editor of `*.dashboard.toml` files that shows the
  * file's charts live, and edits the file when the user adds, removes or
  * rearranges something. The file stays the single source: every UI action is
  * written into it (and saved), and every change of it — from the UI or typed by
@@ -43,6 +43,7 @@ import type {
 import {
   chartKeyFor,
   DashboardFormatError,
+  dashboardStem,
   insertBeside,
   layoutKeys,
   layoutOf,
@@ -352,9 +353,9 @@ function reportEditError(err: unknown): void {
   void vscode.window.showWarningMessage(`PyneIDE: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-/** A dashboard's name from its file name: `btc-scalping.toml` -> `btc-scalping`. */
+/** A dashboard's name from its file's URI. */
 function fileStem(uri: vscode.Uri): string {
-  return path.basename(uri.fsPath).replace(/\.toml$/i, '');
+  return dashboardStem(path.basename(uri.fsPath));
 }
 
 /** What a chart runs: a change of it restarts the chart. */

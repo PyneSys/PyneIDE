@@ -10,7 +10,7 @@ import * as vscode from 'vscode';
 import { resolveWorkspaceWorkdir } from '../env/workdirConfig';
 import { DASHBOARDS_DIR } from '../workspace/tree';
 import { DashboardEditorProvider } from './dashboardEditor';
-import { emptyDashboard, serializeDashboard } from './model';
+import { DASHBOARD_EXT, emptyDashboard, serializeDashboard } from './model';
 
 /** A dashboard name that is also a file name on every platform. */
 const NAME_RE = /^[^\\/:*?"<>|]+$/;
@@ -30,12 +30,12 @@ export async function newDashboard(): Promise<void> {
       const trimmed = value.trim();
       if (!trimmed) return 'Give the dashboard a name';
       if (!NAME_RE.test(trimmed) || trimmed.startsWith('.')) return 'A name cannot hold \\ / : * ? " < > |';
-      if (fs.existsSync(path.join(dir, `${trimmed}.toml`))) return 'A dashboard of this name exists';
+      if (fs.existsSync(path.join(dir, `${trimmed}${DASHBOARD_EXT}`))) return 'A dashboard of this name exists';
       return undefined;
     },
   });
   if (name === undefined) return;
-  const file = path.join(dir, `${name.trim()}.toml`);
+  const file = path.join(dir, `${name.trim()}${DASHBOARD_EXT}`);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, serializeDashboard(emptyDashboard(name.trim())), { encoding: 'utf8', flag: 'wx' });
   await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), DashboardEditorProvider.viewType);
